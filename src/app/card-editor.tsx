@@ -39,17 +39,15 @@ export default function CardEditorScreen() {
 
   const save = () => {
     if (!canSave) return;
+
     if (cardId) {
       updateCard(cardId, { front, back });
-    } else {
-      createCard(deckId, front, back);
+      router.back();
+      return;
     }
-    router.back();
-  };
 
-  /** Fast entry: keeps the editor open so a whole batch can be typed in one go. */
-  const saveAndNext = () => {
-    if (!canSave) return;
+    // Fast entry: saving a new card clears the form and keeps the editor open so
+    // a whole batch can be typed in one go. Leaving is the header back arrow.
     createCard(deckId, front, back);
     setFront('');
     setBack('');
@@ -105,16 +103,7 @@ export default function CardEditorScreen() {
 
       <View style={[styles.footer, { borderColor: theme.border }]}>
         <Button title="Zapisz" onPress={save} disabled={!canSave} />
-        {cardId ? (
-          <Button title="Usuń kartę" variant="danger" onPress={confirmDelete} />
-        ) : (
-          <Button
-            title="Zapisz i dodaj kolejną"
-            variant="secondary"
-            onPress={saveAndNext}
-            disabled={!canSave}
-          />
-        )}
+        {cardId ? <Button title="Usuń kartę" variant="danger" onPress={confirmDelete} /> : null}
       </View>
     </KeyboardAvoidingView>
   );
