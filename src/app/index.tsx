@@ -13,14 +13,16 @@ import { decksWithStatsQuery, deleteDeck } from '@/db/queries';
 import { useNow } from '@/hooks/use-now';
 import { useTheme } from '@/hooks/use-theme';
 import { cardsLabel } from '@/lib/format';
+import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 
-type DeckMenuTarget = { id: number; name: string; cardCount: number; dueCount: number };
+type DeckMenuTarget = { id: number; name: string; cardCount: number; due: number };
 
 export default function DecksScreen() {
   const theme = useTheme();
   const router = useRouter();
   const now = useNow();
-  const { data: decks } = useLiveQuery(decksWithStatsQuery(now), [now]);
+  const dayStart = studyDayStart(new Date(now)).getTime();
+  const { data: decks } = useLiveQuery(decksWithStatsQuery(now, dayStart), [now, dayStart]);
 
   const [menuDeck, setMenuDeck] = useState<DeckMenuTarget | null>(null);
 
@@ -29,13 +31,6 @@ export default function DecksScreen() {
 
   const startStudy = (deckId: number) =>
     router.push({ pathname: '/deck/[deckId]/review', params: { deckId } });
-
-  /**
-   * Anki-style: a deck with something due goes straight into studying. With an
-   * empty queue there is nothing to study, so the card list is the useful screen.
-   */
-  const openDeck = (deck: DeckMenuTarget) =>
-    deck.dueCount > 0 ? startStudy(deck.id) : openCards(deck.id);
 
   /** Runs once the sheet has closed, so no dialog is opened from inside another. */
   const confirmDelete = (deck: DeckMenuTarget) => {
@@ -51,8 +46,8 @@ export default function DecksScreen() {
   };
 
   const menuActions = (deck: DeckMenuTarget): SheetAction[] => [
-    ...(deck.dueCount > 0
-      ? [{ label: `Ucz się (${deck.dueCount})`, onPress: () => startStudy(deck.id) }]
+    ...(deck.due > 0
+      ? [{ label: `Ucz się (${deck.due})`, onPress: () => startStudy(deck.id) }]
       : []),
     { label: 'Karty w talii', onPress: () => openCards(deck.id) },
     {
@@ -74,33 +69,40 @@ export default function DecksScreen() {
             hint={'Talia to zbiór fiszek na jeden temat — np. „Angielski B2” albo „Anatomia”.'}
           />
         }
-        renderItem={({ item }) => (
-          <Pressable
-            onPress={() => openDeck(item)}
-            onLongPress={() => setMenuDeck(item)}
-            style={({ pressed }) => [
-              styles.row,
-              {
-                backgroundColor: theme.backgroundElement,
-                borderColor: theme.border,
-                opacity: pressed ? 0.7 : 1,
-              },
-            ]}>
-            <View style={styles.rowMain}>
-              <ThemedText style={styles.deckName}>{item.name}</ThemedText>
-              {item.description ? (
-                <ThemedText type="small" themeColor="textSecondary" numberOfLines={2}>
-                  {item.description}
-                </ThemedText>
-              ) : null}
-              <ThemedText type="small" themeColor="textSecondary">
-                {cardsLabel(item.cardCount)}
-              </ThemedText>
-            </View>
+        renderItem={({ item }) => {
+          // Counters and the tap target both read the capped numbers, so the
+          // badge can never promise more than "Ucz się" will hand out.
+          const counts = cappedCounts(item);
+          const due = totalDue(counts);
 
-            {item.dueCount > 0 ? <DueCounts counts={item} /> : null}
-          </Pressable>
-        )}
+          return (
+            <Pressable
+              onPress={() => (due > 0 ? startStudy(item.id) : openCards(item.id))}
+              onLongPress={() => setMenuDeck({ ...item, due })}
+              style={({ pressed }) => [
+                styles.row,
+                {
+                  backgroundColor: theme.backgroundElement,
+                  borderColor: theme.border,
+                  opacity: pressed ? 0.7 : 1,
+                },
+              ]}>
+              <View style={styles.rowMain}>
+                <ThemedText style={styles.deckName}>{item.name}</ThemedText>
+                {item.description ? (
+                  <ThemedText type="small" themeColor="textSecondary" numberOfLines={2}>
+                    {item.description}
+                  </ThemedText>
+                ) : null}
+                <ThemedText type="small" themeColor="textSecondary">
+                  {cardsLabel(item.cardCount)}
+                </ThemedText>
+              </View>
+
+              {due > 0 ? <DueCounts counts={counts} /> : null}
+            </Pressable>
+          );
+        }}
       />
 
       <View style={[styles.footer, { borderColor: theme.border }]}>
@@ -111,7 +113,7 @@ export default function DecksScreen() {
         <ActionSheet
           visible
           title={menuDeck.name}
-          subtitle={`${cardsLabel(menuDeck.cardCount)} · ${menuDeck.dueCount} do powtórki`}
+          subtitle={`${cardsLabel(menuDeck.cardCount)} · ${menuDeck.due} do powtórki`}
           actions={menuActions(menuDeck)}
           onClose={() => setMenuDeck(null)}
         />

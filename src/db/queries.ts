@@ -1,5 +1,11 @@
-import { and, asc, desc, eq, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, lte, sql, type SQLWrapper } from 'drizzle-orm';
 
+import {
+  remainingAllowance,
+  studyDayStart,
+  withinAllowance,
+  type Allowance,
+} from '@/lib/limits';
 import {
   applyGrade,
   newCardState,
@@ -39,23 +45,48 @@ function dueInStates(nowMs: number, states: State[]) {
 }
 
 /**
+ * Correlated count of today's answers of one kind. `review_logs.state` holds the
+ * state the card had *before* that answer, so `State.New` counts cards
+ * introduced today and `State.Review` counts genuine reviews. Learning steps
+ * match neither, which is exactly what keeps them free of the daily cap.
+ *
+ * A join instead of a subquery would multiply the outer rows and corrupt
+ * `cardCount`, hence the correlated form.
+ *
+ * The inner columns are written as literal text on purpose: drizzle drops the
+ * table qualifier from an embedded column when the *outer* query has no join,
+ * which turned `dc.id` into a bare `id` and made the whole statement ambiguous.
+ */
+function doneToday(state: State, deckRef: SQLWrapper | number, dayStartMs: number) {
+  return sql<number>`(
+    select count(*) from ${reviewLogs} as dl
+    join ${cards} as dc on dc.id = dl.card_id
+    where dc.deck_id = ${deckRef}
+      and dl.state = ${state}
+      and dl.reviewed_at >= ${dayStartMs})`;
+}
+
+/**
  * Decks with their card totals. `nowMs` is passed in (rather than read inside
  * SQL) so callers control when the "due" cut-off is recomputed.
  *
  * Returns the query builder, not the rows — pass it to `useLiveQuery`.
  */
-export function decksWithStatsQuery(nowMs: number) {
+export function decksWithStatsQuery(nowMs: number, dayStartMs: number) {
   return db
     .select({
       id: decks.id,
       name: decks.name,
       description: decks.description,
       createdAt: decks.createdAt,
+      newPerDay: decks.newPerDay,
+      reviewsPerDay: decks.reviewsPerDay,
       cardCount: sql<number>`count(${cards.id})`,
-      dueCount: sql<number>`coalesce(sum(case when ${fsrsState.due} <= ${nowMs} then 1 else 0 end), 0)`,
       newCount: dueInStates(nowMs, QUEUE_STATES.newCount),
       learningCount: dueInStates(nowMs, QUEUE_STATES.learningCount),
       reviewCount: dueInStates(nowMs, QUEUE_STATES.reviewCount),
+      newDoneToday: doneToday(State.New, decks.id, dayStartMs),
+      reviewsDoneToday: doneToday(State.Review, decks.id, dayStartMs),
     })
     .from(decks)
     .leftJoin(cards, eq(cards.deckId, decks.id))
@@ -87,17 +118,33 @@ export function cardsInDeckQuery(deckId: number) {
     .orderBy(desc(cards.createdAt));
 }
 
-export function deckDueBreakdownQuery(deckId: number, nowMs: number) {
+/**
+ * Raw counters for one deck plus what has already been answered today — every
+ * number the caller needs to apply the deck's daily limits. Capping happens in
+ * `cappedCounts`, never here, so one rule serves every screen.
+ */
+export function deckDueBreakdownQuery(deckId: number, nowMs: number, dayStartMs: number) {
   return db
     .select({
-      dueCount: sql<number>`count(*)`,
       newCount: inStates(QUEUE_STATES.newCount),
       learningCount: inStates(QUEUE_STATES.learningCount),
       reviewCount: inStates(QUEUE_STATES.reviewCount),
+      newDoneToday: doneToday(State.New, deckId, dayStartMs),
+      reviewsDoneToday: doneToday(State.Review, deckId, dayStartMs),
     })
     .from(cards)
     .innerJoin(fsrsState, eq(fsrsState.cardId, cards.id))
     .where(and(eq(cards.deckId, deckId), lte(fsrsState.due, new Date(nowMs))));
+}
+
+export function deckDoneTodayQuery(deckId: number, dayStartMs: number) {
+  return db
+    .select({
+      newDoneToday: doneToday(State.New, deckId, dayStartMs),
+      reviewsDoneToday: doneToday(State.Review, deckId, dayStartMs),
+    })
+    .from(decks)
+    .where(eq(decks.id, deckId));
 }
 
 export type DueCardRow = {
@@ -118,8 +165,13 @@ export type DueCardRow = {
 };
 
 /** Snapshot of the cards due right now — read once when a session starts. */
+/**
+ * Snapshot of the cards due right now, already trimmed to what the deck's daily
+ * limits still allow. Doing the trim here means the session queue and the
+ * counters on the deck screens can never disagree.
+ */
 export function loadDueCards(deckId: number, now: Date, limit = 500): DueCardRow[] {
-  return db
+  const rows = db
     .select({
       cardId: cards.id,
       front: cards.front,
@@ -142,6 +194,26 @@ export function loadDueCards(deckId: number, now: Date, limit = 500): DueCardRow
     .orderBy(asc(fsrsState.due))
     .limit(limit)
     .all();
+
+  return withinAllowance(rows, deckAllowance(deckId, now));
+}
+
+/** What the deck may still hand out in the study day containing `now`. */
+export function deckAllowance(deckId: number, now: Date): Allowance {
+  const dayStartMs = studyDayStart(now).getTime();
+
+  const limits = db
+    .select({ newPerDay: decks.newPerDay, reviewsPerDay: decks.reviewsPerDay })
+    .from(decks)
+    .where(eq(decks.id, deckId))
+    .get();
+
+  const done = deckDoneTodayQuery(deckId, dayStartMs).get();
+
+  return remainingAllowance(
+    limits ?? { newPerDay: 0, reviewsPerDay: 0 },
+    done ?? { newDoneToday: 0, reviewsDoneToday: 0 }
+  );
 }
 
 export function getDeck(deckId: number) {
@@ -154,18 +226,35 @@ export function getCard(cardId: number) {
 
 /* -------------------------------------------------------------- mutations */
 
-export function createDeck(name: string, description?: string | null) {
+export type DeckInput = {
+  name: string;
+  description?: string | null;
+  newPerDay: number;
+  reviewsPerDay: number;
+};
+
+export function createDeck(input: DeckInput) {
   return db
     .insert(decks)
-    .values({ name: name.trim(), description: description?.trim() || null })
+    .values({
+      name: input.name.trim(),
+      description: input.description?.trim() || null,
+      newPerDay: input.newPerDay,
+      reviewsPerDay: input.reviewsPerDay,
+    })
     .returning()
     .get();
 }
 
-export function updateDeck(deckId: number, patch: { name: string; description?: string | null }) {
+export function updateDeck(deckId: number, patch: DeckInput) {
   return db
     .update(decks)
-    .set({ name: patch.name.trim(), description: patch.description?.trim() || null })
+    .set({
+      name: patch.name.trim(),
+      description: patch.description?.trim() || null,
+      newPerDay: patch.newPerDay,
+      reviewsPerDay: patch.reviewsPerDay,
+    })
     .where(eq(decks.id, deckId))
     .run();
 }

@@ -17,10 +17,17 @@ import {
 import { useNow } from '@/hooks/use-now';
 import { useTheme } from '@/hooks/use-theme';
 import { cardsLabel, formatDue } from '@/lib/format';
+import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { STATE_LABELS, State } from '@/lib/scheduler';
 
 /** Placeholder while the aggregate is still loading, so the counters never flicker. */
-const EMPTY_DUE = { dueCount: 0, newCount: 0, learningCount: 0, reviewCount: 0 };
+const EMPTY_BREAKDOWN = {
+  newCount: 0,
+  learningCount: 0,
+  reviewCount: 0,
+  newDoneToday: 0,
+  reviewsDoneToday: 0,
+};
 
 export default function DeckScreen() {
   const theme = useTheme();
@@ -32,10 +39,28 @@ export default function DeckScreen() {
 
   const { data: deckRows } = useLiveQuery(deckQuery(deckId), [deckId]);
   const { data: cards } = useLiveQuery(cardsInDeckQuery(deckId), [deckId]);
-  const { data: dueRows } = useLiveQuery(deckDueBreakdownQuery(deckId, now), [deckId, now]);
+  const dayStart = studyDayStart(new Date(now)).getTime();
+  const { data: dueRows } = useLiveQuery(deckDueBreakdownQuery(deckId, now, dayStart), [
+    deckId,
+    now,
+    dayStart,
+  ]);
 
   const deck = deckRows?.[0];
-  const due = dueRows?.[0] ?? EMPTY_DUE;
+
+  // Raw counters come from the query, the caps from the deck row; one helper
+  // combines them so this screen shows exactly what the session will serve.
+  const raw = dueRows?.[0] ?? EMPTY_BREAKDOWN;
+  const counts = cappedCounts({
+    ...raw,
+    newPerDay: deck?.newPerDay ?? 0,
+    reviewsPerDay: deck?.reviewsPerDay ?? 0,
+  });
+  const due = totalDue(counts);
+
+  // What the daily cap is holding back right now — the difference between the
+  // cards that are actually due and the ones the deck is allowed to serve.
+  const heldBack = raw.newCount + raw.learningCount + raw.reviewCount - due;
 
   /**
    * Android keeps only the first three buttons and drops the rest, and its
@@ -88,7 +113,12 @@ export default function DeckScreen() {
             <ThemedText type="small" themeColor="textSecondary">
               {cardsLabel(cards?.length ?? 0)}
             </ThemedText>
-            <DueCounts counts={due} showLabels />
+            <DueCounts counts={counts} showLabels />
+            {heldBack > 0 ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                {`Dzienny limit wstrzymuje ${cardsLabel(heldBack)} — wrócą jutro.`}
+              </ThemedText>
+            ) : null}
           </View>
         }
         ListEmptyComponent={
@@ -133,8 +163,14 @@ export default function DeckScreen() {
 
       <View style={[styles.footer, { borderColor: theme.border }]}>
         <Button
-          title={due.dueCount > 0 ? `Ucz się (${due.dueCount})` : 'Nic do powtórki'}
-          disabled={due.dueCount === 0}
+          title={
+            due > 0
+              ? `Ucz się (${due})`
+              : heldBack > 0
+                ? "Limit na dziś wyczerpany"
+                : "Nic do powtórki"
+          }
+          disabled={due === 0}
           onPress={() => router.push({ pathname: '/deck/[deckId]/review', params: { deckId } })}
         />
         <Button

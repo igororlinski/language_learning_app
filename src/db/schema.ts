@@ -1,9 +1,20 @@
 import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
+/** Anki's stock deck options, used for every new deck. */
+export const DEFAULT_NEW_PER_DAY = 20;
+export const DEFAULT_REVIEWS_PER_DAY = 200;
+
 export const decks = sqliteTable('decks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
   description: text('description'),
+  /**
+   * Daily caps, counted per study day. 0 switches a bucket off entirely.
+   * Cards in Learning/Relearning are never capped — same as Anki, where
+   * learning steps always come back regardless of the day's allowance.
+   */
+  newPerDay: integer('new_per_day').notNull().default(DEFAULT_NEW_PER_DAY),
+  reviewsPerDay: integer('reviews_per_day').notNull().default(DEFAULT_REVIEWS_PER_DAY),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .$defaultFn(() => new Date()),
