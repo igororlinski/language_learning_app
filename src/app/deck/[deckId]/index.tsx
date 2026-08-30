@@ -1,10 +1,12 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { useMemo, useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
 import { DueCounts } from '@/components/due-counts';
 import { EmptyState } from '@/components/empty-state';
+import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
@@ -18,6 +20,7 @@ import { useNow } from '@/hooks/use-now';
 import { useTheme } from '@/hooks/use-theme';
 import { cardsLabel, formatDue } from '@/lib/format';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
+import { filterCards } from '@/lib/search';
 import { STATE_LABELS, State } from '@/lib/scheduler';
 
 /** Placeholder while the aggregate is still loading, so the counters never flicker. */
@@ -62,6 +65,13 @@ export default function DeckScreen() {
   // cards that are actually due and the ones the deck is allowed to serve.
   const heldBack = raw.newCount + raw.learningCount + raw.reviewCount - due;
 
+  const [query, setQuery] = useState('');
+  const allCards = cards ?? [];
+  const searching = query.trim().length > 0;
+  // Depends on `cards` (stable from useLiveQuery), not on the `?? []` fallback,
+  // which would be a fresh array on every render.
+  const visibleCards = useMemo(() => filterCards(cards ?? [], query), [cards, query]);
+
   /**
    * Android keeps only the first three buttons and drops the rest, and its
    * dialogs are not cancelable unless asked — a fourth entry would silently eat
@@ -100,7 +110,7 @@ export default function DeckScreen() {
       />
 
       <FlatList
-        data={cards}
+        data={visibleCards}
         keyExtractor={(card) => String(card.id)}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
@@ -111,7 +121,9 @@ export default function DeckScreen() {
               </ThemedText>
             ) : null}
             <ThemedText type="small" themeColor="textSecondary">
-              {cardsLabel(cards?.length ?? 0)}
+              {searching
+                ? `${visibleCards.length} z ${cardsLabel(allCards.length)}`
+                : cardsLabel(allCards.length)}
             </ThemedText>
             <DueCounts counts={counts} showLabels />
             {heldBack > 0 ? (
@@ -119,13 +131,41 @@ export default function DeckScreen() {
                 {`Dzienny limit wstrzymuje ${cardsLabel(heldBack)} — wrócą jutro.`}
               </ThemedText>
             ) : null}
+
+            {allCards.length > 0 ? (
+              <View style={styles.search}>
+                <TextField
+                  label="Szukaj w talii"
+                  value={query}
+                  onChangeText={setQuery}
+                  placeholder="np. break, łamać"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="search"
+                />
+                {searching ? (
+                  <Pressable onPress={() => setQuery('')} hitSlop={12} style={styles.clear}>
+                    <ThemedText type="small" style={{ color: theme.accent }}>
+                      Wyczyść
+                    </ThemedText>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
           </View>
         }
         ListEmptyComponent={
-          <EmptyState
-            title="Ta talia jest pusta"
-            hint="Dodaj pierwszą fiszkę — przód to pytanie, tył to odpowiedź."
-          />
+          searching ? (
+            <EmptyState
+              title="Nic nie pasuje"
+              hint={`Żadna karta w tej talii nie zawiera „${query.trim()}”.`}
+            />
+          ) : (
+            <EmptyState
+              title="Ta talia jest pusta"
+              hint="Dodaj pierwszą fiszkę — przód to pytanie, tył to odpowiedź."
+            />
+          )
         }
         renderItem={({ item }) => (
           <Pressable
@@ -193,6 +233,13 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
     width: '100%',
     alignSelf: 'center',
+  },
+  search: {
+    paddingTop: Spacing.two,
+    gap: Spacing.one,
+  },
+  clear: {
+    alignSelf: 'flex-end',
   },
   header: {
     gap: Spacing.one,

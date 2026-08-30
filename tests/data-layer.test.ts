@@ -24,29 +24,10 @@ import { decks, fsrsState, reviewLogs } from '@/db/schema';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { countQueueStates, Rating, type State } from '@/lib/scheduler';
 
+import { check, group } from './harness';
+
 import migration0000 from '../drizzle/0000_init.sql';
 import migration0001 from '../drizzle/0001_legal_shadow_king.sql';
-
-let failures = 0;
-
-function check(label: string, actual: unknown, expected: unknown) {
-  const a = JSON.stringify(actual);
-  const e = JSON.stringify(expected);
-
-  if (a === e) {
-    console.log(`  OK    ${label}`);
-    return;
-  }
-
-  failures += 1;
-  console.log(`  FAIL  ${label}`);
-  console.log(`        oczekiwano ${e}`);
-  console.log(`        otrzymano  ${a}`);
-}
-
-function group(title: string) {
-  console.log(`\n--- ${title} ---\n`);
-}
 
 for (const migration of [migration0000, migration0001]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
@@ -239,8 +220,3 @@ check('limit 0 nowych wylacza je calkowicie', breakdown(capped.id, at(12, 0, 40)
   reviewCount: 2,
 });
 check('suma zasilajaca przycisk "Ucz sie"', totalDue(breakdown(capped.id, at(12, 0, 40))), 2);
-
-console.log(
-  failures === 0 ? '\nWszystkie testy przeszly.\n' : `\n${failures} test(ow) nie przeszlo.\n`
-);
-process.exit(failures === 0 ? 0 : 1);

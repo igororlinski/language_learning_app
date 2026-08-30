@@ -16,7 +16,7 @@ const root = resolve(here, '..');
 const outfile = resolve(root, 'node_modules/.cache/flashcards-tests.mjs');
 
 await build({
-  entryPoints: [resolve(here, 'data-layer.test.ts')],
+  entryPoints: [resolve(here, 'index.ts')],
   bundle: true,
   platform: 'node',
   format: 'esm',
