@@ -67,7 +67,7 @@ export default function CardEditorScreen() {
           router.back();
         },
       },
-    ]);
+    ], { cancelable: true });
   };
 
   return (

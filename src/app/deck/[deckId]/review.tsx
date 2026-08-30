@@ -4,11 +4,19 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/button';
+import { DueCounts } from '@/components/due-counts';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { formatInterval } from '@/lib/format';
-import { GRADE_LABELS, GRADES, previewGrades, Rating, type Grade } from '@/lib/scheduler';
+import {
+  countQueueStates,
+  GRADE_LABELS,
+  GRADES,
+  previewGrades,
+  Rating,
+  type Grade,
+} from '@/lib/scheduler';
 import { useReviewStore } from '@/stores/review-store';
 
 const RATING_COLOR: Record<Grade, string> = {
@@ -33,6 +41,8 @@ export default function ReviewScreen() {
   const reveal = useReviewStore((s) => s.reveal);
   const answer = useReviewStore((s) => s.answer);
   const reset = useReviewStore((s) => s.reset);
+  const history = useReviewStore((s) => s.history);
+  const undo = useReviewStore((s) => s.undo);
 
   useEffect(() => {
     start(deckId);
@@ -44,17 +54,33 @@ export default function ReviewScreen() {
   // Recomputed per card so the buttons show the interval each answer would set.
   const preview = useMemo(() => (current ? previewGrades(current.fsrs, new Date()) : null), [current]);
 
+  // Anki's bottom bar: what is still ahead in this session, by state.
+  const remaining = useMemo(() => countQueueStates(queue.map((card) => card.fsrs.state)), [queue]);
+
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: theme.background }]} edges={['top', 'bottom']}>
       <View style={styles.topBar}>
-        <ThemedText type="small" themeColor="textSecondary">
-          {current ? `Pozostało: ${queue.length}` : `Odpowiedzi: ${answered}`}
-        </ThemedText>
-        <Pressable onPress={() => router.back()} hitSlop={12}>
-          <ThemedText type="small" style={{ color: theme.accent }}>
-            Zakończ
+        {current ? (
+          <DueCounts counts={remaining} />
+        ) : (
+          <ThemedText type="small" themeColor="textSecondary">
+            {`Odpowiedzi: ${answered}`}
           </ThemedText>
-        </Pressable>
+        )}
+        <View style={styles.topActions}>
+          {history.length > 0 ? (
+            <Pressable onPress={undo} hitSlop={12}>
+              <ThemedText type="small" style={{ color: theme.accent }}>
+                Cofnij
+              </ThemedText>
+            </Pressable>
+          ) : null}
+          <Pressable onPress={() => router.back()} hitSlop={12}>
+            <ThemedText type="small" style={{ color: theme.accent }}>
+              Zakończ
+            </ThemedText>
+          </Pressable>
+        </View>
       </View>
 
       {current ? (
@@ -134,6 +160,11 @@ export default function ReviewScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
+  },
+  topActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
   },
   topBar: {
     flexDirection: 'row',

@@ -45,7 +45,7 @@ export default function DeckEditorScreen() {
           router.dismissTo('/');
         },
       },
-    ]);
+    ], { cancelable: true });
   };
 
   return (

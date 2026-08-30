@@ -3,12 +3,13 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
+import { DueCounts } from '@/components/due-counts';
 import { EmptyState } from '@/components/empty-state';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
   cardsInDeckQuery,
-  deckDueCountQuery,
+  deckDueBreakdownQuery,
   deckQuery,
   deleteCard,
   resetCard,
@@ -17,6 +18,9 @@ import { useNow } from '@/hooks/use-now';
 import { useTheme } from '@/hooks/use-theme';
 import { cardsLabel, formatDue } from '@/lib/format';
 import { STATE_LABELS, State } from '@/lib/scheduler';
+
+/** Placeholder while the aggregate is still loading, so the counters never flicker. */
+const EMPTY_DUE = { dueCount: 0, newCount: 0, learningCount: 0, reviewCount: 0 };
 
 export default function DeckScreen() {
   const theme = useTheme();
@@ -28,22 +32,28 @@ export default function DeckScreen() {
 
   const { data: deckRows } = useLiveQuery(deckQuery(deckId), [deckId]);
   const { data: cards } = useLiveQuery(cardsInDeckQuery(deckId), [deckId]);
-  const { data: dueRows } = useLiveQuery(deckDueCountQuery(deckId, now), [deckId, now]);
+  const { data: dueRows } = useLiveQuery(deckDueBreakdownQuery(deckId, now), [deckId, now]);
 
   const deck = deckRows?.[0];
-  const dueCount = dueRows?.[0]?.dueCount ?? 0;
+  const due = dueRows?.[0] ?? EMPTY_DUE;
 
+  /**
+   * Android keeps only the first three buttons and drops the rest, and its
+   * dialogs are not cancelable unless asked — a fourth entry would silently eat
+   * "Anuluj" and trap the user here. Editing is left out because tapping the
+   * card already opens the editor.
+   */
   const openCardMenu = (cardId: number, front: string) => {
-    Alert.alert(front, undefined, [
-      {
-        text: 'Edytuj',
-        onPress: () =>
-          router.push({ pathname: '/card-editor', params: { deckId, cardId } }),
-      },
-      { text: 'Zeruj postęp', onPress: () => resetCard(cardId) },
-      { text: 'Usuń', style: 'destructive', onPress: () => deleteCard(cardId) },
-      { text: 'Anuluj', style: 'cancel' },
-    ]);
+    Alert.alert(
+      front,
+      'Dotknij kartę, żeby zmienić jej treść.',
+      [
+        { text: 'Zeruj postęp', onPress: () => resetCard(cardId) },
+        { text: 'Usuń', style: 'destructive', onPress: () => deleteCard(cardId) },
+        { text: 'Anuluj', style: 'cancel' },
+      ],
+      { cancelable: true }
+    );
   };
 
   return (
@@ -76,8 +86,9 @@ export default function DeckScreen() {
               </ThemedText>
             ) : null}
             <ThemedText type="small" themeColor="textSecondary">
-              {cardsLabel(cards?.length ?? 0)} · {dueCount} do powtórki
+              {cardsLabel(cards?.length ?? 0)}
             </ThemedText>
+            <DueCounts counts={due} showLabels />
           </View>
         }
         ListEmptyComponent={
@@ -122,8 +133,8 @@ export default function DeckScreen() {
 
       <View style={[styles.footer, { borderColor: theme.border }]}>
         <Button
-          title={dueCount > 0 ? `Ucz się (${dueCount})` : 'Nic do powtórki'}
-          disabled={dueCount === 0}
+          title={due.dueCount > 0 ? `Ucz się (${due.dueCount})` : 'Nic do powtórki'}
+          disabled={due.dueCount === 0}
           onPress={() => router.push({ pathname: '/deck/[deckId]/review', params: { deckId } })}
         />
         <Button

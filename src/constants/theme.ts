@@ -37,6 +37,16 @@ export const RatingColors = {
   easy: '#3E8FF5',
 } as const;
 
+/**
+ * Queue counters follow Anki's palette: blue for new, red for learning,
+ * green for review. Like `RatingColors`, identical in both schemes.
+ */
+export const QueueColors = {
+  new: '#3E8FF5',
+  learning: '#E5484D',
+  review: '#30A46C',
+} as const;
+
 export const Fonts = Platform.select({
   ios: {
     sans: 'system-ui',

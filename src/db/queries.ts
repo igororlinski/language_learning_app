@@ -1,11 +1,42 @@
 import { and, asc, desc, eq, lte, sql } from 'drizzle-orm';
 
-import { applyGrade, newCardState, toFsrsCard, toStateValues, type Grade } from '@/lib/scheduler';
+import {
+  applyGrade,
+  newCardState,
+  QUEUE_STATES,
+  rollbackGrade,
+  State,
+  toFsrsCard,
+  toReviewLog,
+  toStateValues,
+  type Grade,
+} from '@/lib/scheduler';
 
 import { db } from './client';
 import { cards, decks, fsrsState, reviewLogs } from './schema';
 
 /* ------------------------------------------------------------------ reads */
+
+/** Comma-separated bind params for a `state in (...)` test. */
+function stateList(states: State[]) {
+  return sql.join(
+    states.map((state) => sql`${state}`),
+    sql`, `
+  );
+}
+
+/** Counts rows in the given FSRS states, for a query already filtered to due cards. */
+function inStates(states: State[]) {
+  return sql<number>`coalesce(sum(case
+    when ${fsrsState.state} in (${stateList(states)}) then 1 else 0 end), 0)`;
+}
+
+/** Same buckets, applying the due cut-off inline — for aggregates over every card. */
+function dueInStates(nowMs: number, states: State[]) {
+  return sql<number>`coalesce(sum(case
+    when ${fsrsState.due} <= ${nowMs} and ${fsrsState.state} in (${stateList(states)})
+    then 1 else 0 end), 0)`;
+}
 
 /**
  * Decks with their card totals. `nowMs` is passed in (rather than read inside
@@ -22,6 +53,9 @@ export function decksWithStatsQuery(nowMs: number) {
       createdAt: decks.createdAt,
       cardCount: sql<number>`count(${cards.id})`,
       dueCount: sql<number>`coalesce(sum(case when ${fsrsState.due} <= ${nowMs} then 1 else 0 end), 0)`,
+      newCount: dueInStates(nowMs, QUEUE_STATES.newCount),
+      learningCount: dueInStates(nowMs, QUEUE_STATES.learningCount),
+      reviewCount: dueInStates(nowMs, QUEUE_STATES.reviewCount),
     })
     .from(decks)
     .leftJoin(cards, eq(cards.deckId, decks.id))
@@ -53,9 +87,14 @@ export function cardsInDeckQuery(deckId: number) {
     .orderBy(desc(cards.createdAt));
 }
 
-export function deckDueCountQuery(deckId: number, nowMs: number) {
+export function deckDueBreakdownQuery(deckId: number, nowMs: number) {
   return db
-    .select({ dueCount: sql<number>`count(*)` })
+    .select({
+      dueCount: sql<number>`count(*)`,
+      newCount: inStates(QUEUE_STATES.newCount),
+      learningCount: inStates(QUEUE_STATES.learningCount),
+      reviewCount: inStates(QUEUE_STATES.reviewCount),
+    })
     .from(cards)
     .innerJoin(fsrsState, eq(fsrsState.cardId, cards.id))
     .where(and(eq(cards.deckId, deckId), lte(fsrsState.due, new Date(nowMs))));
@@ -200,5 +239,34 @@ export function gradeCard(cardId: number, grade: Grade, now = new Date()) {
       .run();
 
     return next;
+  });
+}
+
+/**
+ * Undoes the most recent review of a card: restores the FSRS state it had
+ * before that answer and drops the log entry, so `review_logs` never describes
+ * a review that no longer counts. Ordered by `id`, which is the only reliable
+ * "most recent" when several reviews share a timestamp.
+ */
+export function rollbackCard(cardId: number) {
+  return db.transaction((tx) => {
+    const stateRow = tx.select().from(fsrsState).where(eq(fsrsState.cardId, cardId)).get();
+    if (!stateRow) throw new Error(`Brak stanu FSRS dla karty ${cardId}`);
+
+    const logRow = tx
+      .select()
+      .from(reviewLogs)
+      .where(eq(reviewLogs.cardId, cardId))
+      .orderBy(desc(reviewLogs.id))
+      .limit(1)
+      .get();
+    if (!logRow) throw new Error(`Brak historii powtórek dla karty ${cardId}`);
+
+    const previous = rollbackGrade(toFsrsCard(stateRow), toReviewLog(logRow));
+
+    tx.update(fsrsState).set(toStateValues(previous)).where(eq(fsrsState.cardId, cardId)).run();
+    tx.delete(reviewLogs).where(eq(reviewLogs.id, logRow.id)).run();
+
+    return previous;
   });
 }
