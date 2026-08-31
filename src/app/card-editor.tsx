@@ -1,14 +1,7 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useRef, useState } from 'react';
-import {
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  View,
-} from 'react-native';
+import { Alert, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 
 import { Button } from '@/components/button';
 import { ThemedText } from '@/components/themed-text';
@@ -73,7 +66,8 @@ export default function CardEditorScreen() {
   return (
     <KeyboardAvoidingView
       style={[styles.screen, { backgroundColor: theme.background }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      behavior="padding"
+      automaticOffset>
       <Stack.Screen options={{ title: cardId ? 'Edytuj kartę' : 'Nowa karta' }} />
 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">

@@ -2,6 +2,7 @@ import { useMigrations } from 'drizzle-orm/expo-sqlite/migrator';
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 
 import migrations from '@drizzle/migrations';
 
@@ -23,19 +24,23 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <StatusBar style="auto" />
-      <Stack screenOptions={{ headerBackTitle: 'Wstecz' }}>
-        <Stack.Screen name="index" options={{ title: 'Talie' }} />
-        <Stack.Screen name="deck/[deckId]/index" options={{ title: 'Talia' }} />
-        <Stack.Screen
-          name="deck/[deckId]/review"
-          options={{ headerShown: false, animation: 'fade' }}
-        />
-        <Stack.Screen name="deck-editor" options={{ presentation: 'modal' }} />
-        <Stack.Screen name="card-editor" options={{ presentation: 'modal' }} />
-      </Stack>
-    </ThemeProvider>
+    // KeyboardProvider has to sit above everything that avoids the keyboard;
+    // the editors' KeyboardAvoidingView reads its context.
+    <KeyboardProvider>
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <StatusBar style="auto" />
+        <Stack screenOptions={{ headerBackTitle: 'Wstecz' }}>
+          <Stack.Screen name="index" options={{ title: 'Talie' }} />
+          <Stack.Screen name="deck/[deckId]/index" options={{ title: 'Talia' }} />
+          <Stack.Screen
+            name="deck/[deckId]/review"
+            options={{ headerShown: false, animation: 'fade' }}
+          />
+          <Stack.Screen name="deck-editor" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="card-editor" options={{ presentation: 'modal' }} />
+        </Stack>
+      </ThemeProvider>
+    </KeyboardProvider>
   );
 }
 
