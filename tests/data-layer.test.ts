@@ -10,6 +10,7 @@ import { eq } from 'drizzle-orm';
 
 import { db, sqliteDb } from '@/db/client';
 import {
+  cardsInDeckQuery,
   createCard,
   createDeck,
   deckAllowance,
@@ -32,6 +33,7 @@ import {
 } from '@/db/queries';
 import { decks, fsrsState, reviewLogs } from '@/db/schema';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
+import { filterCards } from '@/lib/search';
 import { countQueueStates, Rating, State } from '@/lib/scheduler';
 
 import { check, group } from './harness';
@@ -539,3 +541,45 @@ check('usuniecie karty zabiera jej pola', (() => {
   deleteCard(throwaway.id);
   return getCardFields(throwaway.id).length;
 })(), 0);
+
+group('Wyszukiwanie obejmuje pola dodatkowe');
+
+const searchDeck = createDeck({ name: 'Szukanie', newPerDay: 10, reviewsPerDay: 10 });
+
+createCard(searchDeck.id, 'to break', 'lamac', now, [
+  { id: null, side: 'front', position: 1, value: '/breik/' },
+  { id: null, side: 'back', position: 1, value: 'break-broke-broken' },
+]);
+createCard(searchDeck.id, 'to run', 'biegac', now, []);
+
+const searchRows = cardsInDeckQuery(searchDeck.id).all();
+
+// Pitfall 7 in CONTEXT.md: the correlated subquery has to keep the table
+// qualifier, or SQLite fails on an ambiguous column name.
+check(
+  'podzapytanie trzyma kwalifikator tabeli',
+  cardsInDeckQuery(searchDeck.id).toSQL().sql.includes('"cards"."id"'),
+  true
+);
+
+check(
+  'pola dodatkowe sklejone w jeden tekst',
+  searchRows.find((card) => card.front === 'to break')?.fields,
+  '/breik/ break-broke-broken'
+);
+check(
+  'karta bez pol dodatkowych daje pusty tekst',
+  searchRows.find((card) => card.front === 'to run')?.fields,
+  ''
+);
+
+check(
+  'szukanie po tresci pola dodatkowego znajduje karte',
+  filterCards(searchRows, 'broke-broken').map((card) => card.front),
+  ['to break']
+);
+check(
+  'a karty bez tego pola nie',
+  filterCards(searchRows, 'biegac').map((card) => card.front),
+  ['to run']
+);

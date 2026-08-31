@@ -19,18 +19,23 @@ export function fold(text: string): string {
     .replace(/[\u0300-\u036F]/g, '');
 }
 
-export type SearchableCard = { front: string; back: string };
+/**
+ * `fields` is every extra field of the card glued together by the query, which
+ * is what lets one search cover cards carrying different numbers of them.
+ */
+export type SearchableCard = { front: string; back: string; fields?: string | null };
 
 /**
  * Every whitespace-separated term has to appear somewhere in the card, so each
- * extra word narrows the result rather than widening it. Front and back are
- * searched together: you rarely remember which side a word was on.
+ * extra word narrows the result rather than widening it. All of the card's text
+ * is searched together — both mandatory fields and every extra one — because
+ * you rarely remember which field a word was in, let alone which side.
  */
 export function matches(card: SearchableCard, query: string): boolean {
   const terms = fold(query).split(/\s+/).filter(Boolean);
   if (terms.length === 0) return true;
 
-  const haystack = `${fold(card.front)} ${fold(card.back)}`;
+  const haystack = `${fold(card.front)} ${fold(card.back)} ${fold(card.fields ?? '')}`;
   return terms.every((term) => haystack.includes(term));
 }
 

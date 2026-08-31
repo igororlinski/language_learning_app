@@ -51,3 +51,23 @@ check(
   filterCards(deck, 'przynosic').map((c) => c.front),
   ['to bring']
 );
+
+group('Wyszukiwanie po polach dodatkowych');
+
+// `fields` is what the query glues together out of every extra field, so one
+// search covers cards carrying different numbers of them.
+const withFields = {
+  front: 'to break',
+  back: 'lamac',
+  fields: '/breɪk/ break-broke-broken',
+};
+
+check('trafia w tresc pola dodatkowego', matches(withFields, 'broke-broken'), true);
+check('polskie znaki tez sie skladaja', matches({ ...withFields, fields: 'łamać się' }, 'lamac sie'), true);
+check(
+  'slowo z pola dodatkowego zaweza razem z podstawowym',
+  matches(withFields, 'break broke'),
+  true
+);
+check('czego nie ma, tego nie znajdzie', matches(withFields, 'zupa'), false);
+check('karta bez pol dodatkowych dziala jak dawniej', matches({ front: 'a', back: 'b' }, 'a'), true);

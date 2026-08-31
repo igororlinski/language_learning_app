@@ -135,12 +135,28 @@ export function deckQuery(deckId: number) {
   return db.select().from(decks).where(eq(decks.id, deckId)).limit(1);
 }
 
+/**
+ * Every extra field of one card, glued into a single string for the search.
+ * Cards in a deck may carry different numbers of fields, so this collapses the
+ * lot rather than adding columns nobody can name in advance.
+ *
+ * The inner column is written as literal text on purpose — see pitfall 7 in
+ * CONTEXT.md: drizzle drops the table qualifier from an embedded column
+ * depending on the shape of the outer query.
+ */
+const fieldText = sql<string>`(
+  select coalesce(group_concat(cfs.value, ' '), '')
+  from ${cardFields} as cfs
+  where cfs.card_id = ${cards.id})`;
+
 export function cardsInDeckQuery(deckId: number) {
   return db
     .select({
       id: cards.id,
       front: cards.front,
       back: cards.back,
+      /** Only the search reads this; the list itself shows front and back. */
+      fields: fieldText,
       imageStatus: cards.imageStatus,
       createdAt: cards.createdAt,
       due: fsrsState.due,

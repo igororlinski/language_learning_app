@@ -169,7 +169,7 @@ export default function DeckScreen() {
                   label="Szukaj w talii"
                   value={query}
                   onChangeText={setQuery}
-                  placeholder="np. break, łamać"
+                  placeholder="np. break, łamać, /breɪk/"
                   autoCapitalize="none"
                   autoCorrect={false}
                   returnKeyType="search"
