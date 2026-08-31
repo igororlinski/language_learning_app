@@ -3,7 +3,7 @@ import { useEffect, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AudioButton } from '@/components/audio-button';
+import { MediaView } from '@/components/media-view';
 import { Button } from '@/components/button';
 import { DueCounts } from '@/components/due-counts';
 import { ThemedText } from '@/components/themed-text';
@@ -98,8 +98,12 @@ export default function ReviewScreen() {
             {/* Each face reads in the order the card editor arranged it: the
                 mandatory field is one line among the extras, not always first. */}
             {current.frontLines.map((line, index) =>
-              line.audioPath ? (
-                <AudioButton key={`front-${index}`} audioPath={line.audioPath} />
+              line.media ? (
+                <MediaView
+                  key={`front-${index}`}
+                  kind={line.media.kind}
+                  fileName={line.media.fileName}
+                />
               ) : (
                 <ThemedText
                   key={`front-${index}`}
@@ -113,8 +117,12 @@ export default function ReviewScreen() {
               <>
                 <View style={[styles.divider, { borderColor: theme.border }]} />
                 {current.backLines.map((line, index) =>
-                  line.audioPath ? (
-                    <AudioButton key={`back-${index}`} audioPath={line.audioPath} />
+                  line.media ? (
+                    <MediaView
+                      key={`back-${index}`}
+                      kind={line.media.kind}
+                      fileName={line.media.fileName}
+                    />
                   ) : (
                     <ThemedText
                       key={`back-${index}`}

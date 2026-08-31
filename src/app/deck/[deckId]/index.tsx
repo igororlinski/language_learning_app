@@ -11,7 +11,7 @@ import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
-  cardAudioPaths,
+  cardMediaFiles,
   cardsInDeckQuery,
   deckDueBreakdownQuery,
   deckQuery,
@@ -22,7 +22,7 @@ import {
 } from '@/db/queries';
 import { useNow } from '@/hooks/use-now';
 import { useTheme } from '@/hooks/use-theme';
-import { deleteAudio } from '@/lib/audio-files';
+import { deleteMedia } from '@/lib/media-files';
 import { cardsLabel, formatDue } from '@/lib/format';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { filterCards } from '@/lib/search';
@@ -96,9 +96,9 @@ export default function DeckScreen() {
           text: 'Usuń',
           style: 'destructive',
           onPress: () => {
-            const paths = cardAudioPaths(card.id);
+            const files = cardMediaFiles(card.id);
             deleteCard(card.id);
-            deleteAudio(paths);
+            deleteMedia(files);
           },
         },
       ],

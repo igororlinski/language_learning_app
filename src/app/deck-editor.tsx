@@ -13,7 +13,7 @@ import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import {
   createDeck,
-  deckAudioPaths,
+  deckMediaFiles,
   deleteDeck,
   getDeck,
   newCardFields,
@@ -32,7 +32,7 @@ import {
   type NewCardPlacement,
 } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
-import { deleteAudio } from '@/lib/audio-files';
+import { deleteMedia } from '@/lib/media-files';
 import type { BaseKind } from '@/lib/card-layout';
 import {
   BOUNDARY,
@@ -131,7 +131,7 @@ export default function DeckEditorScreen() {
       id: null,
       field: kind,
       value: '',
-      audioPath: null,
+      mediaPath: null,
     };
 
     setRows((current) => {
@@ -159,9 +159,9 @@ export default function DeckEditorScreen() {
     return (
       <View style={styles.slot}>
         <ThemedText type="small" themeColor="textSecondary">
-          {row.field === 'audio'
-            ? `${rowInfo.label} — dźwięk, plik wybierany na karcie.`
-            : `${rowInfo.label} — tekst, wypełniany na karcie.`}
+          {row.field === 'text'
+            ? `${rowInfo.label} — tekst, wypełniany na karcie.`
+            : `${rowInfo.label} — ${row.field === 'audio' ? 'dźwięk' : 'obraz'}, plik wybierany na karcie.`}
         </ThemedText>
         <Pressable
           onPress={() => removeRow(row.key)}
@@ -220,9 +220,9 @@ export default function DeckEditorScreen() {
         style: 'destructive',
         onPress: () => {
           // The audio copies are files, not rows, so the cascade misses them.
-          const paths = deckAudioPaths(deckId);
+          const files = deckMediaFiles(deckId);
           deleteDeck(deckId);
-          deleteAudio(paths);
+          deleteMedia(files);
           router.dismissTo('/');
         },
       },

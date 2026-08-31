@@ -5,14 +5,14 @@ import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
 import { AddFieldSheet } from '@/components/add-field-sheet';
-import { AudioButton } from '@/components/audio-button';
+import { MediaView } from '@/components/media-view';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
 import { ThemedText } from '@/components/themed-text';
 import { TextField } from '@/components/text-field';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import {
-  cardAudioPaths,
+  cardMediaFiles,
   createCard,
   deleteCard,
   getCard,
@@ -23,8 +23,8 @@ import {
 } from '@/db/queries';
 import type { FieldKind, FieldSide } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
-import { formatBytes, MAX_AUDIO_BYTES } from '@/lib/audio';
-import { AudioTooLargeError, deleteAudio, importAudio, pickAudio } from '@/lib/audio-files';
+import { formatBytes, isMediaKind, MEDIA_LIMITS, type MediaKind } from '@/lib/media';
+import { deleteMedia, importMedia, MediaTooLargeError, pickMedia } from '@/lib/media-files';
 import type { BaseKind } from '@/lib/card-layout';
 import {
   BOUNDARY,
@@ -81,14 +81,14 @@ export default function CardEditorScreen() {
 
   // Copies imported in this session. Whatever the save does not keep is deleted
   // there, so replacing a file twice does not leave two of them behind.
-  const imported = useRef<string[]>([]);
+  const imported = useRef<{ kind: MediaKind; fileName: string }[]>([]);
 
   const info = describeRows(rows, BASE_LABELS);
 
   const addField = ({ side, kind }: { side: FieldSide; kind: FieldKind }) => {
     nextKey.current += 1;
     const key = `new-${nextKey.current}`;
-    const added: Row = { key, kind: 'extra', id: null, field: kind, value: '', audioPath: null };
+    const added: Row = { key, kind: 'extra', id: null, field: kind, value: '', mediaPath: null };
 
     setRows((current) => {
       // A front field goes just above the boundary, a back one to the very end
@@ -99,8 +99,8 @@ export default function CardEditorScreen() {
         : [...current, added];
     });
 
-    // An empty audio field is useless, so the picker opens straight away.
-    if (kind === 'audio') void attachAudio(key);
+    // An empty media field is useless, so the picker opens straight away.
+    if (isMediaKind(kind)) void attachMedia(key, kind);
   };
 
   const patchRow = (key: string, value: string) =>
@@ -112,31 +112,36 @@ export default function CardEditorScreen() {
     setRows((current) => current.filter((row) => row.key !== key));
 
   /**
-   * Picks an audio file and copies it into the app's own directory. The size is
-   * checked before the copy, so an oversized file never lands on the device.
+   * Picks a file and copies it into the app's own directory. The size is checked
+   * before the copy, so an oversized file never lands on the device.
    */
-  const attachAudio = async (key: string) => {
+  const attachMedia = async (key: string, kind: MediaKind) => {
     try {
-      const picked = await pickAudio();
+      const picked = await pickMedia(kind);
       if (!picked) return;
 
-      const { fileName, name } = await importAudio(picked);
-      imported.current = [...imported.current, fileName];
+      const { fileName, name } = await importMedia(kind, picked);
+      imported.current = [...imported.current, { kind, fileName }];
 
       setRows((current) =>
         current.map((row) =>
           row.kind === 'extra' && row.key === key
-            ? { ...row, field: 'audio', value: name, audioPath: fileName }
+            ? { ...row, value: name, mediaPath: fileName }
             : row
         )
       );
     } catch (error) {
       const message =
-        error instanceof AudioTooLargeError
-          ? `Ten plik ma ${formatBytes(error.size)}, a limit to ${formatBytes(MAX_AUDIO_BYTES)}.`
+        error instanceof MediaTooLargeError
+          ? `Ten plik ma ${formatBytes(error.size)}, a limit to ${formatBytes(MEDIA_LIMITS[kind])}.`
           : 'Nie udało się skopiować pliku.';
 
-      Alert.alert('Nie dodano dźwięku', message, [{ text: 'OK' }], { cancelable: true });
+      Alert.alert(
+        kind === 'audio' ? 'Nie dodano dźwięku' : 'Nie dodano obrazu',
+        message,
+        [{ text: 'OK' }],
+        { cancelable: true }
+      );
     }
   };
 
@@ -147,23 +152,23 @@ export default function CardEditorScreen() {
     if (!canSave) return;
 
     const { fields, placement } = toPlacement(rows);
-    const kept = new Set(fields.map((field) => field.audioPath).filter(Boolean));
+    const kept = new Set(fields.map((field) => field.mediaPath).filter(Boolean));
 
     if (cardId) {
-      // Audio copies live outside the database, so files the card no longer
-      // points at have to be cleared by hand — the ones it dropped and the ones
+      // The copies live outside the database, so files the card no longer points
+      // at have to be cleared by hand — the ones it dropped and the ones
       // imported here and then replaced.
-      const before = cardAudioPaths(cardId);
+      const before = cardMediaFiles(cardId);
       updateCard(cardId, { front, back, fields, layout: placement });
 
-      deleteAudio(
-        [...before, ...imported.current].filter((path) => !kept.has(path))
+      deleteMedia(
+        [...before, ...imported.current].filter((file) => !kept.has(file.fileName))
       );
       router.back();
       return;
     }
 
-    deleteAudio(imported.current.filter((path) => !kept.has(path)));
+    deleteMedia(imported.current.filter((file) => !kept.has(file.fileName)));
     imported.current = [];
 
     // Fast entry: saving a new card clears the form and keeps the editor open so
@@ -185,9 +190,9 @@ export default function CardEditorScreen() {
         text: 'Usuń',
         style: 'destructive',
         onPress: () => {
-          const paths = cardAudioPaths(cardId);
+          const files = cardMediaFiles(cardId);
           deleteCard(cardId);
-          deleteAudio(paths);
+          deleteMedia(files);
           router.back();
         },
       },
@@ -219,21 +224,25 @@ export default function CardEditorScreen() {
 
     if (row.kind === 'boundary') return null;
 
-    if (row.field === 'audio') {
+    if (isMediaKind(row.field)) {
+      const kind = row.field;
+
       return (
         <>
           <ThemedText type="smallBold" themeColor="textSecondary">
-            {`${rowInfo.label} — dźwięk`}
+            {`${rowInfo.label} — ${kind === 'audio' ? 'dźwięk' : 'obraz'}`}
           </ThemedText>
-          {row.audioPath ? <AudioButton audioPath={row.audioPath} label={row.value} /> : null}
+          {row.mediaPath ? (
+            <MediaView kind={kind} fileName={row.mediaPath} label={row.value} />
+          ) : null}
           <View style={styles.rowActions}>
             <Pressable
-              onPress={() => attachAudio(row.key)}
+              onPress={() => attachMedia(row.key, kind)}
               hitSlop={12}
               accessibilityRole="button"
-              accessibilityLabel={`${row.audioPath ? 'Zmień' : 'Wybierz'} plik: ${rowInfo.label}`}>
+              accessibilityLabel={`${row.mediaPath ? 'Zmień' : 'Wybierz'} plik: ${rowInfo.label}`}>
               <ThemedText type="small" style={{ color: theme.accent }}>
-                {row.audioPath ? 'Zmień plik' : 'Wybierz plik'}
+                {row.mediaPath ? 'Zmień plik' : 'Wybierz plik'}
               </ThemedText>
             </Pressable>
             <Pressable

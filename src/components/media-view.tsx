@@ -1,48 +1,64 @@
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useMemo } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Image, Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { audioLabel } from '@/lib/audio';
-import { audioUri } from '@/lib/audio-files';
+import { mediaLabel, type MediaKind } from '@/lib/media';
+import { mediaUri } from '@/lib/media-files';
 
-export type AudioButtonProps = {
-  /** File name inside the app's audio directory. */
-  audioPath: string | null;
+export type MediaViewProps = {
+  kind: MediaKind;
+  /** File name inside the app's directory for that kind. */
+  fileName: string | null;
   /**
-   * The original file name. Shown next to the button where it helps — in the
+   * The original file name. Shown next to a player where it helps — in the
    * editor, to tell one attachment from another. On the card itself it is left
-   * out: the field is the sound, and the name of a file says nothing about it.
+   * out: the field is the sound or the picture, not the name of a file.
    */
   label?: string;
 };
 
 /**
- * Plays one audio field. The file lives in the app's own directory and may be
- * gone — a card restored on another install, a copy deleted by hand — so the
- * missing case is shown rather than silently doing nothing on tap.
+ * Shows one media field: a play button for sound, the picture itself for an
+ * image. The file lives in the app's own directory and may be gone — a card
+ * restored on another install, a copy deleted by hand — so the missing case is
+ * shown rather than silently rendering nothing.
  */
-export function AudioButton({ audioPath, label }: AudioButtonProps) {
+export function MediaView({ kind, fileName, label }: MediaViewProps) {
   const theme = useTheme();
+  const uri = useMemo(() => mediaUri(kind, fileName), [kind, fileName]);
 
-  const uri = useMemo(() => audioUri(audioPath), [audioPath]);
+  if (!uri) {
+    return (
+      <ThemedText type="small" style={{ color: theme.danger }}>
+        {kind === 'audio' ? 'Brak pliku dźwiękowego' : 'Brak pliku obrazu'}
+      </ThemedText>
+    );
+  }
+
+  return kind === 'audio' ? (
+    <AudioPlayer uri={uri} label={label} />
+  ) : (
+    <Image
+      source={{ uri }}
+      style={styles.image}
+      resizeMode="contain"
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel={mediaLabel('image', label ?? '')}
+    />
+  );
+}
+
+/** Sound: one button that starts from the top and can be stopped mid-way. */
+function AudioPlayer({ uri, label }: { uri: string; label?: string }) {
+  const theme = useTheme();
   const player = useAudioPlayer(uri);
   const status = useAudioPlayerStatus(player);
 
   const named = Boolean(label && label.trim());
-
-  if (!uri) {
-    return (
-      <View style={named ? styles.row : styles.alone}>
-        <ThemedText type="small" style={{ color: theme.danger }}>
-          Brak pliku dźwiękowego
-        </ThemedText>
-      </View>
-    );
-  }
-
   const playing = status.playing;
 
   const toggle = () => {
@@ -61,7 +77,7 @@ export function AudioButton({ audioPath, label }: AudioButtonProps) {
       <Pressable
         onPress={toggle}
         accessibilityRole="button"
-        accessibilityLabel={`${playing ? 'Zatrzymaj' : 'Odtwórz'}: ${audioLabel(label ?? '')}`}
+        accessibilityLabel={`${playing ? 'Zatrzymaj' : 'Odtwórz'}: ${mediaLabel('audio', label ?? '')}`}
         style={({ pressed }) => [
           styles.button,
           named ? null : styles.buttonAlone,
@@ -74,7 +90,7 @@ export function AudioButton({ audioPath, label }: AudioButtonProps) {
 
       {named ? (
         <ThemedText type="small" themeColor="textSecondary" numberOfLines={1} style={styles.label}>
-          {audioLabel(label ?? '')}
+          {mediaLabel('audio', label ?? '')}
         </ThemedText>
       ) : null}
     </View>
@@ -110,5 +126,10 @@ const styles = StyleSheet.create({
   },
   label: {
     flex: 1,
+  },
+  image: {
+    width: '100%',
+    height: 200,
+    borderRadius: Radius.medium,
   },
 });

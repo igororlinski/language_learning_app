@@ -9,10 +9,10 @@ import { DueCounts } from '@/components/due-counts';
 import { EmptyState } from '@/components/empty-state';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
-import { deckAudioPaths, decksWithStatsQuery, deleteDeck } from '@/db/queries';
+import { deckMediaFiles, decksWithStatsQuery, deleteDeck } from '@/db/queries';
 import { useNow } from '@/hooks/use-now';
 import { useTheme } from '@/hooks/use-theme';
-import { deleteAudio } from '@/lib/audio-files';
+import { deleteMedia } from '@/lib/media-files';
 import { cardsLabel } from '@/lib/format';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 
@@ -45,9 +45,9 @@ export default function DecksScreen() {
           style: 'destructive',
           onPress: () => {
             // The audio copies are files, not rows, so the cascade misses them.
-            const paths = deckAudioPaths(deck.id);
+            const files = deckMediaFiles(deck.id);
             deleteDeck(deck.id);
-            deleteAudio(paths);
+            deleteMedia(files);
           },
         },
       ],

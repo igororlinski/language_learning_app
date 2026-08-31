@@ -1,4 +1,5 @@
 import type { FieldKind, FieldSide } from '@/db/schema';
+import { isMediaKind, type MediaKind } from '@/lib/media';
 
 /**
  * Where the pieces of a card sit.
@@ -23,7 +24,7 @@ export type LayoutPiece = {
   position: number;
   kind: FieldKind;
   value: string;
-  audioPath: string | null;
+  mediaPath: string | null;
 };
 
 /** The columns that place a card's two mandatory fields. */
@@ -43,7 +44,7 @@ export function cardPieces<
     position: number;
     value: string;
     kind?: FieldKind;
-    audioPath?: string | null;
+    mediaPath?: string | null;
   },
 >(card: CardPlacement, extras: T[]): LayoutPiece[] {
   const base = (kind: BaseKind, side: FieldSide, position: number, value: string): LayoutPiece => ({
@@ -52,7 +53,7 @@ export function cardPieces<
     position,
     kind: 'text',
     value,
-    audioPath: null,
+    mediaPath: null,
   });
 
   return [
@@ -64,7 +65,7 @@ export function cardPieces<
       position: field.position,
       kind: field.kind ?? 'text',
       value: field.value,
-      audioPath: field.audioPath ?? null,
+      mediaPath: field.mediaPath ?? null,
     })),
   ];
 }
@@ -78,15 +79,19 @@ export function piecesOnSide(pieces: LayoutPiece[], side: FieldSide): LayoutPiec
   return pieces.filter((piece) => piece.side === side).sort((a, b) => a.position - b.position);
 }
 
+/** The file a line renders instead of text, if it has one. */
+export type LineMedia = { kind: MediaKind; fileName: string };
+
 /**
- * One rendered line of a card face. An audio line shows a play button instead
- * of text; `text` is then the original file name, which is all the label it has.
+ * One rendered line of a card face. A media line shows a player or a picture
+ * instead of text; `text` is then the original file name, which is all the
+ * label it has.
  */
-export type CardLine = { text: string; base: boolean; audioPath: string | null };
+export type CardLine = { text: string; base: boolean; media: LineMedia | null };
 
 /**
  * The lines one face shows during review. Extras with nothing in them are
- * dropped — an empty text box, or an audio field whose file went missing. They
+ * dropped — an empty text box, or a media field whose file went missing. They
  * still exist on the card and hold their place in the editor, they just have
  * nothing to show. A face with no pieces at all renders as nothing, which is a
  * layout the editor allows on purpose.
@@ -95,11 +100,14 @@ export function sideLines(pieces: LayoutPiece[], side: FieldSide): CardLine[] {
   return piecesOnSide(pieces, side)
     .filter((piece) => {
       if (piece.base !== null) return true;
-      return piece.kind === 'audio' ? Boolean(piece.audioPath) : piece.value.trim().length > 0;
+      return isMediaKind(piece.kind) ? Boolean(piece.mediaPath) : piece.value.trim().length > 0;
     })
     .map((piece) => ({
       text: piece.value,
       base: piece.base !== null,
-      audioPath: piece.kind === 'audio' ? piece.audioPath : null,
+      media:
+        isMediaKind(piece.kind) && piece.mediaPath
+          ? { kind: piece.kind, fileName: piece.mediaPath }
+          : null,
     }));
 }

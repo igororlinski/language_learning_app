@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, lte, ne, sql, type SQLWrapper } from 'drizzle-orm';
 
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
+import { isMediaKind, type MediaKind } from '@/lib/media';
 
 import {
   remainingAllowance,
@@ -231,7 +232,7 @@ export function newCardFields(deckId: number): CardFieldInput[] {
     position: slot.position,
     kind: slot.kind,
     value: '',
-    audioPath: null,
+    mediaPath: null,
   }));
 }
 
@@ -262,31 +263,40 @@ export function syncDeckSlots(deckId: number, slots: DeckSlotInput[]) {
   });
 }
 
+/** One stored file, with the kind that says which directory it lives in. */
+export type MediaFile = { kind: MediaKind; fileName: string };
+
+function toMediaFiles(rows: { kind: FieldKind; mediaPath: string | null }[]): MediaFile[] {
+  return rows
+    .filter((row) => isMediaKind(row.kind) && Boolean(row.mediaPath))
+    .map((row) => ({ kind: row.kind as MediaKind, fileName: row.mediaPath as string }));
+}
+
 /**
- * The audio files one card points at. Copies live in the app's own directory,
- * not in the database, so whatever deletes a card or a field has to clear them
- * separately — see `deleteAudio` in `src/lib/audio-files.ts`.
+ * The files one card points at. Copies live in the app's own directory, not in
+ * the database, so whatever deletes a card or a field has to clear them
+ * separately — see `deleteMedia` in `src/lib/media-files.ts`.
  */
-export function cardAudioPaths(cardId: number): string[] {
-  return db
-    .select({ audioPath: cardFields.audioPath })
-    .from(cardFields)
-    .where(eq(cardFields.cardId, cardId))
-    .all()
-    .map((row) => row.audioPath)
-    .filter((path): path is string => Boolean(path));
+export function cardMediaFiles(cardId: number): MediaFile[] {
+  return toMediaFiles(
+    db
+      .select({ kind: cardFields.kind, mediaPath: cardFields.mediaPath })
+      .from(cardFields)
+      .where(eq(cardFields.cardId, cardId))
+      .all()
+  );
 }
 
 /** The same, for every card in a deck — a deck delete cascades through them. */
-export function deckAudioPaths(deckId: number): string[] {
-  return db
-    .select({ audioPath: cardFields.audioPath })
-    .from(cardFields)
-    .innerJoin(cards, eq(cards.id, cardFields.cardId))
-    .where(eq(cards.deckId, deckId))
-    .all()
-    .map((row) => row.audioPath)
-    .filter((path): path is string => Boolean(path));
+export function deckMediaFiles(deckId: number): MediaFile[] {
+  return toMediaFiles(
+    db
+      .select({ kind: cardFields.kind, mediaPath: cardFields.mediaPath })
+      .from(cardFields)
+      .innerJoin(cards, eq(cards.id, cardFields.cardId))
+      .where(eq(cards.deckId, deckId))
+      .all()
+  );
 }
 
 /** Every deck a card could be moved into: all of them except the one it is in. */
@@ -503,10 +513,10 @@ export type CardFieldInput = {
   id: number | null;
   side: FieldSide;
   position: number;
-  /** Typed text, or one audio file — see `src/lib/audio-files.ts`. */
+  /** Typed text, or one attached file — see `src/lib/media-files.ts`. */
   kind: FieldKind;
   value: string;
-  audioPath: string | null;
+  mediaPath: string | null;
 };
 
 /**
@@ -532,7 +542,7 @@ function writeCardFields(tx: Tx, cardId: number, fields: CardFieldInput[]) {
       position: field.position,
       kind: field.kind,
       value: field.value.trim(),
-      audioPath: field.audioPath,
+      mediaPath: field.mediaPath,
     };
 
     if (field.id === null) {

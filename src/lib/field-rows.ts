@@ -20,10 +20,10 @@ export type Row =
       key: string;
       kind: 'extra';
       id: number | null;
-      /** What the field holds: typed text, or one audio file. */
+      /** What the field holds: typed text, or one attached file. */
       field: FieldKind;
       value: string;
-      audioPath: string | null;
+      mediaPath: string | null;
     };
 
 /** Where the two mandatory fields sit. */
@@ -41,7 +41,7 @@ export type RowField = {
   position: number;
   kind: FieldKind;
   value: string;
-  audioPath: string | null;
+  mediaPath: string | null;
 };
 
 /** What a row means once the list order is read top to bottom. */
@@ -81,7 +81,7 @@ export function buildRows(placement: RowPlacement, fields: RowField[]): Row[] {
       id: field.id,
       field: field.kind,
       value: field.value,
-      audioPath: field.audioPath,
+      mediaPath: field.mediaPath,
       side: field.side,
       position: field.position,
     })),
@@ -160,7 +160,7 @@ export function toPlacement(rows: Row[]): { fields: RowField[]; placement: RowPl
       position,
       kind: row.field,
       value: row.value,
-      audioPath: row.audioPath,
+      mediaPath: row.mediaPath,
     });
   }
 

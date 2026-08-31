@@ -15,9 +15,16 @@ const SIDES: Segment<FieldSide>[] = [
 ];
 
 const KINDS: Segment<FieldKind>[] = [
-  { value: 'text', label: 'Tekstowe' },
-  { value: 'audio', label: 'Dźwiękowe' },
+  { value: 'text', label: 'Tekst' },
+  { value: 'audio', label: 'Dźwięk' },
+  { value: 'image', label: 'Obraz' },
 ];
+
+const KIND_HINTS: Record<FieldKind, string> = {
+  text: 'Zwykłe pole tekstowe.',
+  audio: 'Po dodaniu wybierzesz plik dźwiękowy.',
+  image: 'Po dodaniu wybierzesz obraz.',
+};
 
 export type AddFieldSheetProps = {
   visible: boolean;
@@ -88,9 +95,7 @@ export function AddFieldSheet({ visible, onClose, onAdd }: AddFieldSheetProps) {
               accessibilityLabel="Rodzaj nowego pola"
             />
             <ThemedText type="small" themeColor="textSecondary">
-              {kind === 'audio'
-                ? 'Po dodaniu wybierzesz plik dźwiękowy. Rodzaju pola nie da się później zmienić.'
-                : 'Zwykłe pole tekstowe. Rodzaju pola nie da się później zmienić.'}
+              {`${KIND_HINTS[kind]} Rodzaju pola nie da się później zmienić.`}
             </ThemedText>
           </View>
 
