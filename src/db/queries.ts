@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lte, sql, type SQLWrapper } from 'drizzle-orm';
+import { and, asc, desc, eq, lte, ne, sql, type SQLWrapper } from 'drizzle-orm';
 
 import {
   remainingAllowance,
@@ -145,6 +145,15 @@ export function deckDueBreakdownQuery(deckId: number, nowMs: number, dayStartMs:
     .from(cards)
     .innerJoin(fsrsState, eq(fsrsState.cardId, cards.id))
     .where(and(eq(cards.deckId, deckId), lte(fsrsState.due, new Date(nowMs))));
+}
+
+/** Every deck a card could be moved into: all of them except the one it is in. */
+export function otherDecksQuery(deckId: number) {
+  return db
+    .select({ id: decks.id, name: decks.name })
+    .from(decks)
+    .where(ne(decks.id, deckId))
+    .orderBy(asc(decks.name));
 }
 
 export function deckDoneTodayQuery(deckId: number, dayStartMs: number) {
@@ -311,6 +320,18 @@ export function updateCard(cardId: number, patch: { front: string; back: string 
     .set({ front: patch.front.trim(), back: patch.back.trim() })
     .where(eq(cards.id, cardId))
     .run();
+}
+
+/**
+ * Moves a card to another deck. Only `deck_id` changes: the FSRS state and the
+ * review log hang off the card, so the schedule survives the move untouched.
+ *
+ * Side effect worth knowing: "done today" is counted by joining `review_logs`
+ * through `cards.deck_id`, so today's answers move with the card and count
+ * against the target deck's daily allowance. Anki does the same.
+ */
+export function moveCard(cardId: number, targetDeckId: number) {
+  return db.update(cards).set({ deckId: targetDeckId }).where(eq(cards.id, cardId)).run();
 }
 
 export function deleteCard(cardId: number) {

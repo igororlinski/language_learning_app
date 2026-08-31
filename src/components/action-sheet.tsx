@@ -10,6 +10,12 @@ export type SheetAction = {
   onPress: () => void;
   /** Rendered in the danger colour. */
   destructive?: boolean;
+  /**
+   * Keeps the sheet open — for entries that only swap what it shows. Replacing
+   * one `Modal` with another in the same frame drops the animation on Android,
+   * so a submenu reuses this sheet instead of opening a second one.
+   */
+  keepOpen?: boolean;
 };
 
 export type ActionSheetProps = {
@@ -32,7 +38,7 @@ export function ActionSheet({ visible, title, subtitle, actions, onClose }: Acti
   // Close first: navigating out from under a visible modal is what makes the
   // next screen render behind it.
   const run = (action: SheetAction) => {
-    onClose();
+    if (!action.keepOpen) onClose();
     action.onPress();
   };
 
@@ -67,9 +73,9 @@ export function ActionSheet({ visible, title, subtitle, actions, onClose }: Acti
             ) : null}
           </View>
 
-          {actions.map((action) => (
+          {actions.map((action, index) => (
             <Pressable
-              key={action.label}
+              key={`${index}-${action.label}`}
               onPress={() => run(action)}
               style={({ pressed }) => [
                 styles.action,

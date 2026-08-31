@@ -13,10 +13,14 @@ import {
   createCard,
   createDeck,
   deckAllowance,
+  deckDoneTodayQuery,
   deckDueBreakdownQuery,
   decksWithStatsQuery,
+  deleteDeck,
   gradeCard,
   loadDueCards,
+  moveCard,
+  otherDecksQuery,
   rollbackCard,
   updateDeck,
 } from '@/db/queries';
@@ -288,3 +292,43 @@ check(
   gathered.map((card) => card.id).includes(firstCard(Math.random)!),
   true
 );
+
+group('Przenoszenie kart miedzy taliami');
+
+const source = createDeck({ name: 'Zrodlowa', newPerDay: 10, reviewsPerDay: 10 });
+const target = createDeck({ name: 'Docelowa', newPerDay: 10, reviewsPerDay: 10 });
+
+const moved = createCard(source.id, 'move', 'MOVE', now);
+gradeCard(moved.id, Rating.Good, now);
+const scheduleBefore = snapshot(moved.id);
+
+const cardCount = (deckId: number, when: Date) =>
+  decksWithStatsQuery(when.getTime(), studyDayStart(when).getTime())
+    .all()
+    .find((deck) => deck.id === deckId)?.cardCount;
+
+const newDoneToday = (deckId: number, when: Date) =>
+  deckDoneTodayQuery(deckId, studyDayStart(when).getTime()).all()[0].newDoneToday;
+
+const moveTargets = otherDecksQuery(source.id).all();
+
+check('cele przenosin pomijaja biezaca talie', moveTargets.some((deck) => deck.id === source.id), false);
+check('cele przenosin zawieraja druga talie', moveTargets.some((deck) => deck.id === target.id), true);
+
+check('przed przenosinami karta jest w zrodle', cardCount(source.id, now), 1);
+check('talia docelowa jest pusta', cardCount(target.id, now), 0);
+
+moveCard(moved.id, target.id);
+
+check('po przenosinach zrodlo jest puste', cardCount(source.id, now), 0);
+check('karta trafila do celu', cardCount(target.id, now), 1);
+check('harmonogram FSRS przetrwal przenosiny', snapshot(moved.id), scheduleBefore);
+check('historia powtorek zostaje przy karcie', logCount(moved.id), 1);
+check('dzisiejsza odpowiedz liczy sie do nowej talii', newDoneToday(target.id, now), 1);
+check('i przestaje sie liczyc do starej', newDoneToday(source.id, now), 0);
+
+// The card no longer hangs off the old deck, so its CASCADE cannot take it.
+deleteDeck(source.id);
+
+check('usuniecie starej talii nie kasuje przeniesionej karty', logCount(moved.id), 1);
+check('karta dalej jest w talii docelowej', cardCount(target.id, now), 1);

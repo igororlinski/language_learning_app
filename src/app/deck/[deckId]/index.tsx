@@ -15,6 +15,8 @@ import {
   deckDueBreakdownQuery,
   deckQuery,
   deleteCard,
+  moveCard,
+  otherDecksQuery,
   resetCard,
 } from '@/db/queries';
 import { useNow } from '@/hooks/use-now';
@@ -25,6 +27,9 @@ import { filterCards } from '@/lib/search';
 import { STATE_LABELS, State } from '@/lib/scheduler';
 
 type CardMenuTarget = { id: number; front: string; back: string };
+
+/** The long-press sheet shows either the card's actions or the list of decks. */
+type CardMenu = { card: CardMenuTarget; view: 'actions' | 'move' };
 
 /** Placeholder while the aggregate is still loading, so the counters never flicker. */
 const EMPTY_BREAKDOWN = {
@@ -45,6 +50,7 @@ export default function DeckScreen() {
 
   const { data: deckRows } = useLiveQuery(deckQuery(deckId), [deckId]);
   const { data: cards } = useLiveQuery(cardsInDeckQuery(deckId), [deckId]);
+  const { data: otherDecks } = useLiveQuery(otherDecksQuery(deckId), [deckId]);
   const dayStart = studyDayStart(new Date(now)).getTime();
   const { data: dueRows } = useLiveQuery(deckDueBreakdownQuery(deckId, now, dayStart), [
     deckId,
@@ -68,7 +74,8 @@ export default function DeckScreen() {
   // cards that are actually due and the ones the deck is allowed to serve.
   const heldBack = raw.newCount + raw.learningCount + raw.reviewCount - due;
 
-  const [menuCard, setMenuCard] = useState<CardMenuTarget | null>(null);
+  const [menu, setMenu] = useState<CardMenu | null>(null);
+  const moveTargets = otherDecks ?? [];
   const [query, setQuery] = useState('');
   const allCards = cards ?? [];
   const searching = query.trim().length > 0;
@@ -94,9 +101,26 @@ export default function DeckScreen() {
       label: 'Edytuj kartę',
       onPress: () => router.push({ pathname: '/card-editor', params: { deckId, cardId: card.id } }),
     },
+    // Swaps what this sheet shows instead of opening a second one.
+    ...(moveTargets.length > 0
+      ? [
+          {
+            label: 'Przenieś do innej talii',
+            keepOpen: true,
+            onPress: () => setMenu({ card, view: 'move' }),
+          },
+        ]
+      : []),
     { label: 'Zeruj postęp', onPress: () => resetCard(card.id) },
     { label: 'Usuń kartę', destructive: true, onPress: () => confirmDelete(card) },
   ];
+
+  /** The card keeps its schedule and history — only the deck changes. */
+  const moveActions = (card: CardMenuTarget): SheetAction[] =>
+    moveTargets.map((target) => ({
+      label: target.name,
+      onPress: () => moveCard(card.id, target.id),
+    }));
 
   return (
     <View style={[styles.screen, { backgroundColor: theme.background }]}>
@@ -179,7 +203,12 @@ export default function DeckScreen() {
             onPress={() =>
               router.push({ pathname: '/card-editor', params: { deckId, cardId: item.id } })
             }
-            onLongPress={() => setMenuCard({ id: item.id, front: item.front, back: item.back })}
+            onLongPress={() =>
+              setMenu({
+                card: { id: item.id, front: item.front, back: item.back },
+                view: 'actions',
+              })
+            }
             style={({ pressed }) => [
               styles.row,
               {
@@ -227,13 +256,13 @@ export default function DeckScreen() {
         />
       </View>
 
-      {menuCard ? (
+      {menu ? (
         <ActionSheet
           visible
-          title={menuCard.front}
-          subtitle={menuCard.back}
-          actions={cardMenuActions(menuCard)}
-          onClose={() => setMenuCard(null)}
+          title={menu.view === 'move' ? 'Przenieś do talii' : menu.card.front}
+          subtitle={menu.view === 'move' ? menu.card.front : menu.card.back}
+          actions={menu.view === 'move' ? moveActions(menu.card) : cardMenuActions(menu.card)}
+          onClose={() => setMenu(null)}
         />
       ) : null}
     </View>
