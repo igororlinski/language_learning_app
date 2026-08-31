@@ -9,6 +9,8 @@ export const Colors = {
     background: '#F5F6F8',
     backgroundElement: '#FFFFFF',
     backgroundSelected: '#E8EBEF',
+    /** Warm tint marking the two mandatory fields in the layout editors. */
+    backgroundHighlight: '#FBEEE8',
     border: '#E1E4E9',
     accent: '#2F6FED',
     onAccent: '#FFFFFF',
@@ -20,6 +22,7 @@ export const Colors = {
     background: '#0E0F11',
     backgroundElement: '#1A1C1F',
     backgroundSelected: '#26292D',
+    backgroundHighlight: '#2C211D',
     border: '#2A2D31',
     accent: '#5A8DF6',
     onAccent: '#0E0F11',

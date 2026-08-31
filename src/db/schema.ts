@@ -17,6 +17,10 @@ export const NEW_CARD_ORDERS = ['oldest', 'newest', 'random'] as const;
 export type NewCardOrder = (typeof NEW_CARD_ORDERS)[number];
 export const DEFAULT_NEW_CARD_ORDER: NewCardOrder = 'oldest';
 
+/** Which face of a card a field belongs to. */
+export const FIELD_SIDES = ['front', 'back'] as const;
+export type FieldSide = (typeof FIELD_SIDES)[number];
+
 export const decks = sqliteTable('decks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
@@ -36,20 +40,21 @@ export const decks = sqliteTable('decks', {
     .notNull()
     .default(DEFAULT_NEW_CARD_ORDER),
   /**
-   * How many empty extra fields a new card in this deck starts with, per side.
-   * Only a brand new card reads them; from then on the fields are the card's
-   * own and these numbers have no say over them.
+   * The layout a new card in this deck starts with: where the two mandatory
+   * fields sit and how many empty extra fields each side gets. The empty ones
+   * are interchangeable, so their positions are simply the places the mandatory
+   * fields leave free. Only a brand new card reads any of this.
    */
+  newFrontSide: text('new_front_side', { enum: FIELD_SIDES }).notNull().default('front'),
+  newFrontPosition: integer('new_front_position').notNull().default(0),
+  newBackSide: text('new_back_side', { enum: FIELD_SIDES }).notNull().default('back'),
+  newBackPosition: integer('new_back_position').notNull().default(0),
   newFrontFields: integer('new_front_fields').notNull().default(0),
   newBackFields: integer('new_back_fields').notNull().default(0),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .$defaultFn(() => new Date()),
 });
-
-/** Which face of a card a field belongs to. */
-export const FIELD_SIDES = ['front', 'back'] as const;
-export type FieldSide = (typeof FIELD_SIDES)[number];
 
 export const IMAGE_STATUSES = ['none', 'generating', 'ready', 'failed'] as const;
 export type ImageStatus = (typeof IMAGE_STATUSES)[number];

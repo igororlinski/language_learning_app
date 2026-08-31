@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, lte, ne, sql, type SQLWrapper } from 'drizzle-orm';
 
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
+import { slotFields } from '@/lib/field-rows';
 import {
   remainingAllowance,
   studyDayStart,
@@ -39,6 +40,24 @@ import {
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /* ------------------------------------------------------------------ reads */
+
+/**
+ * Where the two mandatory fields ended up. Both the side and the position are
+ * free: the question may sit on the back, and a face may hold nothing at all.
+ */
+export type CardLayout = {
+  frontSide: FieldSide;
+  frontPosition: number;
+  backSide: FieldSide;
+  backPosition: number;
+};
+
+const DEFAULT_CARD_LAYOUT: CardLayout = {
+  frontSide: 'front',
+  frontPosition: 0,
+  backSide: 'back',
+  backPosition: 0,
+};
 
 /** Comma-separated bind params for a `state in (...)` test. */
 function stateList(states: State[]) {
@@ -165,25 +184,35 @@ export function getCardFields(cardId: number): CardField[] {
 }
 
 /**
- * The empty extra boxes a new card in this deck starts with. Only a brand new
- * card ever reads this; from then on the fields are the card's own and the
- * deck's numbers have no say over them.
+ * Where a new card in this deck puts its two mandatory fields. Only a brand new
+ * card ever reads this; from then on the layout is the card's own and the deck
+ * has no say over it.
+ */
+export function newCardLayout(deckId: number): CardLayout {
+  const deck = getDeck(deckId);
+  if (!deck) return DEFAULT_CARD_LAYOUT;
+
+  return {
+    frontSide: deck.newFrontSide,
+    frontPosition: deck.newFrontPosition,
+    backSide: deck.newBackSide,
+    backPosition: deck.newBackPosition,
+  };
+}
+
+/**
+ * The empty extra boxes a new card starts with. The deck stores only how many
+ * each side gets: the boxes are interchangeable, so their positions are the
+ * places the mandatory fields leave free.
  */
 export function newCardFields(deckId: number): CardFieldInput[] {
   const deck = getDeck(deckId);
   if (!deck) return [];
 
-  // Position 0 on each side is the mandatory field, so the empty boxes start
-  // right below it.
-  const boxes = (side: FieldSide, count: number) =>
-    Array.from({ length: Math.max(0, count) }, (_, index) => ({
-      id: null,
-      side,
-      position: index + 1,
-      value: '',
-    }));
-
-  return [...boxes('front', deck.newFrontFields), ...boxes('back', deck.newBackFields)];
+  return slotFields(newCardLayout(deckId), {
+    front: deck.newFrontFields,
+    back: deck.newBackFields,
+  });
 }
 
 /** Every deck a card could be moved into: all of them except the one it is in. */
@@ -358,6 +387,8 @@ export type DeckInput = {
   reviewsPerDay: number;
   newCardPlacement?: NewCardPlacement;
   newCardOrder?: NewCardOrder;
+  /** The layout every new card in this deck starts from. */
+  newCardLayout?: CardLayout;
   newFrontFields?: number;
   newBackFields?: number;
 };
@@ -371,6 +402,10 @@ function deckValues(input: DeckInput) {
     reviewsPerDay: input.reviewsPerDay,
     newCardPlacement: input.newCardPlacement ?? DEFAULT_NEW_CARD_PLACEMENT,
     newCardOrder: input.newCardOrder ?? DEFAULT_NEW_CARD_ORDER,
+    newFrontSide: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).frontSide,
+    newFrontPosition: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).frontPosition,
+    newBackSide: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).backSide,
+    newBackPosition: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).backPosition,
     newFrontFields: Math.max(0, input.newFrontFields ?? 0),
     newBackFields: Math.max(0, input.newBackFields ?? 0),
   };
@@ -399,24 +434,6 @@ export type CardFieldInput = {
   side: FieldSide;
   position: number;
   value: string;
-};
-
-/**
- * Where the two mandatory fields ended up. Both the side and the position are
- * free: the question may sit on the back, and a face may hold nothing at all.
- */
-export type CardLayout = {
-  frontSide: FieldSide;
-  frontPosition: number;
-  backSide: FieldSide;
-  backPosition: number;
-};
-
-const DEFAULT_CARD_LAYOUT: CardLayout = {
-  frontSide: 'front',
-  frontPosition: 0,
-  backSide: 'back',
-  backPosition: 0,
 };
 
 /**

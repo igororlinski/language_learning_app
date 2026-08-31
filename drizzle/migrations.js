@@ -8,6 +8,7 @@ import m0003 from './0003_absurd_moondragon.sql';
 import m0004 from './0004_aspiring_skrulls.sql';
 import m0005 from './0005_eminent_miek.sql';
 import m0006 from './0006_moaning_shiva.sql';
+import m0007 from './0007_bouncy_the_enforcers.sql';
 
   export default {
     journal,
@@ -18,7 +19,8 @@ m0002,
 m0003,
 m0004,
 m0005,
-m0006
+m0006,
+m0007
     }
   }
   

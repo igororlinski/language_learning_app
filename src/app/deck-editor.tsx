@@ -1,14 +1,23 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { useMemo, useRef, useState } from 'react';
+import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { ScrollViewContainer } from 'react-native-reorderable-list';
 
 import { Button } from '@/components/button';
+import { FieldLayoutList } from '@/components/field-layout-list';
 import { OptionPicker, type PickerOption } from '@/components/option-picker';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
-import { createDeck, deleteDeck, getDeck, updateDeck } from '@/db/queries';
+import {
+  createDeck,
+  deleteDeck,
+  getDeck,
+  newCardFields,
+  newCardLayout,
+  updateDeck,
+} from '@/db/queries';
 import {
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
@@ -18,6 +27,27 @@ import {
   type NewCardPlacement,
 } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
+import type { BaseKind } from '@/lib/card-layout';
+import {
+  BOUNDARY,
+  buildRows,
+  countSides,
+  DEFAULT_PLACEMENT,
+  describeRows,
+  toPlacement,
+  type Row,
+  type RowInfo,
+} from '@/lib/field-rows';
+
+/** In the deck's template the two mandatory fields have no content yet. */
+const BASE_LABELS: Record<BaseKind, string> = {
+  front: 'Pytanie',
+  back: 'Odpowiedź',
+};
+
+const LAYOUT_HINT =
+  'Ten sam układ, co w edytorze karty: przeciągnij pole za uchwyt, ' +
+  'nad linią „Tył karty” jest przód, pod nią — tył.';
 
 const PLACEMENT_OPTIONS: PickerOption<NewCardPlacement>[] = [
   {
@@ -76,13 +106,70 @@ export default function DeckEditorScreen() {
   const [newCardOrder, setNewCardOrder] = useState<NewCardOrder>(
     existing?.newCardOrder ?? DEFAULT_NEW_CARD_ORDER
   );
-  const [newFrontFields, setNewFrontFields] = useState(String(existing?.newFrontFields ?? 0));
-  const [newBackFields, setNewBackFields] = useState(String(existing?.newBackFields ?? 0));
+  // The deck's default card, arranged in the very same list the card editor
+  // uses — only the boxes hold no text, because a template has none.
+  const [rows, setRows] = useState<Row[]>(() =>
+    deckId
+      ? buildRows(newCardLayout(deckId), newCardFields(deckId))
+      : buildRows(DEFAULT_PLACEMENT, [])
+  );
+
+  const nextKey = useRef(0);
+  const info = describeRows(rows, BASE_LABELS);
+
+  const addField = (side: 'front' | 'back') => {
+    nextKey.current += 1;
+    const added: Row = { key: `new-${nextKey.current}`, kind: 'extra', id: null, value: '' };
+
+    setRows((current) => {
+      const boundary = current.findIndex((row) => row.key === BOUNDARY);
+      return side === 'front'
+        ? [...current.slice(0, boundary), added, ...current.slice(boundary)]
+        : [...current, added];
+    });
+  };
+
+  const removeRow = (key: string) =>
+    setRows((current) => current.filter((row) => row.key !== key));
+
+  const renderRow = (row: Row, rowInfo: RowInfo) => {
+    if (row.kind === 'base') {
+      return (
+        <ThemedText type="small" themeColor="textSecondary">
+          {`${rowInfo.label} — pole podstawowe, wypełniane przy dodawaniu karty.`}
+        </ThemedText>
+      );
+    }
+
+    if (row.kind === 'boundary') return null;
+
+    return (
+      <View style={styles.slot}>
+        <ThemedText type="small" themeColor="textSecondary">
+          {`${rowInfo.label} — puste, do wypełnienia na karcie.`}
+        </ThemedText>
+        <Pressable
+          onPress={() => removeRow(row.key)}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel={`Usuń ${rowInfo.label}`}>
+          <ThemedText type="small" style={{ color: theme.danger }}>
+            Usuń
+          </ThemedText>
+        </Pressable>
+      </View>
+    );
+  };
 
   const canSave = name.trim().length > 0;
 
   const save = () => {
     if (!canSave) return;
+
+    // The template keeps no text, so only the arrangement is worth saving: where
+    // the mandatory fields sit and how many empty boxes each side gets.
+    const { fields, placement } = toPlacement(rows);
+    const counts = countSides(fields);
 
     const input = {
       name,
@@ -91,8 +178,9 @@ export default function DeckEditorScreen() {
       reviewsPerDay: toLimit(reviewsPerDay, DEFAULT_REVIEWS_PER_DAY),
       newCardPlacement,
       newCardOrder,
-      newFrontFields: toLimit(newFrontFields, 0),
-      newBackFields: toLimit(newBackFields, 0),
+      newCardLayout: placement,
+      newFrontFields: counts.front,
+      newBackFields: counts.back,
     };
 
     if (deckId) {
@@ -126,7 +214,9 @@ export default function DeckEditorScreen() {
       automaticOffset>
       <Stack.Screen options={{ title: deckId ? 'Edytuj talię' : 'Nowa talia' }} />
 
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollViewContainer
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled">
         <TextField
           label="Nazwa"
           value={name}
@@ -188,31 +278,38 @@ export default function DeckEditorScreen() {
         />
 
         <View style={styles.limits}>
-          <ThemedText type="smallBold">Domyślne pola nowej karty</ThemedText>
+          <ThemedText type="smallBold">Domyślny układ nowej karty</ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
-            Każda karta ma przód i tył — tych dwóch pól nie da się usunąć. Tutaj
-            ustawiasz, ile dodatkowych, pustych pól dostaje nowo dodawana karta
-            w tej talii. To tylko punkt wyjścia: w edytorze karty możesz je
-            dodawać i usuwać dowolnie, a zmiana tych liczb nie rusza kart już
+            Tak będzie wyglądać każda nowa karta w tej talii, zanim cokolwiek
+            w niej wpiszesz. To tylko punkt wyjścia: w edytorze karty można
+            wszystko poprzestawiać, a zmiany tutaj nie ruszają kart już
             istniejących.
           </ThemedText>
         </View>
 
-        <TextField
-          label="Puste pola z przodu"
-          value={newFrontFields}
-          onChangeText={setNewFrontFields}
-          keyboardType="number-pad"
-          placeholder="0"
+        <FieldLayoutList
+          rows={rows}
+          info={info}
+          onChange={setRows}
+          renderRow={renderRow}
+          hint={LAYOUT_HINT}
         />
-        <TextField
-          label="Puste pola z tyłu"
-          value={newBackFields}
-          onChangeText={setNewBackFields}
-          keyboardType="number-pad"
-          placeholder="0"
-        />
-      </ScrollView>
+
+        <View style={styles.addRow}>
+          <Button
+            title="Dodaj pole z przodu"
+            variant="secondary"
+            style={styles.addButton}
+            onPress={() => addField('front')}
+          />
+          <Button
+            title="Dodaj pole z tyłu"
+            variant="secondary"
+            style={styles.addButton}
+            onPress={() => addField('back')}
+          />
+        </View>
+      </ScrollViewContainer>
 
       <View style={[styles.footer, { borderColor: theme.border }]}>
         <Button title="Zapisz" onPress={save} disabled={!canSave} />
@@ -242,6 +339,19 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
     width: '100%',
     alignSelf: 'center',
+  },
+  slot: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  addRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  addButton: {
+    flex: 1,
   },
   footer: {
     padding: Spacing.three,

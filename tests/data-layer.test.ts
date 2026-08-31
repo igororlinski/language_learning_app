@@ -23,6 +23,7 @@ import {
   loadDueCards,
   moveCard,
   newCardFields,
+  newCardLayout,
   otherDecksQuery,
   rollbackCard,
   saveCardFields,
@@ -42,6 +43,7 @@ import migration0003 from '../drizzle/0003_absurd_moondragon.sql';
 import migration0004 from '../drizzle/0004_aspiring_skrulls.sql';
 import migration0005 from '../drizzle/0005_eminent_miek.sql';
 import migration0006 from '../drizzle/0006_moaning_shiva.sql';
+import migration0007 from '../drizzle/0007_bouncy_the_enforcers.sql';
 
 for (const migration of [
   migration0000,
@@ -51,6 +53,7 @@ for (const migration of [
   migration0004,
   migration0005,
   migration0006,
+  migration0007,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -373,6 +376,47 @@ check(
   newCardFields(createDeck({ name: 'Bez pol', newPerDay: 1, reviewsPerDay: 1 }).id),
   []
 );
+
+// A deck whose default card keeps both mandatory fields on the back and leaves
+// one empty box on the front — the same layout the deck editor arranges.
+const oddDeck = createDeck({
+  name: 'Nietypowy uklad',
+  newPerDay: 10,
+  reviewsPerDay: 10,
+  newCardLayout: { frontSide: 'back', frontPosition: 1, backSide: 'back', backPosition: 0 },
+  newFrontFields: 1,
+  newBackFields: 0,
+});
+
+check('talia pamieta swoj domyslny uklad', newCardLayout(oddDeck.id), {
+  frontSide: 'back',
+  frontPosition: 1,
+  backSide: 'back',
+  backPosition: 0,
+});
+
+check('puste pole trafia na wolna strone', newCardFields(oddDeck.id), [
+  { id: null, side: 'front', position: 0, value: '' },
+]);
+
+// A card made from that template reads exactly as the deck arranged it.
+const oddCard = createCard(
+  oddDeck.id,
+  'to fly',
+  'latac',
+  now,
+  newCardFields(oddDeck.id),
+  newCardLayout(oddDeck.id)
+);
+
+const oddQueued = () =>
+  loadDueCards(oddDeck.id, now).find((card) => card.cardId === oddCard.id);
+
+check('nowa karta dziedziczy uklad talii: przod pusty', oddQueued()?.frontLines, []);
+check('a oba pola podstawowe czytaja sie z tylu', oddQueued()?.backLines, [
+  { text: 'latac', base: true },
+  { text: 'to fly', base: true },
+]);
 
 group('Uklad pol na karcie');
 
