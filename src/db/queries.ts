@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, inArray, lte, ne, sql, type SQLWrapper } from 'drizzle-orm';
 
+import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
 import {
   remainingAllowance,
   studyDayStart,
@@ -23,14 +24,12 @@ import { db } from './client';
 import {
   cardFields,
   cards,
-  deckFields,
   decks,
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
   fsrsState,
   reviewLogs,
   type CardField,
-  type DeckField,
   type FieldSide,
   type NewCardOrder,
   type NewCardPlacement,
@@ -155,22 +154,6 @@ export function deckDueBreakdownQuery(deckId: number, nowMs: number, dayStartMs:
     .where(and(eq(cards.deckId, deckId), lte(fsrsState.due, new Date(nowMs))));
 }
 
-/**
- * The deck's template for new cards, in the order the deck editor arranged it.
- * Nothing here binds an existing card — see `newCardFields`.
- */
-export function deckFieldsQuery(deckId: number) {
-  return db
-    .select()
-    .from(deckFields)
-    .where(eq(deckFields.deckId, deckId))
-    .orderBy(asc(deckFields.position), asc(deckFields.id));
-}
-
-export function getDeckFields(deckId: number): DeckField[] {
-  return deckFieldsQuery(deckId).all();
-}
-
 /** A card's own extra fields, in card order. */
 export function getCardFields(cardId: number): CardField[] {
   return db
@@ -182,17 +165,25 @@ export function getCardFields(cardId: number): CardField[] {
 }
 
 /**
- * The rubrics a new card in this deck starts with — the deck's template, with
- * nothing filled in yet. Only a brand new card ever reads it; from then on the
- * fields are the card's own and the deck has no say over them.
+ * The empty extra boxes a new card in this deck starts with. Only a brand new
+ * card ever reads this; from then on the fields are the card's own and the
+ * deck's numbers have no say over them.
  */
 export function newCardFields(deckId: number): CardFieldInput[] {
-  return getDeckFields(deckId).map((field) => ({
-    id: null,
-    name: field.name,
-    side: field.side,
-    value: '',
-  }));
+  const deck = getDeck(deckId);
+  if (!deck) return [];
+
+  // Position 0 on each side is the mandatory field, so the empty boxes start
+  // right below it.
+  const boxes = (side: FieldSide, count: number) =>
+    Array.from({ length: Math.max(0, count) }, (_, index) => ({
+      id: null,
+      side,
+      position: index + 1,
+      value: '',
+    }));
+
+  return [...boxes('front', deck.newFrontFields), ...boxes('back', deck.newBackFields)];
 }
 
 /** Every deck a card could be moved into: all of them except the one it is in. */
@@ -214,9 +205,6 @@ export function deckDoneTodayQuery(deckId: number, dayStartMs: number) {
     .where(eq(decks.id, deckId));
 }
 
-/** One filled-in extra field, ready to render under a card's face. */
-export type CardFieldContent = { name: string; side: FieldSide; value: string };
-
 export type DueCardRow = {
   cardId: number;
   front: string;
@@ -234,8 +222,9 @@ export type DueCardRow = {
   lapses: number;
   state: number;
   lastReview: Date | null;
-  /** The deck's extra fields this card actually filled in, in deck order. */
-  fields: CardFieldContent[];
+  /** The two faces as the review screen shows them, in the card's own order. */
+  frontLines: CardLine[];
+  backLines: CardLine[];
 };
 
 /**
@@ -263,6 +252,10 @@ export function loadDueCards(
       front: cards.front,
       back: cards.back,
       imagePath: cards.imagePath,
+      frontSide: cards.frontSide,
+      frontPosition: cards.frontPosition,
+      backSide: cards.backSide,
+      backPosition: cards.backPosition,
       createdAt: cards.createdAt,
       due: fsrsState.due,
       stability: fsrsState.stability,
@@ -287,20 +280,24 @@ export function loadDueCards(
   const allowed = withinAllowance(gathered, deckAllowance(deckId, now));
   const placed = placeNewCards(allowed, deck?.newCardPlacement ?? DEFAULT_NEW_CARD_PLACEMENT);
 
-  return withFieldContent(placed);
+  return withCardLines(placed);
 }
 
+/** Everything `withCardLines` needs from a card row to lay its faces out. */
+type LayoutSource = CardPlacement & { cardId: number };
+
 /**
- * Attaches each card's extra fields to the session snapshot — one read for the
- * whole queue rather than one per card. Fields with nothing in them are left
- * out here, so the review screen never has to test for empties.
+ * Turns each card into the two ordered faces the review screen renders — one
+ * read for the whole queue rather than one per card. The merge itself lives in
+ * `src/lib/card-layout.ts`, so the editor and the session cannot disagree about
+ * what order a card reads in.
  */
-function withFieldContent<T extends { cardId: number }>(
+function withCardLines<T extends LayoutSource>(
   rows: T[]
-): (T & { fields: CardFieldContent[] })[] {
+): (T & { frontLines: CardLine[]; backLines: CardLine[] })[] {
   if (rows.length === 0) return [];
 
-  const filled = db
+  const extras = db
     .select()
     .from(cardFields)
     .where(
@@ -312,17 +309,18 @@ function withFieldContent<T extends { cardId: number }>(
     .orderBy(asc(cardFields.position), asc(cardFields.id))
     .all();
 
-  const perCard = new Map<number, CardFieldContent[]>();
+  return rows.map((row) => {
+    const pieces = cardPieces(
+      row,
+      extras.filter((field) => field.cardId === row.cardId)
+    );
 
-  for (const field of filled) {
-    if (!field.value.trim()) continue;
-
-    const list = perCard.get(field.cardId) ?? [];
-    list.push({ name: field.name, side: field.side, value: field.value });
-    perCard.set(field.cardId, list);
-  }
-
-  return rows.map((row) => ({ ...row, fields: perCard.get(row.cardId) ?? [] }));
+    return {
+      ...row,
+      frontLines: sideLines(pieces, 'front'),
+      backLines: sideLines(pieces, 'back'),
+    };
+  });
 }
 
 /** What the deck may still hand out in the study day containing `now`. */
@@ -360,6 +358,8 @@ export type DeckInput = {
   reviewsPerDay: number;
   newCardPlacement?: NewCardPlacement;
   newCardOrder?: NewCardOrder;
+  newFrontFields?: number;
+  newBackFields?: number;
 };
 
 /** The columns a deck form writes, with the queue options defaulted. */
@@ -371,6 +371,8 @@ function deckValues(input: DeckInput) {
     reviewsPerDay: input.reviewsPerDay,
     newCardPlacement: input.newCardPlacement ?? DEFAULT_NEW_CARD_PLACEMENT,
     newCardOrder: input.newCardOrder ?? DEFAULT_NEW_CARD_ORDER,
+    newFrontFields: Math.max(0, input.newFrontFields ?? 0),
+    newBackFields: Math.max(0, input.newBackFields ?? 0),
   };
 }
 
@@ -386,72 +388,70 @@ export function deleteDeck(deckId: number) {
   return db.delete(decks).where(eq(decks.id, deckId)).run();
 }
 
-/** One row of the deck editor's field list; `id` is null for a new field. */
-export type DeckFieldInput = { id: number | null; name: string; side: FieldSide };
-
 /**
- * Makes the deck's field definitions match the list the editor holds: fields
- * dropped from it are deleted (their values go with them, by CASCADE), the rest
- * are inserted or renamed, and `position` is rewritten from the list order.
- * Nameless rows are treated as removed — an empty box is not a field.
+ * One row of the card editor's field list; `id` is null for a new field.
+ * `position` is the field's place within its own side, counted together with
+ * the mandatory field — the editor works that out, because it is the only place
+ * that knows the order the user arranged.
  */
-export function syncDeckFields(deckId: number, fields: DeckFieldInput[]) {
-  return db.transaction((tx) => {
-    const named = fields.filter((field) => field.name.trim().length > 0);
-    const kept = new Set(named.map((field) => field.id));
-
-    for (const row of tx.select().from(deckFields).where(eq(deckFields.deckId, deckId)).all()) {
-      if (!kept.has(row.id)) tx.delete(deckFields).where(eq(deckFields.id, row.id)).run();
-    }
-
-    named.forEach((field, position) => {
-      const values = { name: field.name.trim(), side: field.side, position };
-
-      if (field.id === null) {
-        tx.insert(deckFields).values({ deckId, ...values }).run();
-      } else {
-        tx.update(deckFields).set(values).where(eq(deckFields.id, field.id)).run();
-      }
-    });
-  });
-}
-
-/** One row of the card editor's field list; `id` is null for a new field. */
-export type CardFieldInput = { id: number | null; name: string; side: FieldSide; value: string };
+export type CardFieldInput = {
+  id: number | null;
+  side: FieldSide;
+  position: number;
+  value: string;
+};
 
 /**
- * Makes a card's fields match the list the editor holds — the same shape as
- * `syncDeckFields`: rows dropped from the list are deleted, the rest inserted
- * or updated, and `position` rewritten from the list order. A field with no
- * name counts as removed; an empty *value* is kept, because a rubric waiting to
- * be filled in is still a field the card carries.
+ * Where the two mandatory fields ended up. Both the side and the position are
+ * free: the question may sit on the back, and a face may hold nothing at all.
+ */
+export type CardLayout = {
+  frontSide: FieldSide;
+  frontPosition: number;
+  backSide: FieldSide;
+  backPosition: number;
+};
+
+const DEFAULT_CARD_LAYOUT: CardLayout = {
+  frontSide: 'front',
+  frontPosition: 0,
+  backSide: 'back',
+  backPosition: 0,
+};
+
+/**
+ * Makes a card's fields match the list the editor holds: rows dropped from it
+ * are deleted, the rest inserted or updated, and `position` rewritten from the
+ * list order.
+ *
+ * An empty field is **kept**. It exists on the card, holds its place in the
+ * order and simply contributes nothing during review — `sideLines` filters it
+ * out there. Removing a field is an explicit action in the editor, never a side
+ * effect of clearing its text.
  */
 function writeCardFields(tx: Tx, cardId: number, fields: CardFieldInput[]) {
-  const named = fields.filter((field) => field.name.trim().length > 0);
-  const kept = new Set(named.map((field) => field.id));
+  const kept = new Set(fields.map((field) => field.id));
 
   for (const row of tx.select().from(cardFields).where(eq(cardFields.cardId, cardId)).all()) {
     if (!kept.has(row.id)) tx.delete(cardFields).where(eq(cardFields.id, row.id)).run();
   }
 
-  named.forEach((field, position) => {
-    const values = {
-      name: field.name.trim(),
-      side: field.side,
-      value: field.value.trim(),
-      position,
-    };
+  for (const field of fields) {
+    const values = { side: field.side, value: field.value.trim(), position: field.position };
 
     if (field.id === null) {
       tx.insert(cardFields).values({ cardId, ...values }).run();
     } else {
       tx.update(cardFields).set(values).where(eq(cardFields.id, field.id)).run();
     }
-  });
+  }
 }
 
-export function saveCardFields(cardId: number, fields: CardFieldInput[]) {
-  return db.transaction((tx) => writeCardFields(tx, cardId, fields));
+export function saveCardFields(cardId: number, fields: CardFieldInput[], layout?: CardLayout) {
+  return db.transaction((tx) => {
+    if (layout) tx.update(cards).set(layout).where(eq(cards.id, cardId)).run();
+    writeCardFields(tx, cardId, fields);
+  });
 }
 
 /** Inserts the card together with its initial (New) FSRS state. */
@@ -460,12 +460,19 @@ export function createCard(
   front: string,
   back: string,
   now = new Date(),
-  fields: CardFieldInput[] = []
+  fields: CardFieldInput[] = [],
+  layout: CardLayout = DEFAULT_CARD_LAYOUT
 ) {
   return db.transaction((tx) => {
     const card = tx
       .insert(cards)
-      .values({ deckId, front: front.trim(), back: back.trim(), createdAt: now })
+      .values({
+        deckId,
+        front: front.trim(),
+        back: back.trim(),
+        createdAt: now,
+        ...layout,
+      })
       .returning()
       .get();
 
@@ -481,11 +488,15 @@ export function createCard(
 
 export function updateCard(
   cardId: number,
-  patch: { front: string; back: string; fields?: CardFieldInput[] }
+  patch: { front: string; back: string; fields?: CardFieldInput[]; layout?: CardLayout }
 ) {
   return db.transaction((tx) => {
     tx.update(cards)
-      .set({ front: patch.front.trim(), back: patch.back.trim() })
+      .set({
+        front: patch.front.trim(),
+        back: patch.back.trim(),
+        ...(patch.layout ?? {}),
+      })
       .where(eq(cards.id, cardId))
       .run();
 

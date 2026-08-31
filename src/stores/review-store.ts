@@ -1,12 +1,7 @@
 import { create } from 'zustand';
 
-import {
-  gradeCard,
-  loadDueCards,
-  rollbackCard,
-  type CardFieldContent,
-  type DueCardRow,
-} from '@/db/queries';
+import { gradeCard, loadDueCards, rollbackCard, type DueCardRow } from '@/db/queries';
+import type { CardLine } from '@/lib/card-layout';
 import { Rating, State, toFsrsCard, type FsrsCard, type Grade } from '@/lib/scheduler';
 
 /**
@@ -18,11 +13,10 @@ const SAME_SESSION_WINDOW_MS = 20 * 60_000;
 
 export type ReviewCard = {
   cardId: number;
-  front: string;
-  back: string;
+  /** Both faces already in the card's own order, mandatory field included. */
+  frontLines: CardLine[];
+  backLines: CardLine[];
   imagePath: string | null;
-  /** The deck's extra fields this card filled in, front and back together. */
-  fields: CardFieldContent[];
   fsrs: FsrsCard;
 };
 
@@ -135,10 +129,9 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
 function toReviewCard(row: DueCardRow): ReviewCard {
   return {
     cardId: row.cardId,
-    front: row.front,
-    back: row.back,
+    frontLines: row.frontLines,
+    backLines: row.backLines,
     imagePath: row.imagePath,
-    fields: row.fields,
     fsrs: toFsrsCard(row),
   };
 }

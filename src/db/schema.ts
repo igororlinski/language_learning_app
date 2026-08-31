@@ -35,10 +35,21 @@ export const decks = sqliteTable('decks', {
   newCardOrder: text('new_card_order', { enum: NEW_CARD_ORDERS })
     .notNull()
     .default(DEFAULT_NEW_CARD_ORDER),
+  /**
+   * How many empty extra fields a new card in this deck starts with, per side.
+   * Only a brand new card reads them; from then on the fields are the card's
+   * own and these numbers have no say over them.
+   */
+  newFrontFields: integer('new_front_fields').notNull().default(0),
+  newBackFields: integer('new_back_fields').notNull().default(0),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .$defaultFn(() => new Date()),
 });
+
+/** Which face of a card a field belongs to. */
+export const FIELD_SIDES = ['front', 'back'] as const;
+export type FieldSide = (typeof FIELD_SIDES)[number];
 
 export const IMAGE_STATUSES = ['none', 'generating', 'ready', 'failed'] as const;
 export type ImageStatus = (typeof IMAGE_STATUSES)[number];
@@ -52,6 +63,15 @@ export const cards = sqliteTable(
       .references(() => decks.id, { onDelete: 'cascade' }),
     front: text('front').notNull(),
     back: text('back').notNull(),
+    /**
+     * Where the two mandatory fields sit in the card's layout. They can be moved
+     * anywhere, the other side included, so each carries its own side as well as
+     * its position within it — which also lets one face end up empty.
+     */
+    frontSide: text('front_side', { enum: FIELD_SIDES }).notNull().default('front'),
+    frontPosition: integer('front_position').notNull().default(0),
+    backSide: text('back_side', { enum: FIELD_SIDES }).notNull().default('back'),
+    backPosition: integer('back_position').notNull().default(0),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -63,35 +83,13 @@ export const cards = sqliteTable(
   (table) => [index('cards_deck_id_idx').on(table.deckId)]
 );
 
-/** Which face of a card a field belongs to. */
-export const FIELD_SIDES = ['front', 'back'] as const;
-export type FieldSide = (typeof FIELD_SIDES)[number];
-
-/**
- * The deck's **template** for new cards: the rubrics a freshly created card
- * starts with. Nothing here reaches an existing card — editing or deleting a
- * template field leaves every card already in the deck untouched.
- */
-export const deckFields = sqliteTable(
-  'deck_fields',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    deckId: integer('deck_id')
-      .notNull()
-      .references(() => decks.id, { onDelete: 'cascade' }),
-    /** Shown above the value during review, e.g. "Wymowa". */
-    name: text('name').notNull(),
-    side: text('side', { enum: FIELD_SIDES }).notNull(),
-    /** Order within the side, as arranged in the deck editor. */
-    position: integer('position').notNull().default(0),
-  },
-  (table) => [index('deck_fields_deck_id_idx').on(table.deckId)]
-);
-
 /**
  * A card's own extra fields, on top of the built-in front/back. They belong to
  * the card, not to the deck, so two cards in one deck can carry entirely
- * different rubrics and moving a card between decks changes nothing about them.
+ * different content and moving a card between decks changes nothing about them.
+ *
+ * A field has no name: its identity is the row id and nothing is printed above
+ * it during review — it is simply one more line on its side of the card.
  */
 export const cardFields = sqliteTable(
   'card_fields',
@@ -100,12 +98,9 @@ export const cardFields = sqliteTable(
     cardId: integer('card_id')
       .notNull()
       .references(() => cards.id, { onDelete: 'cascade' }),
-    /** Shown above the content during review, e.g. "Wymowa". */
-    name: text('name').notNull(),
     side: text('side', { enum: FIELD_SIDES }).notNull(),
     /** Order within the side, as arranged in the card editor. */
     position: integer('position').notNull().default(0),
-    /** May be empty: a rubric the card carries but has nothing in yet. */
     value: text('value').notNull().default(''),
   },
   (table) => [index('card_fields_card_id_idx').on(table.cardId)]
@@ -158,7 +153,6 @@ export const reviewLogs = sqliteTable(
 );
 
 export type Deck = typeof decks.$inferSelect;
-export type DeckField = typeof deckFields.$inferSelect;
 export type CardField = typeof cardFields.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type FsrsStateRow = typeof fsrsState.$inferSelect;

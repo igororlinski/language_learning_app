@@ -5,6 +5,7 @@
  */
 import './search.test';
 import './queue-order.test';
+import './card-layout.test';
 import './data-layer.test';
 
 import { failureCount } from './harness';
