@@ -25,11 +25,13 @@ import {
   gradeCard,
   loadDueCards,
   moveCard,
+  getDeckSlots,
   newCardFields,
   newCardLayout,
   otherDecksQuery,
   rollbackCard,
   saveCardFields,
+  syncDeckSlots,
   updateDeck,
 } from '@/db/queries';
 import { decks, fsrsState, reviewLogs } from '@/db/schema';
@@ -48,6 +50,7 @@ import migration0005 from '../drizzle/0005_eminent_miek.sql';
 import migration0006 from '../drizzle/0006_moaning_shiva.sql';
 import migration0007 from '../drizzle/0007_bouncy_the_enforcers.sql';
 import migration0008 from '../drizzle/0008_mean_lady_mastermind.sql';
+import migration0009 from '../drizzle/0009_curved_jazinda.sql';
 
 for (const migration of [
   migration0000,
@@ -59,6 +62,7 @@ for (const migration of [
   migration0006,
   migration0007,
   migration0008,
+  migration0009,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -358,28 +362,45 @@ deleteDeck(source.id);
 check('usuniecie starej talii nie kasuje przeniesionej karty', logCount(moved.id), 1);
 check('karta dalej jest w talii docelowej', cardCount(target.id, now), 1);
 
-group('Ile pustych pol dostaje nowa karta');
+group('Puste pola nowej karty');
 
-const fieldDeck = createDeck({
-  name: 'Z polami',
-  newPerDay: 10,
-  reviewsPerDay: 10,
-  newFrontFields: 2,
-  newBackFields: 1,
-});
+const fieldDeck = createDeck({ name: 'Z polami', newPerDay: 10, reviewsPerDay: 10 });
 
-// Position 0 on each side belongs to the mandatory field, so the empty boxes
-// start below it.
-check('nowa karta startuje z pustymi polami wedlug licznikow talii', newCardFields(fieldDeck.id), [
-  { id: null, side: 'front', position: 1, kind: 'text', value: '', audioPath: null },
-  { id: null, side: 'front', position: 2, kind: 'text', value: '', audioPath: null },
-  { id: null, side: 'back', position: 1, kind: 'text', value: '', audioPath: null },
+// Position 0 on each side belongs to the mandatory field, so the empty slots
+// start below it. Each one carries its own kind — a text box or an audio slot.
+syncDeckSlots(fieldDeck.id, [
+  { side: 'front', position: 1, kind: 'text' },
+  { side: 'front', position: 2, kind: 'audio' },
+  { side: 'back', position: 1, kind: 'text' },
 ]);
 
+// Order between the two sides carries no meaning — each side is sorted on its
+// own when the editor builds its list — so the check compares them sorted.
 check(
-  'talia bez licznikow nie daje zadnych pol',
+  'nowa karta startuje ze slotami talii',
+  newCardFields(fieldDeck.id)
+    .map((field) => [field.side, field.position, field.kind, field.value])
+    .sort(),
+  [
+    ['back', 1, 'text', ''],
+    ['front', 1, 'text', ''],
+    ['front', 2, 'audio', ''],
+  ]
+);
+
+check(
+  'talia bez slotow nie daje zadnych pol',
   newCardFields(createDeck({ name: 'Bez pol', newPerDay: 1, reviewsPerDay: 1 }).id),
   []
+);
+
+// Saving the deck again replaces the whole set rather than diffing it.
+syncDeckSlots(fieldDeck.id, [{ side: 'back', position: 1, kind: 'audio' }]);
+
+check(
+  'ponowny zapis podmienia caly zestaw slotow',
+  getDeckSlots(fieldDeck.id).map((slot) => [slot.side, slot.position, slot.kind]),
+  [['back', 1, 'audio']]
 );
 
 // A deck whose default card keeps both mandatory fields on the back and leaves
@@ -389,9 +410,9 @@ const oddDeck = createDeck({
   newPerDay: 10,
   reviewsPerDay: 10,
   newCardLayout: { frontSide: 'back', frontPosition: 1, backSide: 'back', backPosition: 0 },
-  newFrontFields: 1,
-  newBackFields: 0,
 });
+
+syncDeckSlots(oddDeck.id, [{ side: 'front', position: 0, kind: 'text' }]);
 
 check('talia pamieta swoj domyslny uklad', newCardLayout(oddDeck.id), {
   frontSide: 'back',
@@ -488,16 +509,10 @@ check('a pole przeniesione czyta sie na tyle, nad podstawowym', queued()?.backLi
 
 check('pole wyrzucone z listy znika z karty', getCardFields(fieldCard.id).length, 3);
 
-// The deck's counters change; the card that already exists must not budge.
-updateDeck(fieldDeck.id, {
-  name: 'Z polami',
-  newPerDay: 10,
-  reviewsPerDay: 10,
-  newFrontFields: 0,
-  newBackFields: 0,
-});
+// The deck's slots change; the card that already exists must not budge.
+syncDeckSlots(fieldDeck.id, []);
 
-check('zmiana licznikow talii nie rusza istniejacej karty', getCardFields(fieldCard.id).length, 3);
+check('zmiana slotow talii nie rusza istniejacej karty', getCardFields(fieldCard.id).length, 3);
 
 group('Pusta strona karty');
 

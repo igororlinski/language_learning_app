@@ -11,8 +11,12 @@ import { audioUri } from '@/lib/audio-files';
 export type AudioButtonProps = {
   /** File name inside the app's audio directory. */
   audioPath: string | null;
-  /** The original file name, shown next to the button. */
-  label: string;
+  /**
+   * The original file name. Shown next to the button where it helps — in the
+   * editor, to tell one attachment from another. On the card itself it is left
+   * out: the field is the sound, and the name of a file says nothing about it.
+   */
+  label?: string;
 };
 
 /**
@@ -27,9 +31,11 @@ export function AudioButton({ audioPath, label }: AudioButtonProps) {
   const player = useAudioPlayer(uri);
   const status = useAudioPlayerStatus(player);
 
+  const named = Boolean(label && label.trim());
+
   if (!uri) {
     return (
-      <View style={styles.row}>
+      <View style={named ? styles.row : styles.alone}>
         <ThemedText type="small" style={{ color: theme.danger }}>
           Brak pliku dźwiękowego
         </ThemedText>
@@ -51,13 +57,14 @@ export function AudioButton({ audioPath, label }: AudioButtonProps) {
   };
 
   return (
-    <View style={styles.row}>
+    <View style={named ? styles.row : styles.alone}>
       <Pressable
         onPress={toggle}
         accessibilityRole="button"
-        accessibilityLabel={`${playing ? 'Zatrzymaj' : 'Odtwórz'}: ${audioLabel(label)}`}
+        accessibilityLabel={`${playing ? 'Zatrzymaj' : 'Odtwórz'}: ${audioLabel(label ?? '')}`}
         style={({ pressed }) => [
           styles.button,
+          named ? null : styles.buttonAlone,
           { backgroundColor: theme.accent, opacity: pressed ? 0.75 : 1 },
         ]}>
         <ThemedText style={[styles.glyph, { color: theme.onAccent }]}>
@@ -65,9 +72,11 @@ export function AudioButton({ audioPath, label }: AudioButtonProps) {
         </ThemedText>
       </Pressable>
 
-      <ThemedText type="small" themeColor="textSecondary" numberOfLines={1} style={styles.label}>
-        {audioLabel(label)}
-      </ThemedText>
+      {named ? (
+        <ThemedText type="small" themeColor="textSecondary" numberOfLines={1} style={styles.label}>
+          {audioLabel(label ?? '')}
+        </ThemedText>
+      ) : null}
     </View>
   );
 }
@@ -78,6 +87,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.two,
   },
+  /** On the card there is nothing but the button, centred on its own line. */
+  alone: {
+    alignItems: 'center',
+    alignSelf: 'center',
+  },
   button: {
     width: 44,
     height: 44,
@@ -85,9 +99,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  buttonAlone: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+  },
   glyph: {
-    fontSize: 15,
-    lineHeight: 20,
+    fontSize: 17,
+    lineHeight: 22,
   },
   label: {
     flex: 1,

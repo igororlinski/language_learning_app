@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, lte, ne, sql, type SQLWrapper } from 'drizzle-orm';
 
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
-import { slotFields } from '@/lib/field-rows';
+
 import {
   remainingAllowance,
   studyDayStart,
@@ -25,12 +25,14 @@ import { db } from './client';
 import {
   cardFields,
   cards,
+  deckFieldSlots,
   decks,
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
   fsrsState,
   reviewLogs,
   type CardField,
+  type DeckFieldSlot,
   type FieldKind,
   type FieldSide,
   type NewCardOrder,
@@ -218,17 +220,45 @@ export function newCardLayout(deckId: number): CardLayout {
 }
 
 /**
- * The empty extra boxes a new card starts with. The deck stores only how many
- * each side gets: the boxes are interchangeable, so their positions are the
- * places the mandatory fields leave free.
+ * The empty extra fields a new card starts with. Each slot carries its own side,
+ * position and kind, because a text box and an audio slot are not the same
+ * thing — a card cannot swap one for the other after the fact.
  */
 export function newCardFields(deckId: number): CardFieldInput[] {
-  const deck = getDeck(deckId);
-  if (!deck) return [];
+  return getDeckSlots(deckId).map((slot) => ({
+    id: null,
+    side: slot.side,
+    position: slot.position,
+    kind: slot.kind,
+    value: '',
+    audioPath: null,
+  }));
+}
 
-  return slotFields(newCardLayout(deckId), {
-    front: deck.newFrontFields,
-    back: deck.newBackFields,
+/** The deck's empty slots, in the order the deck editor arranged them. */
+export function getDeckSlots(deckId: number): DeckFieldSlot[] {
+  return db
+    .select()
+    .from(deckFieldSlots)
+    .where(eq(deckFieldSlots.deckId, deckId))
+    .orderBy(asc(deckFieldSlots.position), asc(deckFieldSlots.id))
+    .all();
+}
+
+/** One row of the deck editor's list; slots hold no content, only a shape. */
+export type DeckSlotInput = { side: FieldSide; position: number; kind: FieldKind };
+
+/**
+ * Replaces the deck's slots with the list the editor holds. They carry nothing
+ * worth preserving, so this is a delete-and-insert rather than a diff.
+ */
+export function syncDeckSlots(deckId: number, slots: DeckSlotInput[]) {
+  return db.transaction((tx) => {
+    tx.delete(deckFieldSlots).where(eq(deckFieldSlots.deckId, deckId)).run();
+
+    for (const slot of slots) {
+      tx.insert(deckFieldSlots).values({ deckId, ...slot }).run();
+    }
   });
 }
 
@@ -433,8 +463,6 @@ export type DeckInput = {
   newCardOrder?: NewCardOrder;
   /** The layout every new card in this deck starts from. */
   newCardLayout?: CardLayout;
-  newFrontFields?: number;
-  newBackFields?: number;
 };
 
 /** The columns a deck form writes, with the queue options defaulted. */
@@ -450,8 +478,6 @@ function deckValues(input: DeckInput) {
     newFrontPosition: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).frontPosition,
     newBackSide: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).backSide,
     newBackPosition: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).backPosition,
-    newFrontFields: Math.max(0, input.newFrontFields ?? 0),
-    newBackFields: Math.max(0, input.newBackFields ?? 0),
   };
 }
 

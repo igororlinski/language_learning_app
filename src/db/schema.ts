@@ -44,17 +44,15 @@ export const decks = sqliteTable('decks', {
     .notNull()
     .default(DEFAULT_NEW_CARD_ORDER),
   /**
-   * The layout a new card in this deck starts with: where the two mandatory
-   * fields sit and how many empty extra fields each side gets. The empty ones
-   * are interchangeable, so their positions are simply the places the mandatory
-   * fields leave free. Only a brand new card reads any of this.
+   * Where a new card in this deck puts its two mandatory fields. The empty
+   * extra fields it starts with live in `deck_field_slots`, because they are no
+   * longer interchangeable: each one is either a text box or an audio slot.
+   * Only a brand new card reads any of this.
    */
   newFrontSide: text('new_front_side', { enum: FIELD_SIDES }).notNull().default('front'),
   newFrontPosition: integer('new_front_position').notNull().default(0),
   newBackSide: text('new_back_side', { enum: FIELD_SIDES }).notNull().default('back'),
   newBackPosition: integer('new_back_position').notNull().default(0),
-  newFrontFields: integer('new_front_fields').notNull().default(0),
-  newBackFields: integer('new_back_fields').notNull().default(0),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .$defaultFn(() => new Date()),
@@ -62,6 +60,21 @@ export const decks = sqliteTable('decks', {
 
 export const IMAGE_STATUSES = ['none', 'generating', 'ready', 'failed'] as const;
 export type ImageStatus = (typeof IMAGE_STATUSES)[number];
+
+/** One empty field a new card in this deck starts with. */
+export const deckFieldSlots = sqliteTable(
+  'deck_field_slots',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    deckId: integer('deck_id')
+      .notNull()
+      .references(() => decks.id, { onDelete: 'cascade' }),
+    side: text('side', { enum: FIELD_SIDES }).notNull(),
+    position: integer('position').notNull().default(0),
+    kind: text('kind', { enum: FIELD_KINDS }).notNull().default('text'),
+  },
+  (table) => [index('deck_field_slots_deck_id_idx').on(table.deckId)]
+);
 
 export const cards = sqliteTable(
   'cards',
@@ -167,6 +180,7 @@ export const reviewLogs = sqliteTable(
 
 export type Deck = typeof decks.$inferSelect;
 export type CardField = typeof cardFields.$inferSelect;
+export type DeckFieldSlot = typeof deckFieldSlots.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type FsrsStateRow = typeof fsrsState.$inferSelect;
 export type ReviewLog = typeof reviewLogs.$inferSelect;

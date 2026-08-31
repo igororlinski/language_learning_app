@@ -64,6 +64,13 @@
       "when": 1788200517987,
       "tag": "0008_mean_lady_mastermind",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1788207105409,
+      "tag": "0009_curved_jazinda",
+      "breakpoints": true
     }
   ]
 }

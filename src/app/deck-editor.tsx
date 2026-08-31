@@ -4,6 +4,7 @@ import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
+import { AddFieldSheet } from '@/components/add-field-sheet';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
 import { OptionPicker, type PickerOption } from '@/components/option-picker';
@@ -17,9 +18,12 @@ import {
   getDeck,
   newCardFields,
   newCardLayout,
+  syncDeckSlots,
   updateDeck,
 } from '@/db/queries';
 import {
+  type FieldKind,
+  type FieldSide,
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
   DEFAULT_NEW_PER_DAY,
@@ -33,7 +37,6 @@ import type { BaseKind } from '@/lib/card-layout';
 import {
   BOUNDARY,
   buildRows,
-  countSides,
   DEFAULT_PLACEMENT,
   describeRows,
   toPlacement,
@@ -117,15 +120,16 @@ export default function DeckEditorScreen() {
   );
 
   const nextKey = useRef(0);
+  const [adding, setAdding] = useState(false);
   const info = describeRows(rows, BASE_LABELS);
 
-  const addField = (side: 'front' | 'back') => {
+  const addField = ({ side, kind }: { side: FieldSide; kind: FieldKind }) => {
     nextKey.current += 1;
     const added: Row = {
       key: `new-${nextKey.current}`,
       kind: 'extra',
       id: null,
-      field: 'text',
+      field: kind,
       value: '',
       audioPath: null,
     };
@@ -155,7 +159,9 @@ export default function DeckEditorScreen() {
     return (
       <View style={styles.slot}>
         <ThemedText type="small" themeColor="textSecondary">
-          {`${rowInfo.label} — puste, do wypełnienia na karcie.`}
+          {row.field === 'audio'
+            ? `${rowInfo.label} — dźwięk, plik wybierany na karcie.`
+            : `${rowInfo.label} — tekst, wypełniany na karcie.`}
         </ThemedText>
         <Pressable
           onPress={() => removeRow(row.key)}
@@ -175,10 +181,14 @@ export default function DeckEditorScreen() {
   const save = () => {
     if (!canSave) return;
 
-    // The template keeps no text, so only the arrangement is worth saving: where
-    // the mandatory fields sit and how many empty boxes each side gets.
+    // The template keeps no content, so only the arrangement is worth saving:
+    // where the mandatory fields sit and what shape each empty slot has.
     const { fields, placement } = toPlacement(rows);
-    const counts = countSides(fields);
+    const slots = fields.map((field) => ({
+      side: field.side,
+      position: field.position,
+      kind: field.kind,
+    }));
 
     const input = {
       name,
@@ -188,15 +198,15 @@ export default function DeckEditorScreen() {
       newCardPlacement,
       newCardOrder,
       newCardLayout: placement,
-      newFrontFields: counts.front,
-      newBackFields: counts.back,
     };
 
     if (deckId) {
       updateDeck(deckId, input);
+      syncDeckSlots(deckId, slots);
       router.back();
     } else {
       const deck = createDeck(input);
+      syncDeckSlots(deck.id, slots);
       router.replace({ pathname: '/deck/[deckId]', params: { deckId: deck.id } });
     }
   };
@@ -307,21 +317,19 @@ export default function DeckEditorScreen() {
           hint={LAYOUT_HINT}
         />
 
-        <View style={styles.addRow}>
-          <Button
-            title="Dodaj pole z przodu"
-            variant="secondary"
-            style={styles.addButton}
-            onPress={() => addField('front')}
-          />
-          <Button
-            title="Dodaj pole z tyłu"
-            variant="secondary"
-            style={styles.addButton}
-            onPress={() => addField('back')}
-          />
-        </View>
+        <Pressable
+          onPress={() => setAdding(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Dodaj pole"
+          style={({ pressed }) => [
+            styles.add,
+            { borderColor: theme.border, opacity: pressed ? 0.7 : 1 },
+          ]}>
+          <ThemedText style={[styles.addGlyph, { color: theme.accent }]}>+</ThemedText>
+        </Pressable>
       </ScrollViewContainer>
+
+      <AddFieldSheet visible={adding} onClose={() => setAdding(false)} onAdd={addField} />
 
       <View style={[styles.footer, { borderColor: theme.border }]}>
         <Button title="Zapisz" onPress={save} disabled={!canSave} />
@@ -358,12 +366,18 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: Spacing.two,
   },
-  addRow: {
-    flexDirection: 'row',
-    gap: Spacing.two,
+  add: {
+    alignSelf: 'center',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  addButton: {
-    flex: 1,
+  addGlyph: {
+    fontSize: 26,
+    lineHeight: 30,
   },
   footer: {
     padding: Spacing.three,

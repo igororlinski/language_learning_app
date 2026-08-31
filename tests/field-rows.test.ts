@@ -5,10 +5,8 @@
 import {
   BOUNDARY,
   buildRows,
-  countSides,
   DEFAULT_PLACEMENT,
   describeRows,
-  slotFields,
   toPlacement,
   type Row,
 } from '@/lib/field-rows';
@@ -113,42 +111,4 @@ check('dodatkowe sa numerowane w obrebie strony', described['blank-0'], {
 check('a te pod granica naleza do tylu', described['blank-1'], {
   side: 'back',
   label: 'Tył — pole 1',
-});
-
-group('Domyslny uklad talii');
-
-// Empty boxes are interchangeable: they fill whatever the mandatory fields
-// leave free, so the deck stores only how many of them each side gets.
-check(
-  'puste pola omijaja miejsce pola podstawowego',
-  slotFields(DEFAULT_PLACEMENT, { front: 2, back: 0 }),
-  [
-    { id: null, side: 'front', position: 1, kind: 'text', value: '', audioPath: null },
-    { id: null, side: 'front', position: 2, kind: 'text', value: '', audioPath: null },
-  ]
-);
-
-check(
-  'pole podstawowe w srodku zostawia miejsce nad soba',
-  slotFields({ ...DEFAULT_PLACEMENT, frontPosition: 1 }, { front: 2, back: 0 }).map(
-    (field) => field.position
-  ),
-  [0, 2]
-);
-
-check(
-  'dwa pola podstawowe po jednej stronie',
-  slotFields({ frontSide: 'back', frontPosition: 0, backSide: 'back', backPosition: 1 }, {
-    front: 1,
-    back: 1,
-  }).map((field) => [field.side, field.position]),
-  [
-    ['front', 0],
-    ['back', 2],
-  ]
-);
-
-check('liczenie pol na stronach', countSides([extra('front', 1), extra('back', 1), extra('back', 2)]), {
-  front: 1,
-  back: 2,
 });

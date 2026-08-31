@@ -99,7 +99,7 @@ export default function ReviewScreen() {
                 mandatory field is one line among the extras, not always first. */}
             {current.frontLines.map((line, index) =>
               line.audioPath ? (
-                <AudioButton key={`front-${index}`} audioPath={line.audioPath} label={line.text} />
+                <AudioButton key={`front-${index}`} audioPath={line.audioPath} />
               ) : (
                 <ThemedText
                   key={`front-${index}`}
@@ -114,11 +114,7 @@ export default function ReviewScreen() {
                 <View style={[styles.divider, { borderColor: theme.border }]} />
                 {current.backLines.map((line, index) =>
                   line.audioPath ? (
-                    <AudioButton
-                      key={`back-${index}`}
-                      audioPath={line.audioPath}
-                      label={line.text}
-                    />
+                    <AudioButton key={`back-${index}`} audioPath={line.audioPath} />
                   ) : (
                     <ThemedText
                       key={`back-${index}`}

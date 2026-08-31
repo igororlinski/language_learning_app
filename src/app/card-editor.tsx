@@ -4,6 +4,7 @@ import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
+import { AddFieldSheet } from '@/components/add-field-sheet';
 import { AudioButton } from '@/components/audio-button';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
@@ -20,7 +21,7 @@ import {
   newCardLayout,
   updateCard,
 } from '@/db/queries';
-import type { FieldSide } from '@/db/schema';
+import type { FieldKind, FieldSide } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
 import { formatBytes, MAX_AUDIO_BYTES } from '@/lib/audio';
 import { AudioTooLargeError, deleteAudio, importAudio, pickAudio } from '@/lib/audio-files';
@@ -72,6 +73,7 @@ export default function CardEditorScreen() {
   const [back, setBack] = useState(existing?.back ?? '');
   const [rows, setRows] = useState<Row[]>(initialRows);
   const [savedCount, setSavedCount] = useState(0);
+  const [adding, setAdding] = useState(false);
 
   // Rows added here have no database id yet, so they need a key of their own to
   // stay put while they are being edited.
@@ -83,16 +85,10 @@ export default function CardEditorScreen() {
 
   const info = describeRows(rows, BASE_LABELS);
 
-  const addField = (side: FieldSide) => {
+  const addField = ({ side, kind }: { side: FieldSide; kind: FieldKind }) => {
     nextKey.current += 1;
-    const added: Row = {
-      key: `new-${nextKey.current}`,
-      kind: 'extra',
-      id: null,
-      field: 'text',
-      value: '',
-      audioPath: null,
-    };
+    const key = `new-${nextKey.current}`;
+    const added: Row = { key, kind: 'extra', id: null, field: kind, value: '', audioPath: null };
 
     setRows((current) => {
       // A front field goes just above the boundary, a back one to the very end
@@ -102,6 +98,9 @@ export default function CardEditorScreen() {
         ? [...current.slice(0, boundary), added, ...current.slice(boundary)]
         : [...current, added];
     });
+
+    // An empty audio field is useless, so the picker opens straight away.
+    if (kind === 'audio') void attachAudio(key);
   };
 
   const patchRow = (key: string, value: string) =>
@@ -140,16 +139,6 @@ export default function CardEditorScreen() {
       Alert.alert('Nie dodano dźwięku', message, [{ text: 'OK' }], { cancelable: true });
     }
   };
-
-  /** Back to a text field; the file itself goes on the next save. */
-  const detachAudio = (key: string) =>
-    setRows((current) =>
-      current.map((row) =>
-        row.kind === 'extra' && row.key === key
-          ? { ...row, field: 'text', value: '', audioPath: null }
-          : row
-      )
-    );
 
   const questionInput = useRef<TextInput>(null);
   const canSave = front.trim().length > 0 && back.trim().length > 0;
@@ -234,26 +223,17 @@ export default function CardEditorScreen() {
       return (
         <>
           <ThemedText type="smallBold" themeColor="textSecondary">
-            {rowInfo.label}
+            {`${rowInfo.label} — dźwięk`}
           </ThemedText>
-          <AudioButton audioPath={row.audioPath} label={row.value} />
+          {row.audioPath ? <AudioButton audioPath={row.audioPath} label={row.value} /> : null}
           <View style={styles.rowActions}>
             <Pressable
               onPress={() => attachAudio(row.key)}
               hitSlop={12}
               accessibilityRole="button"
-              accessibilityLabel={`Zmień plik: ${rowInfo.label}`}>
+              accessibilityLabel={`${row.audioPath ? 'Zmień' : 'Wybierz'} plik: ${rowInfo.label}`}>
               <ThemedText type="small" style={{ color: theme.accent }}>
-                Zmień plik
-              </ThemedText>
-            </Pressable>
-            <Pressable
-              onPress={() => detachAudio(row.key)}
-              hitSlop={12}
-              accessibilityRole="button"
-              accessibilityLabel={`Zamień na tekst: ${rowInfo.label}`}>
-              <ThemedText type="small" style={{ color: theme.accent }}>
-                Zamień na tekst
+                {row.audioPath ? 'Zmień plik' : 'Wybierz plik'}
               </ThemedText>
             </Pressable>
             <Pressable
@@ -281,15 +261,6 @@ export default function CardEditorScreen() {
           multiline
         />
         <View style={styles.rowActions}>
-          <Pressable
-            onPress={() => attachAudio(row.key)}
-            hitSlop={12}
-            accessibilityRole="button"
-            accessibilityLabel={`Dodaj dźwięk: ${rowInfo.label}`}>
-            <ThemedText type="small" style={{ color: theme.accent }}>
-              Dodaj dźwięk
-            </ThemedText>
-          </Pressable>
           <Pressable
             onPress={() => removeRow(row.key)}
             hitSlop={12}
@@ -323,20 +294,16 @@ export default function CardEditorScreen() {
           hint={HINT}
         />
 
-        <View style={styles.addRow}>
-          <Button
-            title="Dodaj pole z przodu"
-            variant="secondary"
-            style={styles.addButton}
-            onPress={() => addField('front')}
-          />
-          <Button
-            title="Dodaj pole z tyłu"
-            variant="secondary"
-            style={styles.addButton}
-            onPress={() => addField('back')}
-          />
-        </View>
+        <Pressable
+          onPress={() => setAdding(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Dodaj pole"
+          style={({ pressed }) => [
+            styles.add,
+            { borderColor: theme.border, opacity: pressed ? 0.7 : 1 },
+          ]}>
+          <ThemedText style={[styles.addGlyph, { color: theme.accent }]}>+</ThemedText>
+        </Pressable>
 
         {savedCount > 0 ? (
           <ThemedText type="small" themeColor="textSecondary">
@@ -349,6 +316,8 @@ export default function CardEditorScreen() {
         <Button title="Zapisz" onPress={save} disabled={!canSave} />
         {cardId ? <Button title="Usuń kartę" variant="danger" onPress={confirmDelete} /> : null}
       </View>
+
+      <AddFieldSheet visible={adding} onClose={() => setAdding(false)} onAdd={addField} />
     </KeyboardAvoidingView>
   );
 }
@@ -374,12 +343,18 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: Spacing.three,
   },
-  addRow: {
-    flexDirection: 'row',
-    gap: Spacing.two,
+  add: {
+    alignSelf: 'center',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  addButton: {
-    flex: 1,
+  addGlyph: {
+    fontSize: 26,
+    lineHeight: 30,
   },
   footer: {
     padding: Spacing.three,
