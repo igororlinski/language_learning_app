@@ -3,7 +3,7 @@ import { useEffect, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { MediaView } from '@/components/media-view';
+import { CardFaces, cardFacesLayout } from '@/components/card-faces';
 import { Button } from '@/components/button';
 import { DueCounts } from '@/components/due-counts';
 import { ThemedText } from '@/components/themed-text';
@@ -94,45 +94,12 @@ export default function ReviewScreen() {
 
       {current ? (
         <>
-          <ScrollView contentContainerStyle={styles.cardArea}>
-            {/* Each face reads in the order the card editor arranged it: the
-                mandatory field is one line among the extras, not always first. */}
-            {current.frontLines.map((line, index) =>
-              line.media ? (
-                <MediaView
-                  key={`front-${index}`}
-                  kind={line.media.kind}
-                  fileName={line.media.fileName}
-                />
-              ) : (
-                <ThemedText
-                  key={`front-${index}`}
-                  style={line.base ? styles.face : styles.fieldValue}>
-                  {line.text}
-                </ThemedText>
-              )
-            )}
-
-            {revealed ? (
-              <>
-                <View style={[styles.divider, { borderColor: theme.border }]} />
-                {current.backLines.map((line, index) =>
-                  line.media ? (
-                    <MediaView
-                      key={`back-${index}`}
-                      kind={line.media.kind}
-                      fileName={line.media.fileName}
-                    />
-                  ) : (
-                    <ThemedText
-                      key={`back-${index}`}
-                      style={line.base ? [styles.face, styles.back] : styles.fieldValue}>
-                      {line.text}
-                    </ThemedText>
-                  )
-                )}
-              </>
-            ) : null}
+          <ScrollView contentContainerStyle={cardFacesLayout.area}>
+            <CardFaces
+              frontLines={current.frontLines}
+              backLines={current.backLines}
+              revealed={revealed}
+            />
           </ScrollView>
 
           <View style={styles.controls}>
@@ -211,34 +178,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.two,
-  },
-  cardArea: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: Spacing.four,
-    padding: Spacing.four,
-    maxWidth: MaxContentWidth,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  face: {
-    fontSize: 26,
-    lineHeight: 34,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  back: {
-    fontWeight: '400',
-  },
-  divider: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    alignSelf: 'stretch',
-  },
-  fieldValue: {
-    fontSize: 18,
-    lineHeight: 26,
-    textAlign: 'center',
   },
   controls: {
     padding: Spacing.three,

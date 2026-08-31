@@ -5,12 +5,13 @@ import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
 import { AddFieldSheet } from '@/components/add-field-sheet';
+import { CardFaces } from '@/components/card-faces';
 import { MediaView } from '@/components/media-view';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
 import { ThemedText } from '@/components/themed-text';
 import { TextField } from '@/components/text-field';
-import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
   cardMediaFiles,
   createCard,
@@ -25,7 +26,7 @@ import type { FieldKind, FieldSide } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
 import { formatBytes, isMediaKind, MEDIA_LIMITS, type MediaKind } from '@/lib/media';
 import { deleteMedia, importMedia, MediaTooLargeError, pickMedia } from '@/lib/media-files';
-import type { BaseKind } from '@/lib/card-layout';
+import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
 import {
   BOUNDARY,
   buildRows,
@@ -74,6 +75,7 @@ export default function CardEditorScreen() {
   const [rows, setRows] = useState<Row[]>(initialRows);
   const [savedCount, setSavedCount] = useState(0);
   const [adding, setAdding] = useState(false);
+  const [showPreview, setShowPreview] = useState(true);
 
   // Rows added here have no database id yet, so they need a key of their own to
   // stay put while they are being edited.
@@ -84,6 +86,16 @@ export default function CardEditorScreen() {
   const imported = useRef<{ kind: MediaKind; fileName: string }[]>([]);
 
   const info = describeRows(rows, BASE_LABELS);
+
+  // The preview runs through the very same functions the session uses, so what
+  // it shows is what the card will read like — including the empty fields it
+  // leaves out and the order dragging produced.
+  const preview = useMemo(() => {
+    const { fields, placement } = toPlacement(rows);
+    const pieces = cardPieces({ front, back, ...placement }, fields);
+
+    return { front: sideLines(pieces, 'front'), back: sideLines(pieces, 'back') };
+  }, [rows, front, back]);
 
   const addField = ({ side, kind }: { side: FieldSide; kind: FieldKind }) => {
     nextKey.current += 1;
@@ -295,6 +307,37 @@ export default function CardEditorScreen() {
       <ScrollViewContainer
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled">
+        <View
+          style={[
+            styles.preview,
+            { borderColor: theme.border, backgroundColor: theme.backgroundElement },
+          ]}>
+          <Pressable
+            onPress={() => setShowPreview((shown) => !shown)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: showPreview }}
+            accessibilityLabel="Podgląd karty"
+            style={styles.previewHeader}>
+            <ThemedText type="smallBold" themeColor="textSecondary">
+              PODGLĄD KARTY
+            </ThemedText>
+            <ThemedText type="small" style={{ color: theme.accent }}>
+              {showPreview ? 'Ukryj' : 'Pokaż'}
+            </ThemedText>
+          </Pressable>
+
+          {showPreview ? (
+            <View style={styles.previewCard}>
+              <CardFaces
+                frontLines={preview.front}
+                backLines={preview.back}
+                revealed
+                compact
+              />
+            </View>
+          ) : null}
+        </View>
+
         <FieldLayoutList
           rows={rows}
           info={info}
@@ -341,6 +384,22 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
     width: '100%',
     alignSelf: 'center',
+  },
+  preview: {
+    borderRadius: Radius.medium,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: Spacing.three,
+    gap: Spacing.two,
+  },
+  previewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  previewCard: {
+    alignItems: 'center',
+    gap: Spacing.three,
+    paddingVertical: Spacing.two,
   },
   input: {
     // Grows with the text instead of always reserving room for four lines.
