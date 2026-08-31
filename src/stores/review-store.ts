@@ -112,9 +112,9 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
     const rest = step.replayed ? queue.slice(0, -1) : queue;
 
     set({
-      // Back to the front with its answer showing, ready to be regraded.
+      // Back to the front side, as if the card had never been revealed.
       queue: [step.card, ...rest],
-      revealed: true,
+      revealed: false,
       answered: answered - 1,
       gradeCounts: { ...gradeCounts, [step.grade]: gradeCounts[step.grade] - 1 },
       history: history.slice(0, -1),

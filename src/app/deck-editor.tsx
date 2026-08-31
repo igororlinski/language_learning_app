@@ -3,12 +3,56 @@ import { useMemo, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
+import { OptionPicker, type PickerOption } from '@/components/option-picker';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { createDeck, deleteDeck, getDeck, updateDeck } from '@/db/queries';
-import { DEFAULT_NEW_PER_DAY, DEFAULT_REVIEWS_PER_DAY } from '@/db/schema';
+import {
+  DEFAULT_NEW_CARD_ORDER,
+  DEFAULT_NEW_CARD_PLACEMENT,
+  DEFAULT_NEW_PER_DAY,
+  DEFAULT_REVIEWS_PER_DAY,
+  type NewCardOrder,
+  type NewCardPlacement,
+} from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
+
+const PLACEMENT_OPTIONS: PickerOption<NewCardPlacement>[] = [
+  {
+    value: 'mixed',
+    label: 'Wymieszane z powtórkami',
+    hint: 'Nowe karty rozłożone równomiernie w sesji — domyślnie, jak w Anki.',
+  },
+  {
+    value: 'before',
+    label: 'Przed powtórkami',
+    hint: 'Najpierw cała nowa partia, potem powtórki.',
+  },
+  {
+    value: 'after',
+    label: 'Po powtórkach',
+    hint: 'Najpierw zaległe powtórki, nowe karty na koniec.',
+  },
+];
+
+const ORDER_OPTIONS: PickerOption<NewCardOrder>[] = [
+  {
+    value: 'oldest',
+    label: 'Od najdawniej dodanych',
+    hint: 'Najstarsze zaległości najpierw — domyślnie, jak w Anki.',
+  },
+  {
+    value: 'newest',
+    label: 'Od najnowszych',
+    hint: 'Najpierw karty dodane ostatnio.',
+  },
+  {
+    value: 'random',
+    label: 'Losowo',
+    hint: 'Za każdym razem inna próbka zaległych nowych kart.',
+  },
+];
 
 export default function DeckEditorScreen() {
   const theme = useTheme();
@@ -25,6 +69,12 @@ export default function DeckEditorScreen() {
   const [reviewsPerDay, setReviewsPerDay] = useState(
     String(existing?.reviewsPerDay ?? DEFAULT_REVIEWS_PER_DAY)
   );
+  const [newCardPlacement, setNewCardPlacement] = useState<NewCardPlacement>(
+    existing?.newCardPlacement ?? DEFAULT_NEW_CARD_PLACEMENT
+  );
+  const [newCardOrder, setNewCardOrder] = useState<NewCardOrder>(
+    existing?.newCardOrder ?? DEFAULT_NEW_CARD_ORDER
+  );
 
   const canSave = name.trim().length > 0;
 
@@ -36,6 +86,8 @@ export default function DeckEditorScreen() {
       description,
       newPerDay: toLimit(newPerDay, DEFAULT_NEW_PER_DAY),
       reviewsPerDay: toLimit(reviewsPerDay, DEFAULT_REVIEWS_PER_DAY),
+      newCardPlacement,
+      newCardOrder,
     };
 
     if (deckId) {
@@ -106,6 +158,27 @@ export default function DeckEditorScreen() {
           onChangeText={setReviewsPerDay}
           keyboardType="number-pad"
           placeholder={String(DEFAULT_REVIEWS_PER_DAY)}
+        />
+
+        <View style={styles.limits}>
+          <ThemedText type="smallBold">Kolejka nauki</ThemedText>
+          <ThemedText type="small" themeColor="textSecondary">
+            Jak sesja układa nowe karty względem powtórek i skąd bierze nowe
+            karty, kiedy zaległych jest więcej niż dzienny limit.
+          </ThemedText>
+        </View>
+
+        <OptionPicker
+          label="Nowe karty a powtórki"
+          value={newCardPlacement}
+          options={PLACEMENT_OPTIONS}
+          onChange={setNewCardPlacement}
+        />
+        <OptionPicker
+          label="Kolejność nowych kart"
+          value={newCardOrder}
+          options={ORDER_OPTIONS}
+          onChange={setNewCardOrder}
         />
       </ScrollView>
 

@@ -4,6 +4,7 @@
  * fail a build rather than just printing red text.
  */
 import './search.test';
+import './queue-order.test';
 import './data-layer.test';
 
 import { failureCount } from './harness';

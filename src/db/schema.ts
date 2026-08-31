@@ -4,6 +4,19 @@ import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core
 export const DEFAULT_NEW_PER_DAY = 20;
 export const DEFAULT_REVIEWS_PER_DAY = 200;
 
+/**
+ * Where new cards sit relative to reviews in a session, mirroring Anki's
+ * "new/review order".
+ */
+export const NEW_CARD_PLACEMENTS = ['mixed', 'before', 'after'] as const;
+export type NewCardPlacement = (typeof NEW_CARD_PLACEMENTS)[number];
+export const DEFAULT_NEW_CARD_PLACEMENT: NewCardPlacement = 'mixed';
+
+/** Which end of the new backlog today's new cards are taken from. */
+export const NEW_CARD_ORDERS = ['oldest', 'newest', 'random'] as const;
+export type NewCardOrder = (typeof NEW_CARD_ORDERS)[number];
+export const DEFAULT_NEW_CARD_ORDER: NewCardOrder = 'oldest';
+
 export const decks = sqliteTable('decks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
@@ -15,6 +28,13 @@ export const decks = sqliteTable('decks', {
    */
   newPerDay: integer('new_per_day').notNull().default(DEFAULT_NEW_PER_DAY),
   reviewsPerDay: integer('reviews_per_day').notNull().default(DEFAULT_REVIEWS_PER_DAY),
+  /** How the session queue is built — see the two constant blocks above. */
+  newCardPlacement: text('new_card_placement', { enum: NEW_CARD_PLACEMENTS })
+    .notNull()
+    .default(DEFAULT_NEW_CARD_PLACEMENT),
+  newCardOrder: text('new_card_order', { enum: NEW_CARD_ORDERS })
+    .notNull()
+    .default(DEFAULT_NEW_CARD_ORDER),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .$defaultFn(() => new Date()),

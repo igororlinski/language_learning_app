@@ -6,6 +6,7 @@ import {
   withinAllowance,
   type Allowance,
 } from '@/lib/limits';
+import { orderNewBacklog, placeNewCards } from '@/lib/queue-order';
 import {
   applyGrade,
   newCardState,
@@ -19,7 +20,16 @@ import {
 } from '@/lib/scheduler';
 
 import { db } from './client';
-import { cards, decks, fsrsState, reviewLogs } from './schema';
+import {
+  cards,
+  decks,
+  DEFAULT_NEW_CARD_ORDER,
+  DEFAULT_NEW_CARD_PLACEMENT,
+  fsrsState,
+  reviewLogs,
+  type NewCardOrder,
+  type NewCardPlacement,
+} from './schema';
 
 /* ------------------------------------------------------------------ reads */
 
@@ -152,6 +162,8 @@ export type DueCardRow = {
   front: string;
   back: string;
   imagePath: string | null;
+  /** Only used to order the new backlog — see `src/lib/queue-order.ts`. */
+  createdAt: Date;
   due: Date;
   stability: number;
   difficulty: number;
@@ -164,19 +176,32 @@ export type DueCardRow = {
   lastReview: Date | null;
 };
 
-/** Snapshot of the cards due right now — read once when a session starts. */
 /**
- * Snapshot of the cards due right now, already trimmed to what the deck's daily
- * limits still allow. Doing the trim here means the session queue and the
- * counters on the deck screens can never disagree.
+ * Snapshot of the cards due right now, trimmed to what the deck's daily limits
+ * still allow and ordered the way the deck asks for. Doing all three here means
+ * the session queue and the counters on the deck screens can never disagree.
+ *
+ * The three steps run in this order on purpose: the gather order decides *which*
+ * new cards exist for today, the trim cuts them to the allowance, and only then
+ * does the placement decide where they sit among the reviews.
+ *
+ * `limit` is a safety net against a runaway snapshot; it applies in due order,
+ * so a deck with more than `limit` cards due at once gathers "newest first"
+ * from that window rather than from the whole backlog.
  */
-export function loadDueCards(deckId: number, now: Date, limit = 500): DueCardRow[] {
+export function loadDueCards(
+  deckId: number,
+  now: Date,
+  limit = 500,
+  random: () => number = Math.random
+): DueCardRow[] {
   const rows = db
     .select({
       cardId: cards.id,
       front: cards.front,
       back: cards.back,
       imagePath: cards.imagePath,
+      createdAt: cards.createdAt,
       due: fsrsState.due,
       stability: fsrsState.stability,
       difficulty: fsrsState.difficulty,
@@ -195,7 +220,11 @@ export function loadDueCards(deckId: number, now: Date, limit = 500): DueCardRow
     .limit(limit)
     .all();
 
-  return withinAllowance(rows, deckAllowance(deckId, now));
+  const deck = getDeck(deckId);
+  const gathered = orderNewBacklog(rows, deck?.newCardOrder ?? DEFAULT_NEW_CARD_ORDER, random);
+  const allowed = withinAllowance(gathered, deckAllowance(deckId, now));
+
+  return placeNewCards(allowed, deck?.newCardPlacement ?? DEFAULT_NEW_CARD_PLACEMENT);
 }
 
 /** What the deck may still hand out in the study day containing `now`. */
@@ -231,32 +260,28 @@ export type DeckInput = {
   description?: string | null;
   newPerDay: number;
   reviewsPerDay: number;
+  newCardPlacement?: NewCardPlacement;
+  newCardOrder?: NewCardOrder;
 };
 
+/** The columns a deck form writes, with the queue options defaulted. */
+function deckValues(input: DeckInput) {
+  return {
+    name: input.name.trim(),
+    description: input.description?.trim() || null,
+    newPerDay: input.newPerDay,
+    reviewsPerDay: input.reviewsPerDay,
+    newCardPlacement: input.newCardPlacement ?? DEFAULT_NEW_CARD_PLACEMENT,
+    newCardOrder: input.newCardOrder ?? DEFAULT_NEW_CARD_ORDER,
+  };
+}
+
 export function createDeck(input: DeckInput) {
-  return db
-    .insert(decks)
-    .values({
-      name: input.name.trim(),
-      description: input.description?.trim() || null,
-      newPerDay: input.newPerDay,
-      reviewsPerDay: input.reviewsPerDay,
-    })
-    .returning()
-    .get();
+  return db.insert(decks).values(deckValues(input)).returning().get();
 }
 
 export function updateDeck(deckId: number, patch: DeckInput) {
-  return db
-    .update(decks)
-    .set({
-      name: patch.name.trim(),
-      description: patch.description?.trim() || null,
-      newPerDay: patch.newPerDay,
-      reviewsPerDay: patch.reviewsPerDay,
-    })
-    .where(eq(decks.id, deckId))
-    .run();
+  return db.update(decks).set(deckValues(patch)).where(eq(decks.id, deckId)).run();
 }
 
 export function deleteDeck(deckId: number) {
@@ -268,7 +293,7 @@ export function createCard(deckId: number, front: string, back: string, now = ne
   return db.transaction((tx) => {
     const card = tx
       .insert(cards)
-      .values({ deckId, front: front.trim(), back: back.trim() })
+      .values({ deckId, front: front.trim(), back: back.trim(), createdAt: now })
       .returning()
       .get();
 

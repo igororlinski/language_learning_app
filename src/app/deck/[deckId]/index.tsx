@@ -3,6 +3,7 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
 
+import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { Button } from '@/components/button';
 import { DueCounts } from '@/components/due-counts';
 import { EmptyState } from '@/components/empty-state';
@@ -22,6 +23,8 @@ import { cardsLabel, formatDue } from '@/lib/format';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { filterCards } from '@/lib/search';
 import { STATE_LABELS, State } from '@/lib/scheduler';
+
+type CardMenuTarget = { id: number; front: string; back: string };
 
 /** Placeholder while the aggregate is still loading, so the counters never flicker. */
 const EMPTY_BREAKDOWN = {
@@ -65,6 +68,7 @@ export default function DeckScreen() {
   // cards that are actually due and the ones the deck is allowed to serve.
   const heldBack = raw.newCount + raw.learningCount + raw.reviewCount - due;
 
+  const [menuCard, setMenuCard] = useState<CardMenuTarget | null>(null);
   const [query, setQuery] = useState('');
   const allCards = cards ?? [];
   const searching = query.trim().length > 0;
@@ -72,24 +76,27 @@ export default function DeckScreen() {
   // which would be a fresh array on every render.
   const visibleCards = useMemo(() => filterCards(cards ?? [], query), [cards, query]);
 
-  /**
-   * Android keeps only the first three buttons and drops the rest, and its
-   * dialogs are not cancelable unless asked — a fourth entry would silently eat
-   * "Anuluj" and trap the user here. Editing is left out because tapping the
-   * card already opens the editor.
-   */
-  const openCardMenu = (cardId: number, front: string) => {
+  /** Runs once the sheet has closed, so no dialog is opened from inside another. */
+  const confirmDelete = (card: CardMenuTarget) => {
     Alert.alert(
-      front,
-      'Dotknij kartę, żeby zmienić jej treść.',
+      'Usunąć kartę?',
+      `„${card.front}” zniknie razem z historią powtórek.`,
       [
-        { text: 'Zeruj postęp', onPress: () => resetCard(cardId) },
-        { text: 'Usuń', style: 'destructive', onPress: () => deleteCard(cardId) },
         { text: 'Anuluj', style: 'cancel' },
+        { text: 'Usuń', style: 'destructive', onPress: () => deleteCard(card.id) },
       ],
       { cancelable: true }
     );
   };
+
+  const cardMenuActions = (card: CardMenuTarget): SheetAction[] => [
+    {
+      label: 'Edytuj kartę',
+      onPress: () => router.push({ pathname: '/card-editor', params: { deckId, cardId: card.id } }),
+    },
+    { label: 'Zeruj postęp', onPress: () => resetCard(card.id) },
+    { label: 'Usuń kartę', destructive: true, onPress: () => confirmDelete(card) },
+  ];
 
   return (
     <View style={[styles.screen, { backgroundColor: theme.background }]}>
@@ -172,7 +179,7 @@ export default function DeckScreen() {
             onPress={() =>
               router.push({ pathname: '/card-editor', params: { deckId, cardId: item.id } })
             }
-            onLongPress={() => openCardMenu(item.id, item.front)}
+            onLongPress={() => setMenuCard({ id: item.id, front: item.front, back: item.back })}
             style={({ pressed }) => [
               styles.row,
               {
@@ -219,6 +226,16 @@ export default function DeckScreen() {
           onPress={() => router.push({ pathname: '/card-editor', params: { deckId } })}
         />
       </View>
+
+      {menuCard ? (
+        <ActionSheet
+          visible
+          title={menuCard.front}
+          subtitle={menuCard.back}
+          actions={cardMenuActions(menuCard)}
+          onClose={() => setMenuCard(null)}
+        />
+      ) : null}
     </View>
   );
 }

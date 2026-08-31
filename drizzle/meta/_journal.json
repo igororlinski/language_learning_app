@@ -15,6 +15,13 @@
       "when": 1788107561846,
       "tag": "0001_legal_shadow_king",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788171904885,
+      "tag": "0002_wild_dark_beast",
+      "breakpoints": true
     }
   ]
 }

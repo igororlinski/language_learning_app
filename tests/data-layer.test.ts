@@ -22,14 +22,15 @@ import {
 } from '@/db/queries';
 import { decks, fsrsState, reviewLogs } from '@/db/schema';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
-import { countQueueStates, Rating, type State } from '@/lib/scheduler';
+import { countQueueStates, Rating, State } from '@/lib/scheduler';
 
 import { check, group } from './harness';
 
 import migration0000 from '../drizzle/0000_init.sql';
 import migration0001 from '../drizzle/0001_legal_shadow_king.sql';
+import migration0002 from '../drizzle/0002_wild_dark_beast.sql';
 
-for (const migration of [migration0000, migration0001]) {
+for (const migration of [migration0000, migration0001, migration0002]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
     if (trimmed) sqliteDb.execSync(trimmed);
@@ -220,3 +221,70 @@ check('limit 0 nowych wylacza je calkowicie', breakdown(capped.id, at(12, 0, 40)
   reviewCount: 2,
 });
 check('suma zasilajaca przycisk "Ucz sie"', totalDue(breakdown(capped.id, at(12, 0, 40))), 2);
+
+group('Kolejka sesji: nowe karty wzgledem powtorek');
+
+// Two cards taken to Review on day 30, three new ones added right after, all of
+// them due on day 40 — the mix the placement option is about.
+const queueDeck = createDeck({ name: 'Kolejka', newPerDay: 5, reviewsPerDay: 5 });
+const older = [1, 2].map((n) => createCard(queueDeck.id, `r${n}`, `R${n}`, now));
+older.forEach((card) => gradeCard(card.id, Rating.Easy, now));
+[1, 2, 3].forEach((n) => createCard(queueDeck.id, `n${n}`, `N${n}`, at(12, n)));
+
+const queueDay = at(12, 0, 60);
+const shape = (deckId: number, when: Date) =>
+  loadDueCards(deckId, when)
+    .map((card) => (card.state === State.New ? 'N' : 'P'))
+    .join('');
+
+const setPlacement = (placement: 'mixed' | 'before' | 'after') =>
+  updateDeck(queueDeck.id, {
+    name: 'Kolejka',
+    newPerDay: 5,
+    reviewsPerDay: 5,
+    newCardPlacement: placement,
+  });
+
+check('wszystkie piec kart jest zalegle', loadDueCards(queueDeck.id, queueDay).length, 5);
+
+setPlacement('before');
+check('nowe przed powtorkami', shape(queueDeck.id, queueDay), 'NNNPP');
+
+setPlacement('after');
+check('nowe po powtorkach', shape(queueDeck.id, queueDay), 'PPNNN');
+
+setPlacement('mixed');
+check('wymieszane rozklada nowe w sesji', shape(queueDeck.id, queueDay), 'NPNPN');
+
+group('Kolejka sesji: skad brane sa nowe karty');
+
+// Limit of one new card a day, so the gather order decides which single card
+// out of three gets introduced.
+const gatherDeck = createDeck({ name: 'Zrodlo', newPerDay: 1, reviewsPerDay: 0 });
+const gathered = [1, 2, 3].map((n) => createCard(gatherDeck.id, `g${n}`, `G${n}`, at(12, n)));
+
+const setOrder = (order: 'oldest' | 'newest' | 'random') =>
+  updateDeck(gatherDeck.id, {
+    name: 'Zrodlo',
+    newPerDay: 1,
+    reviewsPerDay: 0,
+    newCardOrder: order,
+  });
+
+const firstCard = (random?: () => number) =>
+  loadDueCards(gatherDeck.id, queueDay, 500, random)[0]?.cardId;
+
+setOrder('oldest');
+check('limit wpuszcza dokladnie jedna nowa karte', loadDueCards(gatherDeck.id, queueDay).length, 1);
+check('od najdawniej dodanych bierze pierwsza', firstCard(), gathered[0].id);
+
+setOrder('newest');
+check('od najnowszych bierze ostatnia', firstCard(), gathered[2].id);
+
+setOrder('random');
+check('losowo bierze karte wskazana przez tasowanie', firstCard(() => 0), gathered[1].id);
+check(
+  'losowo zawsze zwraca karte z tej talii',
+  gathered.map((card) => card.id).includes(firstCard(Math.random)!),
+  true
+);
