@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 
-import { gradeCard, loadDueCards, rollbackCard, type DueCardRow } from '@/db/queries';
+import {
+  gradeCard,
+  loadDueCards,
+  rollbackCard,
+  type CardFieldContent,
+  type DueCardRow,
+} from '@/db/queries';
 import { Rating, State, toFsrsCard, type FsrsCard, type Grade } from '@/lib/scheduler';
 
 /**
@@ -15,6 +21,8 @@ export type ReviewCard = {
   front: string;
   back: string;
   imagePath: string | null;
+  /** The deck's extra fields this card filled in, front and back together. */
+  fields: CardFieldContent[];
   fsrs: FsrsCard;
 };
 
@@ -130,6 +138,7 @@ function toReviewCard(row: DueCardRow): ReviewCard {
     front: row.front,
     back: row.back,
     imagePath: row.imagePath,
+    fields: row.fields,
     fsrs: toFsrsCard(row),
   };
 }

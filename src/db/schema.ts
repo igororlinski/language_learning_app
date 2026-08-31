@@ -63,6 +63,54 @@ export const cards = sqliteTable(
   (table) => [index('cards_deck_id_idx').on(table.deckId)]
 );
 
+/** Which face of a card a field belongs to. */
+export const FIELD_SIDES = ['front', 'back'] as const;
+export type FieldSide = (typeof FIELD_SIDES)[number];
+
+/**
+ * The deck's **template** for new cards: the rubrics a freshly created card
+ * starts with. Nothing here reaches an existing card — editing or deleting a
+ * template field leaves every card already in the deck untouched.
+ */
+export const deckFields = sqliteTable(
+  'deck_fields',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    deckId: integer('deck_id')
+      .notNull()
+      .references(() => decks.id, { onDelete: 'cascade' }),
+    /** Shown above the value during review, e.g. "Wymowa". */
+    name: text('name').notNull(),
+    side: text('side', { enum: FIELD_SIDES }).notNull(),
+    /** Order within the side, as arranged in the deck editor. */
+    position: integer('position').notNull().default(0),
+  },
+  (table) => [index('deck_fields_deck_id_idx').on(table.deckId)]
+);
+
+/**
+ * A card's own extra fields, on top of the built-in front/back. They belong to
+ * the card, not to the deck, so two cards in one deck can carry entirely
+ * different rubrics and moving a card between decks changes nothing about them.
+ */
+export const cardFields = sqliteTable(
+  'card_fields',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    cardId: integer('card_id')
+      .notNull()
+      .references(() => cards.id, { onDelete: 'cascade' }),
+    /** Shown above the content during review, e.g. "Wymowa". */
+    name: text('name').notNull(),
+    side: text('side', { enum: FIELD_SIDES }).notNull(),
+    /** Order within the side, as arranged in the card editor. */
+    position: integer('position').notNull().default(0),
+    /** May be empty: a rubric the card carries but has nothing in yet. */
+    value: text('value').notNull().default(''),
+  },
+  (table) => [index('card_fields_card_id_idx').on(table.cardId)]
+);
+
 /** 1:1 with `cards`. Fields mirror the ts-fsrs `Card` shape. */
 export const fsrsState = sqliteTable(
   'fsrs_state',
@@ -110,6 +158,8 @@ export const reviewLogs = sqliteTable(
 );
 
 export type Deck = typeof decks.$inferSelect;
+export type DeckField = typeof deckFields.$inferSelect;
+export type CardField = typeof cardFields.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type FsrsStateRow = typeof fsrsState.$inferSelect;
 export type ReviewLog = typeof reviewLogs.$inferSelect;

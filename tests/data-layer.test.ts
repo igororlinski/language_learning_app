@@ -17,11 +17,17 @@ import {
   deckDueBreakdownQuery,
   decksWithStatsQuery,
   deleteDeck,
+  getCardFields,
+  getDeckFields,
   gradeCard,
   loadDueCards,
   moveCard,
+  newCardFields,
   otherDecksQuery,
   rollbackCard,
+  saveCardFields,
+  syncDeckFields,
+  updateCard,
   updateDeck,
 } from '@/db/queries';
 import { decks, fsrsState, reviewLogs } from '@/db/schema';
@@ -33,8 +39,9 @@ import { check, group } from './harness';
 import migration0000 from '../drizzle/0000_init.sql';
 import migration0001 from '../drizzle/0001_legal_shadow_king.sql';
 import migration0002 from '../drizzle/0002_wild_dark_beast.sql';
+import migration0003 from '../drizzle/0003_absurd_moondragon.sql';
 
-for (const migration of [migration0000, migration0001, migration0002]) {
+for (const migration of [migration0000, migration0001, migration0002, migration0003]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
     if (trimmed) sqliteDb.execSync(trimmed);
@@ -332,3 +339,122 @@ deleteDeck(source.id);
 
 check('usuniecie starej talii nie kasuje przeniesionej karty', logCount(moved.id), 1);
 check('karta dalej jest w talii docelowej', cardCount(target.id, now), 1);
+
+group('Domyslny schemat pol w talii');
+
+const fieldDeck = createDeck({ name: 'Z polami', newPerDay: 10, reviewsPerDay: 10 });
+
+syncDeckFields(fieldDeck.id, [
+  { id: null, name: 'Wymowa', side: 'front' },
+  { id: null, name: 'Przyklad', side: 'back' },
+  { id: null, name: '   ', side: 'back' },
+]);
+
+const template = getDeckFields(fieldDeck.id);
+
+check(
+  'schemat zapisany w kolejnosci z formularza, bez pustych nazw',
+  template.map((field) => [field.name, field.side, field.position]),
+  [
+    ['Wymowa', 'front', 0],
+    ['Przyklad', 'back', 1],
+  ]
+);
+
+// Renaming the first, dropping the second, adding a third — one call, as the
+// deck editor sends it.
+syncDeckFields(fieldDeck.id, [
+  { id: template[0].id, name: 'Wymowa IPA', side: 'front' },
+  { id: null, name: 'Odmiana', side: 'back' },
+]);
+
+check('zmiana nazwy, usuniecie i dodanie naraz', getDeckFields(fieldDeck.id).map((f) => f.name), [
+  'Wymowa IPA',
+  'Odmiana',
+]);
+check('pole schematu zachowuje id przy zmianie nazwy', getDeckFields(fieldDeck.id)[0].id, template[0].id);
+
+check(
+  'nowa karta startuje z pustym schematem talii',
+  newCardFields(fieldDeck.id),
+  [
+    { id: null, name: 'Wymowa IPA', side: 'front', value: '' },
+    { id: null, name: 'Odmiana', side: 'back', value: '' },
+  ]
+);
+
+group('Pola nalezace do karty');
+
+const fieldCard = createCard(fieldDeck.id, 'to break', 'lamac', now, [
+  { id: null, name: 'Wymowa IPA', side: 'front', value: '/breik/' },
+  { id: null, name: 'Odmiana', side: 'back', value: '' },
+]);
+
+check(
+  'karta niesie oba pola, tez to puste',
+  getCardFields(fieldCard.id).map((field) => [field.name, field.side, field.value]),
+  [
+    ['Wymowa IPA', 'front', '/breik/'],
+    ['Odmiana', 'back', ''],
+  ]
+);
+
+check('kolejka sesji pomija pole bez tresci', loadDueCards(fieldDeck.id, now)[0].fields, [
+  { name: 'Wymowa IPA', side: 'front', value: '/breik/' },
+]);
+
+// The deck's template changes; the card that already exists must not budge.
+syncDeckFields(fieldDeck.id, [{ id: null, name: 'Zupelnie inne', side: 'front' }]);
+
+check(
+  'zmiana schematu talii nie rusza istniejacej karty',
+  getCardFields(fieldCard.id).map((field) => field.name),
+  ['Wymowa IPA', 'Odmiana']
+);
+
+const cardFieldRows = getCardFields(fieldCard.id);
+
+// Renaming one, filling the empty one, dropping nothing — plus a field the deck
+// never knew about.
+saveCardFields(fieldCard.id, [
+  { id: cardFieldRows[0].id, name: 'Wymowa', side: 'front', value: '/breik/' },
+  { id: cardFieldRows[1].id, name: 'Odmiana', side: 'back', value: 'break-broke-broken' },
+  { id: null, name: 'Notatka', side: 'back', value: 'tylko na tej karcie' },
+]);
+
+check(
+  'karta ma wlasny zestaw pol, niezalezny od talii',
+  getCardFields(fieldCard.id).map((field) => [field.name, field.value]),
+  [
+    ['Wymowa', '/breik/'],
+    ['Odmiana', 'break-broke-broken'],
+    ['Notatka', 'tylko na tej karcie'],
+  ]
+);
+
+// A row without a name is a removal, exactly like in the deck editor.
+saveCardFields(fieldCard.id, [
+  { id: getCardFields(fieldCard.id)[0].id, name: '', side: 'front', value: '/breik/' },
+  { id: getCardFields(fieldCard.id)[1].id, name: 'Odmiana', side: 'back', value: 'break-broke-broken' },
+]);
+
+check('pole bez nazwy znika z karty', getCardFields(fieldCard.id).map((field) => field.name), [
+  'Odmiana',
+]);
+
+group('Przenosiny a pola karty');
+
+const fieldTarget = createDeck({ name: 'Cel bez pol', newPerDay: 10, reviewsPerDay: 10 });
+
+moveCard(fieldCard.id, fieldTarget.id);
+
+check(
+  'pola ida z karta do talii bez zadnego schematu',
+  getCardFields(fieldCard.id).map((field) => [field.name, field.value]),
+  [['Odmiana', 'break-broke-broken']]
+);
+check(
+  'i widac je w sesji nowej talii',
+  loadDueCards(fieldTarget.id, now).find((card) => card.cardId === fieldCard.id)?.fields,
+  [{ name: 'Odmiana', side: 'back', value: 'break-broke-broken' }]
+);

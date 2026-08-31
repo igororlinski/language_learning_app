@@ -1,19 +1,28 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { useMemo, useRef, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 
 import { Button } from '@/components/button';
 import { OptionPicker, type PickerOption } from '@/components/option-picker';
+import { SegmentedControl, type Segment } from '@/components/segmented-control';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
-import { MaxContentWidth, Spacing } from '@/constants/theme';
-import { createDeck, deleteDeck, getDeck, updateDeck } from '@/db/queries';
+import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import {
+  createDeck,
+  deleteDeck,
+  getDeck,
+  getDeckFields,
+  syncDeckFields,
+  updateDeck,
+} from '@/db/queries';
 import {
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
   DEFAULT_NEW_PER_DAY,
   DEFAULT_REVIEWS_PER_DAY,
+  type FieldSide,
   type NewCardOrder,
   type NewCardPlacement,
 } from '@/db/schema';
@@ -36,6 +45,14 @@ const PLACEMENT_OPTIONS: PickerOption<NewCardPlacement>[] = [
     hint: 'Najpierw zaległe powtórki, nowe karty na koniec.',
   },
 ];
+
+const SIDE_OPTIONS: Segment<FieldSide>[] = [
+  { value: 'front', label: 'Przód' },
+  { value: 'back', label: 'Tył' },
+];
+
+/** A field as the form holds it: `id` is null until the deck is saved. */
+type EditableField = { key: string; id: number | null; name: string; side: FieldSide };
 
 const ORDER_OPTIONS: PickerOption<NewCardOrder>[] = [
   {
@@ -76,6 +93,34 @@ export default function DeckEditorScreen() {
   const [newCardOrder, setNewCardOrder] = useState<NewCardOrder>(
     existing?.newCardOrder ?? DEFAULT_NEW_CARD_ORDER
   );
+  const [fields, setFields] = useState<EditableField[]>(() =>
+    (deckId ? getDeckFields(deckId) : []).map((field) => ({
+      key: `saved-${field.id}`,
+      id: field.id,
+      name: field.name,
+      side: field.side,
+    }))
+  );
+
+  // Rows added in this session have no database id yet, so they need a key of
+  // their own to stay put while their name is being typed.
+  const nextKey = useRef(0);
+
+  const addField = (side: FieldSide) => {
+    nextKey.current += 1;
+    setFields((current) => [
+      ...current,
+      { key: `new-${nextKey.current}`, id: null, name: '', side },
+    ]);
+  };
+
+  const patchField = (key: string, patch: Partial<EditableField>) =>
+    setFields((current) =>
+      current.map((field) => (field.key === key ? { ...field, ...patch } : field))
+    );
+
+  const removeField = (key: string) =>
+    setFields((current) => current.filter((field) => field.key !== key));
 
   const canSave = name.trim().length > 0;
 
@@ -93,9 +138,11 @@ export default function DeckEditorScreen() {
 
     if (deckId) {
       updateDeck(deckId, input);
+      syncDeckFields(deckId, fields);
       router.back();
     } else {
       const deck = createDeck(input);
+      syncDeckFields(deck.id, fields);
       router.replace({ pathname: '/deck/[deckId]', params: { deckId: deck.id } });
     }
   };
@@ -182,6 +229,62 @@ export default function DeckEditorScreen() {
           options={ORDER_OPTIONS}
           onChange={setNewCardOrder}
         />
+
+        <View style={styles.limits}>
+          <ThemedText type="smallBold">Domyślne pola nowej karty</ThemedText>
+          <ThemedText type="small" themeColor="textSecondary">
+            Każda karta ma przód i tył — tych dwóch pól nie da się usunąć. Tutaj
+            ustawiasz, jakie dodatkowe rubryki (np. „Wymowa”, „Przykład”) dostaje
+            nowo dodawana karta w tej talii. To tylko punkt wyjścia: w edytorze karty
+            możesz je zmienić, dodać własne albo usunąć, a zmiany tutaj nie ruszą
+            kart już istniejących.
+          </ThemedText>
+        </View>
+
+        {fields.map((field) => (
+          <View
+            key={field.key}
+            style={[styles.field, { borderColor: theme.border, backgroundColor: theme.backgroundElement }]}>
+            <TextField
+              label="Nazwa pola"
+              value={field.name}
+              onChangeText={(name) => patchField(field.key, { name })}
+              placeholder="np. Wymowa"
+            />
+            <View style={styles.fieldRow}>
+              <SegmentedControl
+                value={field.side}
+                options={SIDE_OPTIONS}
+                onChange={(side) => patchField(field.key, { side })}
+                accessibilityLabel={`Strona pola ${field.name || 'bez nazwy'}`}
+              />
+              <Pressable
+                onPress={() => removeField(field.key)}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel={`Usuń pole ${field.name || 'bez nazwy'}`}>
+                <ThemedText type="small" style={{ color: theme.danger }}>
+                  Usuń pole
+                </ThemedText>
+              </Pressable>
+            </View>
+          </View>
+        ))}
+
+        <View style={styles.fieldRow}>
+          <Button
+            title="Dodaj pole z przodu"
+            variant="secondary"
+            style={styles.addField}
+            onPress={() => addField('front')}
+          />
+          <Button
+            title="Dodaj pole z tyłu"
+            variant="secondary"
+            style={styles.addField}
+            onPress={() => addField('back')}
+          />
+        </View>
       </ScrollView>
 
       <View style={[styles.footer, { borderColor: theme.border }]}>
@@ -205,6 +308,21 @@ const styles = StyleSheet.create({
   limits: {
     gap: Spacing.one,
     paddingTop: Spacing.two,
+  },
+  field: {
+    gap: Spacing.two,
+    padding: Spacing.three,
+    borderRadius: Radius.large,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  fieldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  addField: {
+    flex: 1,
   },
   content: {
     padding: Spacing.three,

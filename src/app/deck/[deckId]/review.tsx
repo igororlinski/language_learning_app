@@ -62,6 +62,11 @@ export default function ReviewScreen() {
     return { at: at.getTime(), grades: previewGrades(current.fsrs, at) };
   }, [current]);
 
+  // Extra fields follow the face they belong to: the front ones with the
+  // question, the back ones only once the answer is showing.
+  const frontFields = current?.fields.filter((field) => field.side === 'front') ?? [];
+  const backFields = current?.fields.filter((field) => field.side === 'back') ?? [];
+
   // Anki's bottom bar: what is still ahead in this session, by state.
   const remaining = useMemo(() => countQueueStates(queue.map((card) => card.fsrs.state)), [queue]);
 
@@ -95,11 +100,17 @@ export default function ReviewScreen() {
         <>
           <ScrollView contentContainerStyle={styles.cardArea}>
             <ThemedText style={styles.face}>{current.front}</ThemedText>
+            {frontFields.map((field) => (
+              <CardField key={field.name} name={field.name} value={field.value} />
+            ))}
 
             {revealed ? (
               <>
                 <View style={[styles.divider, { backgroundColor: theme.border }]} />
                 <ThemedText style={[styles.face, styles.back]}>{current.back}</ThemedText>
+                {backFields.map((field) => (
+                  <CardField key={field.name} name={field.name} value={field.value} />
+                ))}
               </>
             ) : null}
           </ScrollView>
@@ -165,6 +176,18 @@ export default function ReviewScreen() {
   );
 }
 
+/** One extra field: its name in small caps above the content. */
+function CardField({ name, value }: { name: string; value: string }) {
+  return (
+    <View style={styles.field}>
+      <ThemedText type="small" themeColor="textSecondary" style={styles.fieldName}>
+        {name.toUpperCase()}
+      </ThemedText>
+      <ThemedText style={styles.fieldValue}>{value}</ThemedText>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
@@ -203,6 +226,19 @@ const styles = StyleSheet.create({
   divider: {
     height: StyleSheet.hairlineWidth,
     alignSelf: 'stretch',
+  },
+  field: {
+    alignItems: 'center',
+    gap: Spacing.half,
+  },
+  fieldName: {
+    letterSpacing: 1,
+    fontSize: 12,
+  },
+  fieldValue: {
+    fontSize: 18,
+    lineHeight: 26,
+    textAlign: 'center',
   },
   controls: {
     padding: Spacing.three,

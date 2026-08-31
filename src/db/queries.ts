@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lte, ne, sql, type SQLWrapper } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lte, ne, sql, type SQLWrapper } from 'drizzle-orm';
 
 import {
   remainingAllowance,
@@ -21,15 +21,23 @@ import {
 
 import { db } from './client';
 import {
+  cardFields,
   cards,
+  deckFields,
   decks,
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
   fsrsState,
   reviewLogs,
+  type CardField,
+  type DeckField,
+  type FieldSide,
   type NewCardOrder,
   type NewCardPlacement,
 } from './schema';
+
+/** The transaction handle drizzle hands to a `db.transaction` callback. */
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /* ------------------------------------------------------------------ reads */
 
@@ -147,6 +155,46 @@ export function deckDueBreakdownQuery(deckId: number, nowMs: number, dayStartMs:
     .where(and(eq(cards.deckId, deckId), lte(fsrsState.due, new Date(nowMs))));
 }
 
+/**
+ * The deck's template for new cards, in the order the deck editor arranged it.
+ * Nothing here binds an existing card — see `newCardFields`.
+ */
+export function deckFieldsQuery(deckId: number) {
+  return db
+    .select()
+    .from(deckFields)
+    .where(eq(deckFields.deckId, deckId))
+    .orderBy(asc(deckFields.position), asc(deckFields.id));
+}
+
+export function getDeckFields(deckId: number): DeckField[] {
+  return deckFieldsQuery(deckId).all();
+}
+
+/** A card's own extra fields, in card order. */
+export function getCardFields(cardId: number): CardField[] {
+  return db
+    .select()
+    .from(cardFields)
+    .where(eq(cardFields.cardId, cardId))
+    .orderBy(asc(cardFields.position), asc(cardFields.id))
+    .all();
+}
+
+/**
+ * The rubrics a new card in this deck starts with — the deck's template, with
+ * nothing filled in yet. Only a brand new card ever reads it; from then on the
+ * fields are the card's own and the deck has no say over them.
+ */
+export function newCardFields(deckId: number): CardFieldInput[] {
+  return getDeckFields(deckId).map((field) => ({
+    id: null,
+    name: field.name,
+    side: field.side,
+    value: '',
+  }));
+}
+
 /** Every deck a card could be moved into: all of them except the one it is in. */
 export function otherDecksQuery(deckId: number) {
   return db
@@ -166,6 +214,9 @@ export function deckDoneTodayQuery(deckId: number, dayStartMs: number) {
     .where(eq(decks.id, deckId));
 }
 
+/** One filled-in extra field, ready to render under a card's face. */
+export type CardFieldContent = { name: string; side: FieldSide; value: string };
+
 export type DueCardRow = {
   cardId: number;
   front: string;
@@ -183,6 +234,8 @@ export type DueCardRow = {
   lapses: number;
   state: number;
   lastReview: Date | null;
+  /** The deck's extra fields this card actually filled in, in deck order. */
+  fields: CardFieldContent[];
 };
 
 /**
@@ -232,8 +285,44 @@ export function loadDueCards(
   const deck = getDeck(deckId);
   const gathered = orderNewBacklog(rows, deck?.newCardOrder ?? DEFAULT_NEW_CARD_ORDER, random);
   const allowed = withinAllowance(gathered, deckAllowance(deckId, now));
+  const placed = placeNewCards(allowed, deck?.newCardPlacement ?? DEFAULT_NEW_CARD_PLACEMENT);
 
-  return placeNewCards(allowed, deck?.newCardPlacement ?? DEFAULT_NEW_CARD_PLACEMENT);
+  return withFieldContent(placed);
+}
+
+/**
+ * Attaches each card's extra fields to the session snapshot — one read for the
+ * whole queue rather than one per card. Fields with nothing in them are left
+ * out here, so the review screen never has to test for empties.
+ */
+function withFieldContent<T extends { cardId: number }>(
+  rows: T[]
+): (T & { fields: CardFieldContent[] })[] {
+  if (rows.length === 0) return [];
+
+  const filled = db
+    .select()
+    .from(cardFields)
+    .where(
+      inArray(
+        cardFields.cardId,
+        rows.map((row) => row.cardId)
+      )
+    )
+    .orderBy(asc(cardFields.position), asc(cardFields.id))
+    .all();
+
+  const perCard = new Map<number, CardFieldContent[]>();
+
+  for (const field of filled) {
+    if (!field.value.trim()) continue;
+
+    const list = perCard.get(field.cardId) ?? [];
+    list.push({ name: field.name, side: field.side, value: field.value });
+    perCard.set(field.cardId, list);
+  }
+
+  return rows.map((row) => ({ ...row, fields: perCard.get(row.cardId) ?? [] }));
 }
 
 /** What the deck may still hand out in the study day containing `now`. */
@@ -297,8 +386,82 @@ export function deleteDeck(deckId: number) {
   return db.delete(decks).where(eq(decks.id, deckId)).run();
 }
 
+/** One row of the deck editor's field list; `id` is null for a new field. */
+export type DeckFieldInput = { id: number | null; name: string; side: FieldSide };
+
+/**
+ * Makes the deck's field definitions match the list the editor holds: fields
+ * dropped from it are deleted (their values go with them, by CASCADE), the rest
+ * are inserted or renamed, and `position` is rewritten from the list order.
+ * Nameless rows are treated as removed — an empty box is not a field.
+ */
+export function syncDeckFields(deckId: number, fields: DeckFieldInput[]) {
+  return db.transaction((tx) => {
+    const named = fields.filter((field) => field.name.trim().length > 0);
+    const kept = new Set(named.map((field) => field.id));
+
+    for (const row of tx.select().from(deckFields).where(eq(deckFields.deckId, deckId)).all()) {
+      if (!kept.has(row.id)) tx.delete(deckFields).where(eq(deckFields.id, row.id)).run();
+    }
+
+    named.forEach((field, position) => {
+      const values = { name: field.name.trim(), side: field.side, position };
+
+      if (field.id === null) {
+        tx.insert(deckFields).values({ deckId, ...values }).run();
+      } else {
+        tx.update(deckFields).set(values).where(eq(deckFields.id, field.id)).run();
+      }
+    });
+  });
+}
+
+/** One row of the card editor's field list; `id` is null for a new field. */
+export type CardFieldInput = { id: number | null; name: string; side: FieldSide; value: string };
+
+/**
+ * Makes a card's fields match the list the editor holds — the same shape as
+ * `syncDeckFields`: rows dropped from the list are deleted, the rest inserted
+ * or updated, and `position` rewritten from the list order. A field with no
+ * name counts as removed; an empty *value* is kept, because a rubric waiting to
+ * be filled in is still a field the card carries.
+ */
+function writeCardFields(tx: Tx, cardId: number, fields: CardFieldInput[]) {
+  const named = fields.filter((field) => field.name.trim().length > 0);
+  const kept = new Set(named.map((field) => field.id));
+
+  for (const row of tx.select().from(cardFields).where(eq(cardFields.cardId, cardId)).all()) {
+    if (!kept.has(row.id)) tx.delete(cardFields).where(eq(cardFields.id, row.id)).run();
+  }
+
+  named.forEach((field, position) => {
+    const values = {
+      name: field.name.trim(),
+      side: field.side,
+      value: field.value.trim(),
+      position,
+    };
+
+    if (field.id === null) {
+      tx.insert(cardFields).values({ cardId, ...values }).run();
+    } else {
+      tx.update(cardFields).set(values).where(eq(cardFields.id, field.id)).run();
+    }
+  });
+}
+
+export function saveCardFields(cardId: number, fields: CardFieldInput[]) {
+  return db.transaction((tx) => writeCardFields(tx, cardId, fields));
+}
+
 /** Inserts the card together with its initial (New) FSRS state. */
-export function createCard(deckId: number, front: string, back: string, now = new Date()) {
+export function createCard(
+  deckId: number,
+  front: string,
+  back: string,
+  now = new Date(),
+  fields: CardFieldInput[] = []
+) {
   return db.transaction((tx) => {
     const card = tx
       .insert(cards)
@@ -310,21 +473,30 @@ export function createCard(deckId: number, front: string, back: string, now = ne
       .values({ cardId: card.id, ...newCardState(now) })
       .run();
 
+    writeCardFields(tx, card.id, fields);
+
     return card;
   });
 }
 
-export function updateCard(cardId: number, patch: { front: string; back: string }) {
-  return db
-    .update(cards)
-    .set({ front: patch.front.trim(), back: patch.back.trim() })
-    .where(eq(cards.id, cardId))
-    .run();
+export function updateCard(
+  cardId: number,
+  patch: { front: string; back: string; fields?: CardFieldInput[] }
+) {
+  return db.transaction((tx) => {
+    tx.update(cards)
+      .set({ front: patch.front.trim(), back: patch.back.trim() })
+      .where(eq(cards.id, cardId))
+      .run();
+
+    if (patch.fields) writeCardFields(tx, cardId, patch.fields);
+  });
 }
 
 /**
- * Moves a card to another deck. Only `deck_id` changes: the FSRS state and the
- * review log hang off the card, so the schedule survives the move untouched.
+ * Moves a card to another deck. Only `deck_id` changes: the FSRS state, the
+ * review log and the card's own extra fields all hang off the card, so they
+ * survive the move untouched.
  *
  * Side effect worth knowing: "done today" is counted by joining `review_logs`
  * through `cards.deck_id`, so today's answers move with the card and count
