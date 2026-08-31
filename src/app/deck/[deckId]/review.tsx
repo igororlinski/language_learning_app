@@ -52,7 +52,15 @@ export default function ReviewScreen() {
   const current = queue[0];
 
   // Recomputed per card so the buttons show the interval each answer would set.
-  const preview = useMemo(() => (current ? previewGrades(current.fsrs, new Date()) : null), [current]);
+  // The instant is carried along with it: the labels have to be measured against
+  // the same moment the schedule was computed for, and reading the clock while
+  // rendering is impure — React Compiler may reorder or skip such a render.
+  const preview = useMemo(() => {
+    if (!current) return null;
+
+    const at = new Date();
+    return { at: at.getTime(), grades: previewGrades(current.fsrs, at) };
+  }, [current]);
 
   // Anki's bottom bar: what is still ahead in this session, by state.
   const remaining = useMemo(() => countQueueStates(queue.map((card) => card.fsrs.state)), [queue]);
@@ -100,7 +108,7 @@ export default function ReviewScreen() {
             {revealed && preview ? (
               <View style={styles.grades}>
                 {GRADES.map((grade) => {
-                  const next = preview[grade].card.due.getTime() - Date.now();
+                  const next = preview.grades[grade].card.due.getTime() - preview.at;
                   return (
                     <Pressable
                       key={grade}
