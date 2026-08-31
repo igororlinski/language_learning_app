@@ -25,6 +25,7 @@ import {
   gradeCard,
   loadDueCards,
   moveCard,
+  getCardLines,
   getDeckSlots,
   newCardFields,
   newCardLayout,
@@ -32,6 +33,7 @@ import {
   rollbackCard,
   saveCardFields,
   syncDeckSlots,
+  updateCard,
   updateDeck,
 } from '@/db/queries';
 import { decks, fsrsState, reviewLogs } from '@/db/schema';
@@ -659,3 +661,44 @@ check('pole bez pliku nie trafia na karte', mediaQueued()?.frontLines, [
   { text: 'to break', base: true, media: null },
 ]);
 check('i nie ma czego kasowac', cardMediaFiles(mediaCard.id), []);
+
+group('Odczyt jednej karty po edycji');
+
+const editedDeck = createDeck({ name: 'Edytowana', newPerDay: 10, reviewsPerDay: 10 });
+const editedCard = createCard(editedDeck.id, 'to fall', 'spadac', now, [
+  { id: null, side: 'back', position: 1, kind: 'text', value: 'fell / fallen', mediaPath: null },
+]);
+
+// What the review screen re-reads after the editor has been open on a card has
+// to match what the session queue built at the start.
+check(
+  'pojedyncza karta czyta sie tak samo jak w kolejce',
+  getCardLines(editedCard.id),
+  (() => {
+    const queued = loadDueCards(editedDeck.id, now).find((card) => card.cardId === editedCard.id)!;
+    return { front: queued.frontLines, back: queued.backLines };
+  })()
+);
+
+updateCard(editedCard.id, {
+  front: 'to fall down',
+  back: 'spadac',
+  fields: [
+    {
+      id: getCardFields(editedCard.id)[0].id,
+      side: 'back',
+      position: 1,
+      kind: 'text',
+      value: 'fell / fallen',
+      mediaPath: null,
+    },
+  ],
+});
+
+check('po edycji widac nowa tresc', getCardLines(editedCard.id)?.front, [
+  { text: 'to fall down', base: true, media: null },
+]);
+
+deleteCard(editedCard.id);
+
+check('skasowana karta nie ma juz stron', getCardLines(editedCard.id), null);

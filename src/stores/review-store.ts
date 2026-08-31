@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 
-import { gradeCard, loadDueCards, rollbackCard, type DueCardRow } from '@/db/queries';
+import {
+  getCardLines,
+  gradeCard,
+  loadDueCards,
+  rollbackCard,
+  type DueCardRow,
+} from '@/db/queries';
 import type { CardLine } from '@/lib/card-layout';
 import { Rating, State, toFsrsCard, type FsrsCard, type Grade } from '@/lib/scheduler';
 
@@ -56,6 +62,8 @@ type ReviewStore = {
   /** Answers that can still be undone, oldest first. */
   history: AnsweredStep[];
   start: (deckId: number) => void;
+  /** Re-reads the card on top of the queue — after the editor was open on it. */
+  refreshCurrent: () => void;
   reveal: () => void;
   answer: (grade: Grade) => void;
   undo: () => void;
@@ -71,6 +79,28 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
       deckId,
       ...emptySession(),
       queue: loadDueCards(deckId, new Date()).map(toReviewCard),
+    });
+  },
+
+  /**
+   * The queue is a snapshot, so a card edited mid-session would otherwise keep
+   * showing what it looked like when the session started. A card deleted in the
+   * editor simply drops out of the queue.
+   */
+  refreshCurrent: () => {
+    const { queue } = get();
+    const current = queue[0];
+    if (!current) return;
+
+    const lines = getCardLines(current.cardId);
+
+    if (!lines) {
+      set({ queue: queue.slice(1), revealed: false });
+      return;
+    }
+
+    set({
+      queue: [{ ...current, frontLines: lines.front, backLines: lines.back }, ...queue.slice(1)],
     });
   },
 

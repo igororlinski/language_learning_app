@@ -75,7 +75,7 @@ export default function CardEditorScreen() {
   const [rows, setRows] = useState<Row[]>(initialRows);
   const [savedCount, setSavedCount] = useState(0);
   const [adding, setAdding] = useState(false);
-  const [showPreview, setShowPreview] = useState(true);
+  const [showPreview, setShowPreview] = useState(false);
 
   // Rows added here have no database id yet, so they need a key of their own to
   // stay put while they are being edited.

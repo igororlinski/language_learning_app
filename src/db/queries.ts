@@ -193,6 +193,20 @@ export function deckDueBreakdownQuery(deckId: number, nowMs: number, dayStartMs:
     .where(and(eq(cards.deckId, deckId), lte(fsrsState.due, new Date(nowMs))));
 }
 
+/**
+ * One card's two faces, laid out the same way the session lays out a whole
+ * queue. The review screen re-reads a card through this after the editor has
+ * been open on it.
+ */
+export function getCardLines(cardId: number): { front: CardLine[]; back: CardLine[] } | null {
+  const card = getCard(cardId);
+  if (!card) return null;
+
+  const pieces = cardPieces(card, getCardFields(cardId));
+
+  return { front: sideLines(pieces, 'front'), back: sideLines(pieces, 'back') };
+}
+
 /** A card's own extra fields, in card order. */
 export function getCardFields(cardId: number): CardField[] {
   return db

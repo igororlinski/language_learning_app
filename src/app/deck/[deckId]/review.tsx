@@ -1,5 +1,5 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useMemo } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -44,11 +44,20 @@ export default function ReviewScreen() {
   const reset = useReviewStore((s) => s.reset);
   const history = useReviewStore((s) => s.history);
   const undo = useReviewStore((s) => s.undo);
+  const refreshCurrent = useReviewStore((s) => s.refreshCurrent);
 
   useEffect(() => {
     start(deckId);
     return reset;
   }, [deckId, start, reset]);
+
+  // Coming back from the editor: the queue is a snapshot, so the card it holds
+  // has to be read again before it is shown any further.
+  useFocusEffect(
+    useCallback(() => {
+      refreshCurrent();
+    }, [refreshCurrent])
+  );
 
   const current = queue[0];
 
@@ -77,6 +86,22 @@ export default function ReviewScreen() {
           </ThemedText>
         )}
         <View style={styles.topActions}>
+          {current ? (
+            <Pressable
+              onPress={() =>
+                router.push({
+                  pathname: '/card-editor',
+                  params: { deckId, cardId: current.cardId },
+                })
+              }
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Edytuj tę kartę">
+              <ThemedText type="small" style={{ color: theme.accent }}>
+                Edytuj
+              </ThemedText>
+            </Pressable>
+          ) : null}
           {history.length > 0 ? (
             <Pressable onPress={undo} hitSlop={12}>
               <ThemedText type="small" style={{ color: theme.accent }}>
