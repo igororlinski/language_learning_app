@@ -19,7 +19,11 @@ export const DEFAULT_NEW_CARD_ORDER: NewCardOrder = 'oldest';
 
 /** Which face of a card a field belongs to. */
 export const FIELD_SIDES = ['front', 'back'] as const;
+
+/** A field holds either typed text or one audio file. */
+export const FIELD_KINDS = ['text', 'audio'] as const;
 export type FieldSide = (typeof FIELD_SIDES)[number];
+export type FieldKind = (typeof FIELD_KINDS)[number];
 
 export const decks = sqliteTable('decks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -106,7 +110,11 @@ export const cardFields = sqliteTable(
     side: text('side', { enum: FIELD_SIDES }).notNull(),
     /** Order within the side, as arranged in the card editor. */
     position: integer('position').notNull().default(0),
+    kind: text('kind', { enum: FIELD_KINDS }).notNull().default('text'),
+    /** Typed text, or the original file name of the audio attached here. */
     value: text('value').notNull().default(''),
+    /** File name inside the app's audio directory; null for a text field. */
+    audioPath: text('audio_path'),
   },
   (table) => [index('card_fields_card_id_idx').on(table.cardId)]
 );

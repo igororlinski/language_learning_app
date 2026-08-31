@@ -11,6 +11,7 @@ import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
+  cardAudioPaths,
   cardsInDeckQuery,
   deckDueBreakdownQuery,
   deckQuery,
@@ -21,6 +22,7 @@ import {
 } from '@/db/queries';
 import { useNow } from '@/hooks/use-now';
 import { useTheme } from '@/hooks/use-theme';
+import { deleteAudio } from '@/lib/audio-files';
 import { cardsLabel, formatDue } from '@/lib/format';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { filterCards } from '@/lib/search';
@@ -90,7 +92,15 @@ export default function DeckScreen() {
       `„${card.front}” zniknie razem z historią powtórek.`,
       [
         { text: 'Anuluj', style: 'cancel' },
-        { text: 'Usuń', style: 'destructive', onPress: () => deleteCard(card.id) },
+        {
+          text: 'Usuń',
+          style: 'destructive',
+          onPress: () => {
+            const paths = cardAudioPaths(card.id);
+            deleteCard(card.id);
+            deleteAudio(paths);
+          },
+        },
       ],
       { cancelable: true }
     );

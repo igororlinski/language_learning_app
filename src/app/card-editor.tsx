@@ -4,12 +4,14 @@ import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
+import { AudioButton } from '@/components/audio-button';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
 import { ThemedText } from '@/components/themed-text';
 import { TextField } from '@/components/text-field';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import {
+  cardAudioPaths,
   createCard,
   deleteCard,
   getCard,
@@ -20,6 +22,8 @@ import {
 } from '@/db/queries';
 import type { FieldSide } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
+import { formatBytes, MAX_AUDIO_BYTES } from '@/lib/audio';
+import { AudioTooLargeError, deleteAudio, importAudio, pickAudio } from '@/lib/audio-files';
 import type { BaseKind } from '@/lib/card-layout';
 import {
   BOUNDARY,
@@ -73,11 +77,22 @@ export default function CardEditorScreen() {
   // stay put while they are being edited.
   const nextKey = useRef(0);
 
+  // Copies imported in this session. Whatever the save does not keep is deleted
+  // there, so replacing a file twice does not leave two of them behind.
+  const imported = useRef<string[]>([]);
+
   const info = describeRows(rows, BASE_LABELS);
 
   const addField = (side: FieldSide) => {
     nextKey.current += 1;
-    const added: Row = { key: `new-${nextKey.current}`, kind: 'extra', id: null, value: '' };
+    const added: Row = {
+      key: `new-${nextKey.current}`,
+      kind: 'extra',
+      id: null,
+      field: 'text',
+      value: '',
+      audioPath: null,
+    };
 
     setRows((current) => {
       // A front field goes just above the boundary, a back one to the very end
@@ -97,6 +112,45 @@ export default function CardEditorScreen() {
   const removeRow = (key: string) =>
     setRows((current) => current.filter((row) => row.key !== key));
 
+  /**
+   * Picks an audio file and copies it into the app's own directory. The size is
+   * checked before the copy, so an oversized file never lands on the device.
+   */
+  const attachAudio = async (key: string) => {
+    try {
+      const picked = await pickAudio();
+      if (!picked) return;
+
+      const { fileName, name } = await importAudio(picked);
+      imported.current = [...imported.current, fileName];
+
+      setRows((current) =>
+        current.map((row) =>
+          row.kind === 'extra' && row.key === key
+            ? { ...row, field: 'audio', value: name, audioPath: fileName }
+            : row
+        )
+      );
+    } catch (error) {
+      const message =
+        error instanceof AudioTooLargeError
+          ? `Ten plik ma ${formatBytes(error.size)}, a limit to ${formatBytes(MAX_AUDIO_BYTES)}.`
+          : 'Nie udało się skopiować pliku.';
+
+      Alert.alert('Nie dodano dźwięku', message, [{ text: 'OK' }], { cancelable: true });
+    }
+  };
+
+  /** Back to a text field; the file itself goes on the next save. */
+  const detachAudio = (key: string) =>
+    setRows((current) =>
+      current.map((row) =>
+        row.kind === 'extra' && row.key === key
+          ? { ...row, field: 'text', value: '', audioPath: null }
+          : row
+      )
+    );
+
   const questionInput = useRef<TextInput>(null);
   const canSave = front.trim().length > 0 && back.trim().length > 0;
 
@@ -104,12 +158,24 @@ export default function CardEditorScreen() {
     if (!canSave) return;
 
     const { fields, placement } = toPlacement(rows);
+    const kept = new Set(fields.map((field) => field.audioPath).filter(Boolean));
 
     if (cardId) {
+      // Audio copies live outside the database, so files the card no longer
+      // points at have to be cleared by hand — the ones it dropped and the ones
+      // imported here and then replaced.
+      const before = cardAudioPaths(cardId);
       updateCard(cardId, { front, back, fields, layout: placement });
+
+      deleteAudio(
+        [...before, ...imported.current].filter((path) => !kept.has(path))
+      );
       router.back();
       return;
     }
+
+    deleteAudio(imported.current.filter((path) => !kept.has(path)));
+    imported.current = [];
 
     // Fast entry: saving a new card clears the form and keeps the editor open so
     // a whole batch can be typed in one go. Leaving is the header back arrow.
@@ -130,7 +196,9 @@ export default function CardEditorScreen() {
         text: 'Usuń',
         style: 'destructive',
         onPress: () => {
+          const paths = cardAudioPaths(cardId);
           deleteCard(cardId);
+          deleteAudio(paths);
           router.back();
         },
       },
@@ -162,6 +230,46 @@ export default function CardEditorScreen() {
 
     if (row.kind === 'boundary') return null;
 
+    if (row.field === 'audio') {
+      return (
+        <>
+          <ThemedText type="smallBold" themeColor="textSecondary">
+            {rowInfo.label}
+          </ThemedText>
+          <AudioButton audioPath={row.audioPath} label={row.value} />
+          <View style={styles.rowActions}>
+            <Pressable
+              onPress={() => attachAudio(row.key)}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel={`Zmień plik: ${rowInfo.label}`}>
+              <ThemedText type="small" style={{ color: theme.accent }}>
+                Zmień plik
+              </ThemedText>
+            </Pressable>
+            <Pressable
+              onPress={() => detachAudio(row.key)}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel={`Zamień na tekst: ${rowInfo.label}`}>
+              <ThemedText type="small" style={{ color: theme.accent }}>
+                Zamień na tekst
+              </ThemedText>
+            </Pressable>
+            <Pressable
+              onPress={() => removeRow(row.key)}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel={`Usuń ${rowInfo.label}`}>
+              <ThemedText type="small" style={{ color: theme.danger }}>
+                Usuń pole
+              </ThemedText>
+            </Pressable>
+          </View>
+        </>
+      );
+    }
+
     return (
       <>
         <TextField
@@ -172,16 +280,26 @@ export default function CardEditorScreen() {
           style={styles.input}
           multiline
         />
-        <Pressable
-          onPress={() => removeRow(row.key)}
-          hitSlop={12}
-          style={styles.remove}
-          accessibilityRole="button"
-          accessibilityLabel={`Usuń ${rowInfo.label}`}>
-          <ThemedText type="small" style={{ color: theme.danger }}>
-            Usuń pole
-          </ThemedText>
-        </Pressable>
+        <View style={styles.rowActions}>
+          <Pressable
+            onPress={() => attachAudio(row.key)}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel={`Dodaj dźwięk: ${rowInfo.label}`}>
+            <ThemedText type="small" style={{ color: theme.accent }}>
+              Dodaj dźwięk
+            </ThemedText>
+          </Pressable>
+          <Pressable
+            onPress={() => removeRow(row.key)}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel={`Usuń ${rowInfo.label}`}>
+            <ThemedText type="small" style={{ color: theme.danger }}>
+              Usuń pole
+            </ThemedText>
+          </Pressable>
+        </View>
       </>
     );
   };
@@ -251,8 +369,10 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingTop: Spacing.two,
   },
-  remove: {
-    alignSelf: 'flex-end',
+  rowActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: Spacing.three,
   },
   addRow: {
     flexDirection: 'row',

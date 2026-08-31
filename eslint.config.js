@@ -5,6 +5,7 @@ const expoConfig = require("eslint-config-expo/flat");
 module.exports = defineConfig([
   expoConfig,
   {
-    ignores: ["dist/*"],
+    // Generated: the router types carry an eslint-disable nobody wrote.
+    ignores: ["dist/*", ".expo/*"],
   }
 ]);

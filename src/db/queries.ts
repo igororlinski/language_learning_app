@@ -31,6 +31,7 @@ import {
   fsrsState,
   reviewLogs,
   type CardField,
+  type FieldKind,
   type FieldSide,
   type NewCardOrder,
   type NewCardPlacement,
@@ -229,6 +230,33 @@ export function newCardFields(deckId: number): CardFieldInput[] {
     front: deck.newFrontFields,
     back: deck.newBackFields,
   });
+}
+
+/**
+ * The audio files one card points at. Copies live in the app's own directory,
+ * not in the database, so whatever deletes a card or a field has to clear them
+ * separately — see `deleteAudio` in `src/lib/audio-files.ts`.
+ */
+export function cardAudioPaths(cardId: number): string[] {
+  return db
+    .select({ audioPath: cardFields.audioPath })
+    .from(cardFields)
+    .where(eq(cardFields.cardId, cardId))
+    .all()
+    .map((row) => row.audioPath)
+    .filter((path): path is string => Boolean(path));
+}
+
+/** The same, for every card in a deck — a deck delete cascades through them. */
+export function deckAudioPaths(deckId: number): string[] {
+  return db
+    .select({ audioPath: cardFields.audioPath })
+    .from(cardFields)
+    .innerJoin(cards, eq(cards.id, cardFields.cardId))
+    .where(eq(cards.deckId, deckId))
+    .all()
+    .map((row) => row.audioPath)
+    .filter((path): path is string => Boolean(path));
 }
 
 /** Every deck a card could be moved into: all of them except the one it is in. */
@@ -449,7 +477,10 @@ export type CardFieldInput = {
   id: number | null;
   side: FieldSide;
   position: number;
+  /** Typed text, or one audio file — see `src/lib/audio-files.ts`. */
+  kind: FieldKind;
   value: string;
+  audioPath: string | null;
 };
 
 /**
@@ -470,7 +501,13 @@ function writeCardFields(tx: Tx, cardId: number, fields: CardFieldInput[]) {
   }
 
   for (const field of fields) {
-    const values = { side: field.side, value: field.value.trim(), position: field.position };
+    const values = {
+      side: field.side,
+      position: field.position,
+      kind: field.kind,
+      value: field.value.trim(),
+      audioPath: field.audioPath,
+    };
 
     if (field.id === null) {
       tx.insert(cardFields).values({ cardId, ...values }).run();

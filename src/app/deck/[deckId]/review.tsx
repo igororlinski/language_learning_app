@@ -3,6 +3,7 @@ import { useEffect, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AudioButton } from '@/components/audio-button';
 import { Button } from '@/components/button';
 import { DueCounts } from '@/components/due-counts';
 import { ThemedText } from '@/components/themed-text';
@@ -96,24 +97,36 @@ export default function ReviewScreen() {
           <ScrollView contentContainerStyle={styles.cardArea}>
             {/* Each face reads in the order the card editor arranged it: the
                 mandatory field is one line among the extras, not always first. */}
-            {current.frontLines.map((line, index) => (
-              <ThemedText
-                key={`front-${index}`}
-                style={line.base ? styles.face : styles.fieldValue}>
-                {line.text}
-              </ThemedText>
-            ))}
+            {current.frontLines.map((line, index) =>
+              line.audioPath ? (
+                <AudioButton key={`front-${index}`} audioPath={line.audioPath} label={line.text} />
+              ) : (
+                <ThemedText
+                  key={`front-${index}`}
+                  style={line.base ? styles.face : styles.fieldValue}>
+                  {line.text}
+                </ThemedText>
+              )
+            )}
 
             {revealed ? (
               <>
-                <View style={[styles.divider, { backgroundColor: theme.border }]} />
-                {current.backLines.map((line, index) => (
-                  <ThemedText
-                    key={`back-${index}`}
-                    style={line.base ? [styles.face, styles.back] : styles.fieldValue}>
-                    {line.text}
-                  </ThemedText>
-                ))}
+                <View style={[styles.divider, { borderColor: theme.border }]} />
+                {current.backLines.map((line, index) =>
+                  line.audioPath ? (
+                    <AudioButton
+                      key={`back-${index}`}
+                      audioPath={line.audioPath}
+                      label={line.text}
+                    />
+                  ) : (
+                    <ThemedText
+                      key={`back-${index}`}
+                      style={line.base ? [styles.face, styles.back] : styles.fieldValue}>
+                      {line.text}
+                    </ThemedText>
+                  )
+                )}
               </>
             ) : null}
           </ScrollView>
@@ -215,7 +228,7 @@ const styles = StyleSheet.create({
     fontWeight: '400',
   },
   divider: {
-    height: StyleSheet.hairlineWidth,
+    borderTopWidth: StyleSheet.hairlineWidth,
     alignSelf: 'stretch',
   },
   fieldValue: {

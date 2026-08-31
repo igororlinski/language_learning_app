@@ -1,4 +1,4 @@
-import type { FieldSide } from '@/db/schema';
+import type { FieldKind, FieldSide } from '@/db/schema';
 
 /**
  * Where the pieces of a card sit.
@@ -21,7 +21,9 @@ export type LayoutPiece = {
   base: BaseKind | null;
   side: FieldSide;
   position: number;
+  kind: FieldKind;
   value: string;
+  audioPath: string | null;
 };
 
 /** The columns that place a card's two mandatory fields. */
@@ -35,18 +37,34 @@ export type CardPlacement = {
 };
 
 /** Everything a card is made of, mandatory fields and extras in one list. */
-export function cardPieces<T extends { side: FieldSide; position: number; value: string }>(
-  card: CardPlacement,
-  extras: T[]
-): LayoutPiece[] {
+export function cardPieces<
+  T extends {
+    side: FieldSide;
+    position: number;
+    value: string;
+    kind?: FieldKind;
+    audioPath?: string | null;
+  },
+>(card: CardPlacement, extras: T[]): LayoutPiece[] {
+  const base = (kind: BaseKind, side: FieldSide, position: number, value: string): LayoutPiece => ({
+    base: kind,
+    side,
+    position,
+    kind: 'text',
+    value,
+    audioPath: null,
+  });
+
   return [
-    { base: 'front', side: card.frontSide, position: card.frontPosition, value: card.front },
-    { base: 'back', side: card.backSide, position: card.backPosition, value: card.back },
-    ...extras.map((field) => ({
+    base('front', card.frontSide, card.frontPosition, card.front),
+    base('back', card.backSide, card.backPosition, card.back),
+    ...extras.map<LayoutPiece>((field) => ({
       base: null,
       side: field.side,
       position: field.position,
+      kind: field.kind ?? 'text',
       value: field.value,
+      audioPath: field.audioPath ?? null,
     })),
   ];
 }
@@ -60,17 +78,28 @@ export function piecesOnSide(pieces: LayoutPiece[], side: FieldSide): LayoutPiec
   return pieces.filter((piece) => piece.side === side).sort((a, b) => a.position - b.position);
 }
 
-/** One rendered line of a card face: a mandatory field, or an extra one. */
-export type CardLine = { text: string; base: boolean };
+/**
+ * One rendered line of a card face. An audio line shows a play button instead
+ * of text; `text` is then the original file name, which is all the label it has.
+ */
+export type CardLine = { text: string; base: boolean; audioPath: string | null };
 
 /**
- * The lines one face shows during review. Empty extras are dropped — they still
- * exist on the card and hold their place in the editor, they just have nothing
- * to show. A face with no pieces at all renders as nothing, which is a layout
- * the editor allows on purpose.
+ * The lines one face shows during review. Extras with nothing in them are
+ * dropped — an empty text box, or an audio field whose file went missing. They
+ * still exist on the card and hold their place in the editor, they just have
+ * nothing to show. A face with no pieces at all renders as nothing, which is a
+ * layout the editor allows on purpose.
  */
 export function sideLines(pieces: LayoutPiece[], side: FieldSide): CardLine[] {
   return piecesOnSide(pieces, side)
-    .filter((piece) => piece.base !== null || piece.value.trim().length > 0)
-    .map((piece) => ({ text: piece.value, base: piece.base !== null }));
+    .filter((piece) => {
+      if (piece.base !== null) return true;
+      return piece.kind === 'audio' ? Boolean(piece.audioPath) : piece.value.trim().length > 0;
+    })
+    .map((piece) => ({
+      text: piece.value,
+      base: piece.base !== null,
+      audioPath: piece.kind === 'audio' ? piece.audioPath : null,
+    }));
 }

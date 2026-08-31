@@ -29,6 +29,8 @@ const extra = (side: 'front' | 'back', position: number, value = '') => ({
   id: null,
   side,
   position,
+  kind: 'text' as const,
+  audioPath: null,
   value,
 });
 
@@ -66,7 +68,7 @@ group('Odczyt listy z powrotem');
 
 // Question dragged below the boundary: it is on the back now.
 const moved: Row[] = [
-  { key: 'blank-0', kind: 'extra', id: null, value: 'obrazek' },
+  { key: 'blank-0', kind: 'extra', id: null, field: 'text', value: 'obrazek', audioPath: null },
   { key: BOUNDARY, kind: 'boundary' },
   { key: 'base-back', kind: 'base', base: 'back' },
   { key: 'base-front', kind: 'base', base: 'front' },
@@ -83,7 +85,7 @@ check('odpowiedz zostaje na tyle, nad nim', [read.placement.backSide, read.place
   0,
 ]);
 check('pole dodatkowe zostaje z przodu', read.fields, [
-  { id: null, side: 'front', position: 0, value: 'obrazek' },
+  { id: null, side: 'front', position: 0, kind: 'text', value: 'obrazek', audioPath: null },
 ]);
 
 // What goes out has to come back in the same shape.
@@ -117,10 +119,14 @@ group('Domyslny uklad talii');
 
 // Empty boxes are interchangeable: they fill whatever the mandatory fields
 // leave free, so the deck stores only how many of them each side gets.
-check('puste pola omijaja miejsce pola podstawowego', slotFields(DEFAULT_PLACEMENT, { front: 2, back: 0 }), [
-  { id: null, side: 'front', position: 1, value: '' },
-  { id: null, side: 'front', position: 2, value: '' },
-]);
+check(
+  'puste pola omijaja miejsce pola podstawowego',
+  slotFields(DEFAULT_PLACEMENT, { front: 2, back: 0 }),
+  [
+    { id: null, side: 'front', position: 1, kind: 'text', value: '', audioPath: null },
+    { id: null, side: 'front', position: 2, kind: 'text', value: '', audioPath: null },
+  ]
+);
 
 check(
   'pole podstawowe w srodku zostawia miejsce nad soba',

@@ -7,6 +7,7 @@ import './search.test';
 import './queue-order.test';
 import './card-layout.test';
 import './field-rows.test';
+import './audio.test';
 import './data-layer.test';
 
 import { failureCount } from './harness';

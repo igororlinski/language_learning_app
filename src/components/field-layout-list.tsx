@@ -68,11 +68,11 @@ function SideBoundary({ label }: { label: string }) {
 
   return (
     <View style={styles.boundary}>
-      <View style={[styles.boundaryLine, { backgroundColor: theme.border }]} />
+      <View style={[styles.boundaryLine, { borderColor: theme.border }]} />
       <ThemedText type="smallBold" themeColor="textSecondary" style={styles.boundaryLabel}>
         {label.toUpperCase()}
       </ThemedText>
-      <View style={[styles.boundaryLine, { backgroundColor: theme.border }]} />
+      <View style={[styles.boundaryLine, { borderColor: theme.border }]} />
     </View>
   );
 }
@@ -139,7 +139,7 @@ const styles = StyleSheet.create({
   },
   boundaryLine: {
     flex: 1,
-    height: StyleSheet.hairlineWidth,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
   boundaryLabel: {
     letterSpacing: 1,

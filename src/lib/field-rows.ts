@@ -1,4 +1,4 @@
-import type { FieldSide } from '@/db/schema';
+import type { FieldKind, FieldSide } from '@/db/schema';
 import type { BaseKind } from '@/lib/card-layout';
 
 /**
@@ -16,7 +16,15 @@ export const BOUNDARY = 'boundary';
 export type Row =
   | { key: string; kind: 'base'; base: BaseKind }
   | { key: typeof BOUNDARY; kind: 'boundary' }
-  | { key: string; kind: 'extra'; id: number | null; value: string };
+  | {
+      key: string;
+      kind: 'extra';
+      id: number | null;
+      /** What the field holds: typed text, or one audio file. */
+      field: FieldKind;
+      value: string;
+      audioPath: string | null;
+    };
 
 /** Where the two mandatory fields sit. */
 export type RowPlacement = {
@@ -31,7 +39,9 @@ export type RowField = {
   id: number | null;
   side: FieldSide;
   position: number;
+  kind: FieldKind;
   value: string;
+  audioPath: string | null;
 };
 
 /** What a row means once the list order is read top to bottom. */
@@ -69,7 +79,9 @@ export function buildRows(placement: RowPlacement, fields: RowField[]): Row[] {
       key: field.id === null ? `blank-${index}` : `saved-${field.id}`,
       kind: 'extra',
       id: field.id,
+      field: field.kind,
       value: field.value,
+      audioPath: field.audioPath,
       side: field.side,
       position: field.position,
     })),
@@ -142,7 +154,14 @@ export function toPlacement(rows: Row[]): { fields: RowField[]; placement: RowPl
       continue;
     }
 
-    fields.push({ id: row.id, side, position, value: row.value });
+    fields.push({
+      id: row.id,
+      side,
+      position,
+      kind: row.field,
+      value: row.value,
+      audioPath: row.audioPath,
+    });
   }
 
   return { fields, placement };
@@ -169,7 +188,7 @@ export function slotFields(
 
     for (let position = 0; fields.length < Math.max(0, count); position += 1) {
       if (busy.has(position)) continue;
-      fields.push({ id: null, side, position, value: '' });
+      fields.push({ id: null, side, position, kind: 'text', value: '', audioPath: null });
     }
 
     return fields;

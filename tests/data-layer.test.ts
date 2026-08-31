@@ -10,10 +10,12 @@ import { eq } from 'drizzle-orm';
 
 import { db, sqliteDb } from '@/db/client';
 import {
+  cardAudioPaths,
   cardsInDeckQuery,
   createCard,
   createDeck,
   deckAllowance,
+  deckAudioPaths,
   deckDoneTodayQuery,
   deckDueBreakdownQuery,
   decksWithStatsQuery,
@@ -28,7 +30,6 @@ import {
   otherDecksQuery,
   rollbackCard,
   saveCardFields,
-  updateCard,
   updateDeck,
 } from '@/db/queries';
 import { decks, fsrsState, reviewLogs } from '@/db/schema';
@@ -46,6 +47,7 @@ import migration0004 from '../drizzle/0004_aspiring_skrulls.sql';
 import migration0005 from '../drizzle/0005_eminent_miek.sql';
 import migration0006 from '../drizzle/0006_moaning_shiva.sql';
 import migration0007 from '../drizzle/0007_bouncy_the_enforcers.sql';
+import migration0008 from '../drizzle/0008_mean_lady_mastermind.sql';
 
 for (const migration of [
   migration0000,
@@ -56,6 +58,7 @@ for (const migration of [
   migration0005,
   migration0006,
   migration0007,
+  migration0008,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -368,9 +371,9 @@ const fieldDeck = createDeck({
 // Position 0 on each side belongs to the mandatory field, so the empty boxes
 // start below it.
 check('nowa karta startuje z pustymi polami wedlug licznikow talii', newCardFields(fieldDeck.id), [
-  { id: null, side: 'front', position: 1, value: '' },
-  { id: null, side: 'front', position: 2, value: '' },
-  { id: null, side: 'back', position: 1, value: '' },
+  { id: null, side: 'front', position: 1, kind: 'text', value: '', audioPath: null },
+  { id: null, side: 'front', position: 2, kind: 'text', value: '', audioPath: null },
+  { id: null, side: 'back', position: 1, kind: 'text', value: '', audioPath: null },
 ]);
 
 check(
@@ -398,7 +401,7 @@ check('talia pamieta swoj domyslny uklad', newCardLayout(oddDeck.id), {
 });
 
 check('puste pole trafia na wolna strone', newCardFields(oddDeck.id), [
-  { id: null, side: 'front', position: 0, value: '' },
+  { id: null, side: 'front', position: 0, kind: 'text', value: '', audioPath: null },
 ]);
 
 // A card made from that template reads exactly as the deck arranged it.
@@ -416,8 +419,8 @@ const oddQueued = () =>
 
 check('nowa karta dziedziczy uklad talii: przod pusty', oddQueued()?.frontLines, []);
 check('a oba pola podstawowe czytaja sie z tylu', oddQueued()?.backLines, [
-  { text: 'latac', base: true },
-  { text: 'to fly', base: true },
+  { text: 'latac', base: true, audioPath: null },
+  { text: 'to fly', base: true, audioPath: null },
 ]);
 
 group('Uklad pol na karcie');
@@ -429,9 +432,9 @@ const fieldCard = createCard(
   'lamac',
   now,
   [
-    { id: null, side: 'front', position: 0, value: '/breik/' },
-    { id: null, side: 'front', position: 2, value: '   ' },
-    { id: null, side: 'back', position: 1, value: 'break-broke-broken' },
+    { id: null, side: 'front', position: 0, kind: 'text', value: '/breik/', audioPath: null },
+    { id: null, side: 'front', position: 2, kind: 'text', value: '   ', audioPath: null },
+    { id: null, side: 'back', position: 1, kind: 'text', value: 'break-broke-broken', audioPath: null },
   ],
   { frontSide: 'front', frontPosition: 1, backSide: 'back', backPosition: 0 }
 );
@@ -449,12 +452,12 @@ check(
 const queued = () => loadDueCards(fieldDeck.id, now).find((card) => card.cardId === fieldCard.id);
 
 check('przod czyta sie w kolejnosci z edytora, bez pustego pola', queued()?.frontLines, [
-  { text: '/breik/', base: false },
-  { text: 'to break', base: true },
+  { text: '/breik/', base: false, audioPath: null },
+  { text: 'to break', base: true, audioPath: null },
 ]);
 check('tyl tak samo', queued()?.backLines, [
-  { text: 'lamac', base: true },
-  { text: 'break-broke-broken', base: false },
+  { text: 'lamac', base: true, audioPath: null },
+  { text: 'break-broke-broken', base: false, audioPath: null },
 ]);
 
 const rows = getCardFields(fieldCard.id);
@@ -467,20 +470,20 @@ const blank = rows.find((field) => field.value === '')!;
 saveCardFields(
   fieldCard.id,
   [
-    { id: blank.id, side: 'front', position: 0, value: '' },
-    { id: pronunciation.id, side: 'back', position: 0, value: '/breik/' },
-    { id: forms.id, side: 'back', position: 2, value: 'break-broke-broken' },
+    { id: blank.id, side: 'front', position: 0, kind: 'text', value: '', audioPath: null },
+    { id: pronunciation.id, side: 'back', position: 0, kind: 'text', value: '/breik/', audioPath: null },
+    { id: forms.id, side: 'back', position: 2, kind: 'text', value: 'break-broke-broken', audioPath: null },
   ],
   { frontSide: 'front', frontPosition: 1, backSide: 'back', backPosition: 1 }
 );
 
 check('po przestawieniu przod ma tylko pole podstawowe', queued()?.frontLines, [
-  { text: 'to break', base: true },
+  { text: 'to break', base: true, audioPath: null },
 ]);
 check('a pole przeniesione czyta sie na tyle, nad podstawowym', queued()?.backLines, [
-  { text: '/breik/', base: false },
-  { text: 'lamac', base: true },
-  { text: 'break-broke-broken', base: false },
+  { text: '/breik/', base: false, audioPath: null },
+  { text: 'lamac', base: true, audioPath: null },
+  { text: 'break-broke-broken', base: false, audioPath: null },
 ]);
 
 check('pole wyrzucone z listy znika z karty', getCardFields(fieldCard.id).length, 3);
@@ -503,7 +506,7 @@ const emptyFrontCard = createCard(
   'to run',
   'biegac',
   now,
-  [{ id: null, side: 'back', position: 2, value: 'ran / run' }],
+  [{ id: null, side: 'back', position: 2, kind: 'text', value: 'ran / run', audioPath: null }],
   { frontSide: 'back', frontPosition: 0, backSide: 'back', backPosition: 1 }
 );
 
@@ -512,9 +515,9 @@ const emptyFrontQueued = () =>
 
 check('przod bez zadnego pola nie ma linii', emptyFrontQueued()?.frontLines, []);
 check('a caly uklad czyta sie z tylu', emptyFrontQueued()?.backLines, [
-  { text: 'to run', base: true },
-  { text: 'biegac', base: true },
-  { text: 'ran / run', base: false },
+  { text: 'to run', base: true, audioPath: null },
+  { text: 'biegac', base: true, audioPath: null },
+  { text: 'ran / run', base: false, audioPath: null },
 ]);
 
 group('Przenosiny a pola karty');
@@ -527,15 +530,15 @@ check(
   'uklad karty przezywa przenosiny w calosci',
   loadDueCards(fieldTarget.id, now).find((card) => card.cardId === fieldCard.id)?.backLines,
   [
-    { text: '/breik/', base: false },
-    { text: 'lamac', base: true },
-    { text: 'break-broke-broken', base: false },
+    { text: '/breik/', base: false, audioPath: null },
+    { text: 'lamac', base: true, audioPath: null },
+    { text: 'break-broke-broken', base: false, audioPath: null },
   ]
 );
 
 check('usuniecie karty zabiera jej pola', (() => {
   const throwaway = createCard(fieldTarget.id, 'x', 'X', now, [
-    { id: null, side: 'front', position: 1, value: 'do skasowania' },
+    { id: null, side: 'front', position: 1, kind: 'text', value: 'do skasowania', audioPath: null },
   ]);
 
   deleteCard(throwaway.id);
@@ -547,8 +550,8 @@ group('Wyszukiwanie obejmuje pola dodatkowe');
 const searchDeck = createDeck({ name: 'Szukanie', newPerDay: 10, reviewsPerDay: 10 });
 
 createCard(searchDeck.id, 'to break', 'lamac', now, [
-  { id: null, side: 'front', position: 1, value: '/breik/' },
-  { id: null, side: 'back', position: 1, value: 'break-broke-broken' },
+  { id: null, side: 'front', position: 1, kind: 'text', value: '/breik/', audioPath: null },
+  { id: null, side: 'back', position: 1, kind: 'text', value: 'break-broke-broken', audioPath: null },
 ]);
 createCard(searchDeck.id, 'to run', 'biegac', now, []);
 
@@ -583,3 +586,42 @@ check(
   filterCards(searchRows, 'biegac').map((card) => card.front),
   ['to run']
 );
+
+group('Pola z dzwiekiem');
+
+const audioDeck = createDeck({ name: 'Z dzwiekiem', newPerDay: 10, reviewsPerDay: 10 });
+
+const audioCard = createCard(audioDeck.id, 'to break', 'lamac', now, [
+  { id: null, side: 'front', position: 1, kind: 'audio', value: 'break.m4a', audioPath: 'a1.m4a' },
+  { id: null, side: 'back', position: 1, kind: 'audio', value: 'lamac.m4a', audioPath: 'a2.m4a' },
+]);
+
+check(
+  'rodzaj i sciezka pliku zapisane przy polu',
+  getCardFields(audioCard.id).map((field) => [field.kind, field.value, field.audioPath]),
+  [
+    ['audio', 'break.m4a', 'a1.m4a'],
+    ['audio', 'lamac.m4a', 'a2.m4a'],
+  ]
+);
+
+const audioQueued = () =>
+  loadDueCards(audioDeck.id, now).find((card) => card.cardId === audioCard.id);
+
+check('linia dzwieku niesie sciezke pliku', audioQueued()?.frontLines, [
+  { text: 'to break', base: true, audioPath: null },
+  { text: 'break.m4a', base: false, audioPath: 'a1.m4a' },
+]);
+
+check('pliki karty do posprzatania', cardAudioPaths(audioCard.id).sort(), ['a1.m4a', 'a2.m4a']);
+check('pliki calej talii', deckAudioPaths(audioDeck.id).sort(), ['a1.m4a', 'a2.m4a']);
+
+// A field whose file was cleared shows nothing — like an empty text box.
+saveCardFields(audioCard.id, [
+  { id: getCardFields(audioCard.id)[0].id, side: 'front', position: 1, kind: 'audio', value: 'break.m4a', audioPath: null },
+]);
+
+check('pole audio bez pliku nie trafia na karte', audioQueued()?.frontLines, [
+  { text: 'to break', base: true, audioPath: null },
+]);
+check('i nie ma czego kasowac', cardAudioPaths(audioCard.id), []);

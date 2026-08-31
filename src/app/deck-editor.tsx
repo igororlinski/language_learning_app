@@ -12,6 +12,7 @@ import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import {
   createDeck,
+  deckAudioPaths,
   deleteDeck,
   getDeck,
   newCardFields,
@@ -27,6 +28,7 @@ import {
   type NewCardPlacement,
 } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
+import { deleteAudio } from '@/lib/audio-files';
 import type { BaseKind } from '@/lib/card-layout';
 import {
   BOUNDARY,
@@ -119,7 +121,14 @@ export default function DeckEditorScreen() {
 
   const addField = (side: 'front' | 'back') => {
     nextKey.current += 1;
-    const added: Row = { key: `new-${nextKey.current}`, kind: 'extra', id: null, value: '' };
+    const added: Row = {
+      key: `new-${nextKey.current}`,
+      kind: 'extra',
+      id: null,
+      field: 'text',
+      value: '',
+      audioPath: null,
+    };
 
     setRows((current) => {
       const boundary = current.findIndex((row) => row.key === BOUNDARY);
@@ -200,7 +209,10 @@ export default function DeckEditorScreen() {
         text: 'Usuń',
         style: 'destructive',
         onPress: () => {
+          // The audio copies are files, not rows, so the cascade misses them.
+          const paths = deckAudioPaths(deckId);
           deleteDeck(deckId);
+          deleteAudio(paths);
           router.dismissTo('/');
         },
       },
