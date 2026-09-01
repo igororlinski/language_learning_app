@@ -90,18 +90,20 @@ export type LineMedia = { kind: MediaKind; fileName: string };
 export type CardLine = { text: string; base: boolean; media: LineMedia | null };
 
 /**
- * The lines one face shows during review. Extras with nothing in them are
- * dropped — an empty text box, or a media field whose file went missing. They
- * still exist on the card and hold their place in the editor, they just have
- * nothing to show. A face with no pieces at all renders as nothing, which is a
- * layout the editor allows on purpose.
+ * The lines one face shows during review. Anything with nothing in it is
+ * dropped — an empty text box, or a media field whose file went missing. That
+ * includes the **mandatory fields**: only the question has to be filled in, so
+ * a card with no answer typed simply shows nothing on its back rather than a
+ * blank line where text would be. They all still exist on the card and hold
+ * their place in the editor, they just have nothing to show. A face with no
+ * pieces at all renders as nothing, which is a layout the editor allows on
+ * purpose.
  */
 export function sideLines(pieces: LayoutPiece[], side: FieldSide): CardLine[] {
   return piecesOnSide(pieces, side)
-    .filter((piece) => {
-      if (piece.base !== null) return true;
-      return isMediaKind(piece.kind) ? Boolean(piece.mediaPath) : piece.value.trim().length > 0;
-    })
+    .filter((piece) =>
+      isMediaKind(piece.kind) ? Boolean(piece.mediaPath) : piece.value.trim().length > 0
+    )
     .map((piece) => ({
       text: piece.value,
       base: piece.base !== null,

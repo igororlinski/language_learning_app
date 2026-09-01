@@ -29,6 +29,7 @@ import {
   deleteCard,
   deleteCards,
   deleteDeck,
+  getCard,
   getCardFields,
   gradeCard,
   loadDueCards,
@@ -994,4 +995,30 @@ check(
   'ale w swoim dniu wraca',
   loadDueCards(stepDeck.id, new Date(snapshot(stepCard.id).due)).length,
   1
+);
+
+group('Karta zapisana bez odpowiedzi');
+
+const halfDeck = createDeck({ name: 'Bez odpowiedzi', newPerDay: 10, reviewsPerDay: 10 });
+const halfCard = createCard(halfDeck.id, 'to wonder', '', now, [
+  { id: null, side: 'back', position: 1, kind: 'text', value: 'zastanawiac sie', mediaPath: null },
+]);
+
+const halfQueued = () => loadDueCards(halfDeck.id, now).find((card) => card.cardId === halfCard.id);
+
+check('karta bez odpowiedzi zapisuje sie', getCard(halfCard.id)?.back, '');
+check('przod czyta sie normalnie', halfQueued()?.frontLines, [
+  { text: 'to wonder', base: true, media: null },
+]);
+// The empty mandatory field drops out the same way an empty extra one does.
+check('a tyl pokazuje tylko to, co ma tresc', halfQueued()?.backLines, [
+  { text: 'zastanawiac sie', base: false, media: null },
+]);
+
+const emptyBack = createCard(halfDeck.id, 'to hush', '', now);
+
+check(
+  'karta z pustym tylem nie ma ani jednej linii z tylu',
+  loadDueCards(halfDeck.id, now).find((card) => card.cardId === emptyBack.id)?.backLines,
+  []
 );

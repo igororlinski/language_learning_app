@@ -107,3 +107,19 @@ check('dziury w pozycjach nie psuja kolejnosci', texts(sideLines(gappy, 'front')
   '[to break]',
   'dol',
 ]);
+
+group('Karta bez odpowiedzi');
+
+// Only the question has to be filled in. A card with no answer typed shows
+// nothing on its back instead of a blank line where text would be.
+const noAnswer = cardPieces({ ...plainCard(), back: '' }, [
+  extra('back', 1, 'ran / run'),
+]);
+
+check('przod czyta sie normalnie', texts(sideLines(noAnswer, 'front')), ['[to break]']);
+check('a tyl pomija puste pole podstawowe', texts(sideLines(noAnswer, 'back')), ['ran / run']);
+
+const nothingAtAll = cardPieces({ ...plainCard(), back: '   ' }, []);
+
+check('tyl bez niczego nie ma ani jednej linii', sideLines(nothingAtAll, 'back'), []);
+check('ale pole nadal jest czescia ukladu', piecesOnSide(nothingAtAll, 'back').length, 1);

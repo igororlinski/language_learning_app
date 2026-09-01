@@ -175,7 +175,9 @@ export default function CardEditorScreen() {
   };
 
   const questionInput = useRef<TextInput>(null);
-  const canSave = front.trim().length > 0 && back.trim().length > 0;
+  // Only the question is required: plenty of cards are a prompt with a picture
+  // or a recording for an answer, and some are a prompt with nothing at all.
+  const canSave = front.trim().length > 0;
 
   const save = () => {
     if (!canSave) return;

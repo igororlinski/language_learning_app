@@ -520,11 +520,10 @@ export default function DeckScreen() {
               ) : null}
 
               <View style={styles.rowMain}>
-                <ThemedText numberOfLines={2} style={styles.front}>
+                {/* The question only. The list is for finding a card, and the
+                    answer is the one thing worth not being reminded of. */}
+                <ThemedText numberOfLines={3} style={styles.front}>
                   {item.front}
-                </ThemedText>
-                <ThemedText type="small" themeColor="textSecondary" numberOfLines={2}>
-                  {item.back}
                 </ThemedText>
               </View>
               <View style={styles.rowMeta}>
