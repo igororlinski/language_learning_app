@@ -78,6 +78,13 @@
       "when": 1788275538806,
       "tag": "0010_quiet_absorbing_man",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1788277984393,
+      "tag": "0011_violet_giant_man",
+      "breakpoints": true
     }
   ]
 }

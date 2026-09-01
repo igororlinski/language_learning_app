@@ -15,6 +15,19 @@ export function formatInterval(ms: number): string {
   return `${round1(value / YEAR)} lat`;
 }
 
+/**
+ * What a grading button promises.
+ *
+ * Once a card is scheduled in days it comes back at the start of that study
+ * day, so the time left on the clock is not the interval: answering at 20:00
+ * with a one-day interval means "tomorrow", eight hours away. The button says
+ * `1 dni`, because that is the promise being made — the clock reading would be
+ * true and useless.
+ */
+export function formatSchedule(scheduledDays: number, untilDueMs: number): string {
+  return scheduledDays >= 1 ? formatInterval(scheduledDays * DAY) : formatInterval(untilDueMs);
+}
+
 export function formatDue(due: Date | null, now = Date.now()): string {
   if (!due) return 'brak danych';
 

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lte, ne, sql, type SQLWrapper } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, lte, ne, or, sql, type SQLWrapper } from 'drizzle-orm';
 
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
 import { isMediaKind, type MediaKind } from '@/lib/media';
@@ -32,6 +32,7 @@ import {
   decks,
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
+  DEFAULT_RETENTION,
   fsrsState,
   reviewLogs,
   tags,
@@ -41,6 +42,7 @@ import {
   type FieldSide,
   type NewCardOrder,
   type NewCardPlacement,
+  type Retention,
 } from './schema';
 
 /** The transaction handle drizzle hands to a `db.transaction` callback. */
@@ -80,10 +82,32 @@ function inStates(states: State[]) {
     when ${fsrsState.state} in (${stateList(states)}) then 1 else 0 end), 0)`;
 }
 
+/**
+ * When a card is on offer.
+ *
+ * Its time having come is the obvious half. The other half is what Anki calls
+ * learning ahead: a card part-way through its **sub-day steps stays in the
+ * queue** — answering "za 10 minut" and stepping out of the session must not
+ * make the card unreachable for ten minutes, with the deck claiming there is
+ * nothing to study. It keeps coming back until an answer finally sends it a day
+ * or more out, which is the moment it has actually been learned.
+ *
+ * `scheduled_days < 1` is what "sub-day" means here, and it is the same number
+ * the grading buttons show. New cards match it too, but they are already due by
+ * the first half anyway.
+ */
+function isDue(nowMs: number) {
+  return or(lte(fsrsState.due, new Date(nowMs)), lt(fsrsState.scheduledDays, 1));
+}
+
+/** The same rule inline, for aggregates that count every card of a deck. */
+const DUE_SQL = (nowMs: number) =>
+  sql`(${fsrsState.due} <= ${nowMs} or ${fsrsState.scheduledDays} < 1)`;
+
 /** Same buckets, applying the due cut-off inline — for aggregates over every card. */
 function dueInStates(nowMs: number, states: State[]) {
   return sql<number>`coalesce(sum(case
-    when ${fsrsState.due} <= ${nowMs} and ${fsrsState.state} in (${stateList(states)})
+    when ${DUE_SQL(nowMs)} and ${fsrsState.state} in (${stateList(states)})
     then 1 else 0 end), 0)`;
 }
 
@@ -218,7 +242,7 @@ export function deckDueBreakdownQuery(deckId: number, nowMs: number, dayStartMs:
     })
     .from(cards)
     .innerJoin(fsrsState, eq(fsrsState.cardId, cards.id))
-    .where(and(eq(cards.deckId, deckId), lte(fsrsState.due, new Date(nowMs))));
+    .where(and(eq(cards.deckId, deckId), isDue(nowMs)));
 }
 
 /**
@@ -550,7 +574,7 @@ export function loadDueCards(
     })
     .from(cards)
     .innerJoin(fsrsState, eq(fsrsState.cardId, cards.id))
-    .where(and(eq(cards.deckId, deckId), lte(fsrsState.due, now)))
+    .where(and(eq(cards.deckId, deckId), isDue(now.getTime())))
     .orderBy(asc(fsrsState.due))
     .limit(limit)
     .all();
@@ -603,6 +627,11 @@ function withCardLines<T extends LayoutSource>(
   });
 }
 
+/** The deck's retention, for the intervals shown on the grading buttons. */
+export function deckRetention(deckId: number): number {
+  return getDeck(deckId)?.desiredRetention ?? DEFAULT_RETENTION;
+}
+
 /** What the deck may still hand out in the study day containing `now`. */
 export function deckAllowance(deckId: number, now: Date): Allowance {
   const dayStartMs = studyDayStart(now).getTime();
@@ -638,6 +667,7 @@ export type DeckInput = {
   reviewsPerDay: number;
   newCardPlacement?: NewCardPlacement;
   newCardOrder?: NewCardOrder;
+  desiredRetention?: Retention;
   /** The layout every new card in this deck starts from. */
   newCardLayout?: CardLayout;
 };
@@ -651,6 +681,7 @@ function deckValues(input: DeckInput) {
     reviewsPerDay: input.reviewsPerDay,
     newCardPlacement: input.newCardPlacement ?? DEFAULT_NEW_CARD_PLACEMENT,
     newCardOrder: input.newCardOrder ?? DEFAULT_NEW_CARD_ORDER,
+    desiredRetention: input.desiredRetention ?? DEFAULT_RETENTION,
     newFrontSide: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).frontSide,
     newFrontPosition: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).frontPosition,
     newBackSide: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).backSide,
@@ -921,7 +952,16 @@ export function gradeCard(cardId: number, grade: Grade, now = new Date()) {
     const row = tx.select().from(fsrsState).where(eq(fsrsState.cardId, cardId)).get();
     if (!row) throw new Error(`Brak stanu FSRS dla karty ${cardId}`);
 
-    const { card: next, log } = applyGrade(toFsrsCard(row), grade, now);
+    // Read here rather than passed in: the caller would have to carry it
+    // through the whole session, and a deck edited mid-session would be stale.
+    const deck = tx
+      .select({ retention: decks.desiredRetention })
+      .from(cards)
+      .innerJoin(decks, eq(decks.id, cards.deckId))
+      .where(eq(cards.id, cardId))
+      .get();
+
+    const { card: next, log } = applyGrade(toFsrsCard(row), grade, now, deck?.retention);
 
     tx.update(fsrsState).set(toStateValues(next)).where(eq(fsrsState.cardId, cardId)).run();
 

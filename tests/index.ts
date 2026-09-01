@@ -10,6 +10,7 @@ import './card-sort.test';
 import './field-rows.test';
 import './media.test';
 import './tags.test';
+import './study-day.test';
 import './data-layer.test';
 
 import { failureCount } from './harness';

@@ -9,7 +9,7 @@ import { DueCounts } from '@/components/due-counts';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { formatInterval } from '@/lib/format';
+import { formatSchedule } from '@/lib/format';
 import {
   countQueueStates,
   GRADE_LABELS,
@@ -45,6 +45,7 @@ export default function ReviewScreen() {
   const history = useReviewStore((s) => s.history);
   const undo = useReviewStore((s) => s.undo);
   const refreshCurrent = useReviewStore((s) => s.refreshCurrent);
+  const retention = useReviewStore((s) => s.retention);
 
   useEffect(() => {
     start(deckId);
@@ -69,8 +70,8 @@ export default function ReviewScreen() {
     if (!current) return null;
 
     const at = new Date();
-    return { at: at.getTime(), grades: previewGrades(current.fsrs, at) };
-  }, [current]);
+    return { at: at.getTime(), grades: previewGrades(current.fsrs, at, retention) };
+  }, [current, retention]);
 
   // Anki's bottom bar: what is still ahead in this session, by state.
   const remaining = useMemo(() => countQueueStates(queue.map((card) => card.fsrs.state)), [queue]);
@@ -131,7 +132,7 @@ export default function ReviewScreen() {
             {revealed && preview ? (
               <View style={styles.grades}>
                 {GRADES.map((grade) => {
-                  const next = preview.grades[grade].card.due.getTime() - preview.at;
+                  const next = preview.grades[grade].card;
                   return (
                     <Pressable
                       key={grade}
@@ -144,7 +145,7 @@ export default function ReviewScreen() {
                         {GRADE_LABELS[grade]}
                       </ThemedText>
                       <ThemedText type="small" style={styles.gradeInterval}>
-                        {formatInterval(next)}
+                        {formatSchedule(next.scheduled_days, next.due.getTime() - preview.at)}
                       </ThemedText>
                     </Pressable>
                   );

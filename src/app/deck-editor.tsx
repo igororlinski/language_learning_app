@@ -27,12 +27,16 @@ import {
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
   DEFAULT_NEW_PER_DAY,
+  DEFAULT_RETENTION,
   DEFAULT_REVIEWS_PER_DAY,
   type NewCardOrder,
   type NewCardPlacement,
+  type Retention,
+  RETENTIONS,
 } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
 import { MEDIA_NOUNS } from '@/lib/media';
+import { RETENTION_HINTS, RETENTION_LABELS } from '@/lib/scheduler';
 import { deleteMedia } from '@/lib/media-files';
 import type { BaseKind } from '@/lib/card-layout';
 import {
@@ -87,6 +91,12 @@ const ORDER_OPTIONS: PickerOption<NewCardOrder>[] = [
   },
 ];
 
+const RETENTION_OPTIONS: PickerOption<Retention>[] = RETENTIONS.map((value) => ({
+  value,
+  label: RETENTION_LABELS[value],
+  hint: RETENTION_HINTS[value],
+}));
+
 export default function DeckEditorScreen() {
   const theme = useTheme();
   const router = useRouter();
@@ -107,6 +117,9 @@ export default function DeckEditorScreen() {
   );
   const [newCardOrder, setNewCardOrder] = useState<NewCardOrder>(
     existing?.newCardOrder ?? DEFAULT_NEW_CARD_ORDER
+  );
+  const [retention, setRetention] = useState<Retention>(
+    (existing?.desiredRetention as Retention) ?? DEFAULT_RETENTION
   );
   // The deck's default card, arranged in the very same list the card editor
   // uses — only the boxes hold no text, because a template has none.
@@ -192,6 +205,7 @@ export default function DeckEditorScreen() {
       reviewsPerDay: toLimit(reviewsPerDay, DEFAULT_REVIEWS_PER_DAY),
       newCardPlacement,
       newCardOrder,
+      desiredRetention: retention,
       newCardLayout: placement,
     };
 
@@ -283,6 +297,17 @@ export default function DeckEditorScreen() {
           value={newCardOrder}
           options={ORDER_OPTIONS}
           onChange={setNewCardOrder}
+        />
+
+        <View style={styles.limits}>
+          <ThemedText type="smallBold">Odstępy powtórek</ThemedText>
+        </View>
+
+        <OptionPicker
+          label="Jak często wracają karty"
+          value={retention}
+          options={RETENTION_OPTIONS}
+          onChange={setRetention}
         />
 
         <View style={styles.limits}>

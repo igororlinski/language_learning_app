@@ -10,17 +10,47 @@ import {
   type ReviewLog,
 } from 'ts-fsrs';
 
-import type { FsrsStateRow, ReviewLog as ReviewLogRow } from '@/db/schema';
+import {
+  DEFAULT_RETENTION,
+  type FsrsStateRow,
+  type Retention,
+  type ReviewLog as ReviewLogRow,
+} from '@/db/schema';
+import { dueOnStudyDay } from '@/lib/study-day';
 
-export const fsrsParameters = generatorParameters({
-  // Target probability of recall when a card comes up again.
-  request_retention: 0.9,
-  enable_fuzz: true,
-  // Keeps Anki-style sub-day learning steps (1m / 10m) for new cards.
-  enable_short_term: true,
-});
+export const RETENTION_LABELS: Record<Retention, string> = {
+  0.9: 'Rzadkie powtórki',
+  0.94: 'Wyważone',
+  0.97: 'Częste powtórki',
+};
 
-export const scheduler = fsrs(fsrsParameters);
+export const RETENTION_HINTS: Record<Retention, string> = {
+  0.9: 'Najdłuższe odstępy — mniej pracy dziennie, więcej zapomnianych kart.',
+  0.94: 'Domyślne. Pierwsze „Łatwe" wraca po kilku dniach.',
+  0.97: 'Najkrótsze odstępy — najwięcej powtórek, najmniej wypadków z pamięci.',
+};
+
+const parametersFor = (retention: number) =>
+  generatorParameters({
+    request_retention: retention,
+    enable_fuzz: true,
+    // Keeps Anki-style sub-day learning steps (1m / 10m) for new cards.
+    enable_short_term: true,
+  });
+
+// One engine per retention, built once: `fsrs()` is not free and a session
+// asks for the same one on every card.
+const engines = new Map<number, ReturnType<typeof fsrs>>();
+
+export function schedulerFor(retention: number = DEFAULT_RETENTION) {
+  const existing = engines.get(retention);
+  if (existing) return existing;
+
+  const engine = fsrs(parametersFor(retention));
+  engines.set(retention, engine);
+
+  return engine;
+}
 
 export const GRADES = [Rating.Again, Rating.Hard, Rating.Good, Rating.Easy] as const;
 
@@ -73,13 +103,40 @@ export function toStateValues(card: FsrsCard): Omit<FsrsStateRow, 'cardId'> {
   };
 }
 
-/** The four outcomes shown on the grading buttons, without committing any of them. */
-export function previewGrades(card: FsrsCard, now: Date): Record<Grade, RecordLogItem> {
-  return scheduler.repeat(card, now);
+/**
+ * ts-fsrs hands back `due = now + interval`, so a one-day interval would mean
+ * "in twenty four hours" and every card would settle on its own hour of the
+ * day. Anything counted in days is moved to the start of that study day
+ * instead — see `dueOnStudyDay`. Both the preview and the commit go through
+ * here, so the button cannot promise one thing and the save do another.
+ */
+function onStudyDay(item: RecordLogItem, now: Date): RecordLogItem {
+  const due = dueOnStudyDay(item.card.due, item.card.scheduled_days, now);
+
+  return due === item.card.due ? item : { card: { ...item.card, due }, log: item.log };
 }
 
-export function applyGrade(card: FsrsCard, grade: Grade, now: Date): RecordLogItem {
-  return scheduler.next(card, now, grade);
+/** The four outcomes shown on the grading buttons, without committing any of them. */
+export function previewGrades(
+  card: FsrsCard,
+  now: Date,
+  retention?: number
+): Record<Grade, RecordLogItem> {
+  const preview = schedulerFor(retention).repeat(card, now);
+
+  return GRADES.reduce(
+    (all, grade) => ({ ...all, [grade]: onStudyDay(preview[grade], now) }),
+    {} as Record<Grade, RecordLogItem>
+  );
+}
+
+export function applyGrade(
+  card: FsrsCard,
+  grade: Grade,
+  now: Date,
+  retention?: number
+): RecordLogItem {
+  return onStudyDay(schedulerFor(retention).next(card, now, grade), now);
 }
 
 /** Maps a `review_logs` row back onto the ts-fsrs `ReviewLog` shape. */
@@ -105,7 +162,9 @@ export function toReviewLog(row: Omit<ReviewLogRow, 'id' | 'cardId'>): ReviewLog
  * behaviour for an undo button — the card lands back in the queue right away.
  */
 export function rollbackGrade(card: FsrsCard, log: ReviewLog): FsrsCard {
-  return scheduler.rollback(card, log);
+  // Undoing reads the log rather than the model, so the retention in force
+  // makes no difference here.
+  return schedulerFor().rollback(card, log);
 }
 
 /** The three Anki-style queue counters. */

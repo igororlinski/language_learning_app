@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import {
+  deckRetention,
   getCardLines,
   gradeCard,
   loadDueCards,
@@ -54,6 +55,11 @@ const emptySession = () => ({
 
 type ReviewStore = {
   deckId: number | null;
+  /**
+   * The deck's retention, so the grading buttons preview exactly the intervals
+   * the answer will commit. Read once, when the session starts.
+   */
+  retention: number | undefined;
   queue: ReviewCard[];
   revealed: boolean;
   /** Total answers given, including repeats of the same card. */
@@ -72,11 +78,13 @@ type ReviewStore = {
 
 export const useReviewStore = create<ReviewStore>((set, get) => ({
   deckId: null,
+  retention: undefined,
   ...emptySession(),
 
   start: (deckId) => {
     set({
       deckId,
+      retention: deckRetention(deckId),
       ...emptySession(),
       queue: loadDueCards(deckId, new Date()).map(toReviewCard),
     });

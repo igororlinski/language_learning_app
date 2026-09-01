@@ -65,6 +65,7 @@ import migration0007 from '../drizzle/0007_bouncy_the_enforcers.sql';
 import migration0008 from '../drizzle/0008_mean_lady_mastermind.sql';
 import migration0009 from '../drizzle/0009_curved_jazinda.sql';
 import migration0010 from '../drizzle/0010_quiet_absorbing_man.sql';
+import migration0011 from '../drizzle/0011_violet_giant_man.sql';
 
 for (const migration of [
   migration0000,
@@ -78,6 +79,7 @@ for (const migration of [
   migration0008,
   migration0009,
   migration0010,
+  migration0011,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -929,3 +931,67 @@ deleteCards([tagged.id, alsoTagged.id]);
 setCardTagNames(createCard(tagDeck.id, 'nowa', 'new', now).id, []);
 
 check('kaskada zabiera powiazania', allTagsQuery().all(), []);
+
+group('Termin powtorki laduje na granicy dnia');
+
+const dayDeck = createDeck({ name: 'Terminy', newPerDay: 50, reviewsPerDay: 50 });
+const evening = at(20, 30);
+const easyCard = createCard(dayDeck.id, 'to plan', 'planowac', now);
+const againCard = createCard(dayDeck.id, 'to stay', 'zostac', now);
+
+gradeCard(easyCard.id, Rating.Easy, evening);
+gradeCard(againCard.id, Rating.Again, evening);
+
+const easyDue = new Date(snapshot(easyCard.id).due);
+const againDue = new Date(snapshot(againCard.id).due);
+
+// Answered at 20:30, so a day-scale interval must not come back at 20:30.
+check(
+  'karta liczona w dniach wraca rowno o 4:00',
+  [easyDue.getHours(), easyDue.getMinutes(), easyDue.getSeconds()],
+  [4, 0, 0]
+);
+check('i dopiero po dniu nauki, w ktorym ja oceniono', easyDue.getTime() > evening.getTime(), true);
+check(
+  'odstep w dniach zgadza sie z granica dnia',
+  easyDue.getTime(),
+  new Date(
+    studyDayStart(evening).getFullYear(),
+    studyDayStart(evening).getMonth(),
+    studyDayStart(evening).getDate() + snapshot(easyCard.id).scheduledDays,
+    4
+  ).getTime()
+);
+
+// A learning step keeps its exact minute, or the card would vanish from the
+// session that is teaching it.
+check('krok nauki zostaje w tej samej godzinie', againDue.getHours(), evening.getHours());
+check('i wraca w ciagu godziny', againDue.getTime() - evening.getTime() < 60 * 60 * 1000, true);
+
+group('Kroki krotsze niz dzien nie znikaja z kolejki');
+
+const stepDeck = createDeck({ name: 'Kroki', newPerDay: 50, reviewsPerDay: 50 });
+const stepCard = createCard(stepDeck.id, 'to learn', 'uczyc sie', now);
+
+gradeCard(stepCard.id, Rating.Again, now);
+
+// The step is minutes away, and that used to take the card off the deck for
+// exactly as long — the session would say there was nothing left to study.
+check('krok nauki ma termin w przyszlosci', snapshot(stepCard.id).due > now.getTime(), true);
+check('a mimo to karta czeka w kolejce', loadDueCards(stepDeck.id, now).length, 1);
+check('i widac ja w licznikach', breakdown(stepDeck.id, now).learningCount, 1);
+check('lista talii mowi to samo', fromList(stepDeck.id, now), breakdown(stepDeck.id, now));
+
+// Graduating is what takes it out: an interval of a day or more.
+gradeCard(stepCard.id, Rating.Easy, now);
+
+check('po wyjsciu na dni odstep siega doby', snapshot(stepCard.id).scheduledDays >= 1, true);
+check('i dopiero wtedy karta znika z kolejki', loadDueCards(stepDeck.id, now).length, 0);
+check('licznikow tez juz nie obciaza', totalDue(breakdown(stepDeck.id, now)), 0);
+
+// A card whose interval is counted in days waits for its day, as before.
+check(
+  'ale w swoim dniu wraca',
+  loadDueCards(stepDeck.id, new Date(snapshot(stepCard.id).due)).length,
+  1
+);

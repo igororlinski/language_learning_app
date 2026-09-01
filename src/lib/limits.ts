@@ -1,17 +1,8 @@
 import { QUEUE_STATES, State, type QueueCounts } from '@/lib/scheduler';
 
-/**
- * Anki rolls the study day over at 4 AM, not at midnight, so a session that
- * runs past midnight still counts against the day it started in.
- */
-export const DAY_ROLLOVER_HOUR = 4;
-
-export function studyDayStart(now: Date): Date {
-  const start = new Date(now);
-  start.setHours(DAY_ROLLOVER_HOUR, 0, 0, 0);
-  if (now.getTime() < start.getTime()) start.setDate(start.getDate() - 1);
-  return start;
-}
+// The day boundary itself lives in its own module: the scheduler needs it too,
+// and it is what this one is built on.
+export { DAY_ROLLOVER_HOUR, studyDayStart } from '@/lib/study-day';
 
 export type DailyLimits = { newPerDay: number; reviewsPerDay: number };
 export type DoneToday = { newDoneToday: number; reviewsDoneToday: number };

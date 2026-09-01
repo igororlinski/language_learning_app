@@ -12,6 +12,7 @@ import m0007 from './0007_bouncy_the_enforcers.sql';
 import m0008 from './0008_mean_lady_mastermind.sql';
 import m0009 from './0009_curved_jazinda.sql';
 import m0010 from './0010_quiet_absorbing_man.sql';
+import m0011 from './0011_violet_giant_man.sql';
 
   export default {
     journal,
@@ -26,7 +27,8 @@ m0006,
 m0007,
 m0008,
 m0009,
-m0010
+m0010,
+m0011
     }
   }
   

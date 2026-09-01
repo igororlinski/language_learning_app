@@ -4,14 +4,14 @@ import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
-export type PickerOption<T extends string> = {
+export type PickerOption<T extends string | number> = {
   value: T;
   label: string;
   /** One line under the label, for what the option actually does. */
   hint?: string;
 };
 
-export type OptionPickerProps<T extends string> = {
+export type OptionPickerProps<T extends string | number> = {
   label: string;
   hint?: string;
   value: T;
@@ -23,7 +23,7 @@ export type OptionPickerProps<T extends string> = {
  * Vertical radio group. Stacked rather than segmented because the labels are
  * whole Polish phrases, which a row of chips would truncate on a phone.
  */
-export function OptionPicker<T extends string>({
+export function OptionPicker<T extends string | number>({
   label,
   hint,
   value,
