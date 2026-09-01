@@ -7,6 +7,7 @@ import { ScrollViewContainer } from 'react-native-reorderable-list';
 import { AddFieldSheet } from '@/components/add-field-sheet';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
+import { Dropdown, type DropdownOption } from '@/components/dropdown';
 import { OptionPicker, type PickerOption } from '@/components/option-picker';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
@@ -27,16 +28,28 @@ import {
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
   DEFAULT_NEW_PER_DAY,
-  DEFAULT_RETENTION,
   DEFAULT_REVIEWS_PER_DAY,
   type NewCardOrder,
   type NewCardPlacement,
-  type Retention,
-  RETENTIONS,
 } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
 import { MEDIA_NOUNS } from '@/lib/media';
-import { RETENTION_HINTS, RETENTION_LABELS } from '@/lib/scheduler';
+import {
+  DEFAULT_LEARNING_STEPS,
+  DEFAULT_MAXIMUM_INTERVAL,
+  DEFAULT_RELEARNING_STEPS,
+  DEFAULT_RETENTION,
+  CUSTOM_INTERVAL,
+  formatRetention,
+  isValidSteps,
+  isPresetInterval,
+  MAXIMUM_INTERVAL_LABELS,
+  MAXIMUM_INTERVALS,
+  NO_INTERVAL_LIMIT,
+  parseMaximumInterval,
+  RETENTIONS,
+} from '@/lib/fsrs-options';
+import { firstEasyInterval } from '@/lib/scheduler';
 import { deleteMedia } from '@/lib/media-files';
 import type { BaseKind } from '@/lib/card-layout';
 import {
@@ -91,11 +104,32 @@ const ORDER_OPTIONS: PickerOption<NewCardOrder>[] = [
   },
 ];
 
-const RETENTION_OPTIONS: PickerOption<Retention>[] = RETENTIONS.map((value) => ({
-  value,
-  label: RETENTION_LABELS[value],
-  hint: RETENTION_HINTS[value],
-}));
+const INTERVAL_OPTIONS: DropdownOption<string>[] = [
+  ...MAXIMUM_INTERVALS.map((days) => ({
+    value: String(days),
+    label: MAXIMUM_INTERVAL_LABELS[days],
+  })),
+  { value: CUSTOM_INTERVAL, label: 'Własne…' },
+];
+
+/**
+ * Retention is a number nobody has a feel for, so each choice is labelled with
+ * what it actually does: how far out the first "Łatwe" on a new card lands.
+ * Measured through the scheduler rather than written down, so it stays true if
+ * ts-fsrs changes underneath.
+ */
+const retentionOptions = (scheduling: {
+  maximumInterval: number;
+  learningSteps: string;
+  relearningSteps: string;
+}): DropdownOption<string>[] =>
+  RETENTIONS.map((value) => ({
+    value: String(value),
+    label: `${formatRetention(value)} — pierwsze „Łatwe" za ${firstEasyInterval({
+      ...scheduling,
+      desiredRetention: value,
+    })} dni`,
+  }));
 
 export default function DeckEditorScreen() {
   const theme = useTheme();
@@ -118,9 +152,42 @@ export default function DeckEditorScreen() {
   const [newCardOrder, setNewCardOrder] = useState<NewCardOrder>(
     existing?.newCardOrder ?? DEFAULT_NEW_CARD_ORDER
   );
-  const [retention, setRetention] = useState<Retention>(
-    (existing?.desiredRetention as Retention) ?? DEFAULT_RETENTION
+  const [retention, setRetention] = useState(existing?.desiredRetention ?? DEFAULT_RETENTION);
+  const [maximumInterval, setMaximumInterval] = useState(
+    existing?.maximumInterval ?? DEFAULT_MAXIMUM_INTERVAL
   );
+
+  // Held apart from the number so the field does not vanish mid-typing the
+  // moment the digits happen to spell one of the presets.
+  const [customInterval, setCustomInterval] = useState(
+    existing ? !isPresetInterval(existing.maximumInterval) : false
+  );
+  const [customDays, setCustomDays] = useState(String(existing?.maximumInterval ?? ''));
+
+  const pickInterval = (value: string) => {
+    if (value === CUSTOM_INTERVAL) {
+      setCustomInterval(true);
+      setCustomDays(String(maximumInterval));
+      return;
+    }
+
+    setCustomInterval(false);
+    setMaximumInterval(Number(value));
+  };
+
+  const typedDays = parseMaximumInterval(customDays);
+  const savedInterval = customInterval ? (typedDays ?? maximumInterval) : maximumInterval;
+  const [learningSteps, setLearningSteps] = useState(
+    existing?.learningSteps ?? DEFAULT_LEARNING_STEPS
+  );
+  const [relearningSteps, setRelearningSteps] = useState(
+    existing?.relearningSteps ?? DEFAULT_RELEARNING_STEPS
+  );
+
+  const stepsOk =
+    isValidSteps(learningSteps) &&
+    isValidSteps(relearningSteps) &&
+    (!customInterval || typedDays !== null);
   // The deck's default card, arranged in the very same list the card editor
   // uses — only the boxes hold no text, because a template has none.
   const [rows, setRows] = useState<Row[]>(() =>
@@ -184,7 +251,7 @@ export default function DeckEditorScreen() {
     );
   };
 
-  const canSave = name.trim().length > 0;
+  const canSave = name.trim().length > 0 && stepsOk;
 
   const save = () => {
     if (!canSave) return;
@@ -205,7 +272,12 @@ export default function DeckEditorScreen() {
       reviewsPerDay: toLimit(reviewsPerDay, DEFAULT_REVIEWS_PER_DAY),
       newCardPlacement,
       newCardOrder,
-      desiredRetention: retention,
+      scheduling: {
+        desiredRetention: retention,
+        maximumInterval: savedInterval,
+        learningSteps: learningSteps.trim().toLowerCase(),
+        relearningSteps: relearningSteps.trim().toLowerCase(),
+      },
       newCardLayout: placement,
     };
 
@@ -300,15 +372,56 @@ export default function DeckEditorScreen() {
         />
 
         <View style={styles.limits}>
-          <ThemedText type="smallBold">Odstępy powtórek</ThemedText>
+          <ThemedText type="smallBold">Algorytm powtórek</ThemedText>
         </View>
 
-        <OptionPicker
-          label="Jak często wracają karty"
-          value={retention}
-          options={RETENTION_OPTIONS}
-          onChange={setRetention}
+        <TextField
+          label="Nowa karta wraca po"
+          value={learningSteps}
+          onChangeText={setLearningSteps}
+          placeholder={DEFAULT_LEARNING_STEPS}
+          autoCapitalize="none"
+          autoCorrect={false}
+          error={isValidSteps(learningSteps) ? undefined : 'np. 1m 10m — rosnąco, m/h/d'}
         />
+        <TextField
+          label="Zapomniana karta wraca po"
+          value={relearningSteps}
+          onChangeText={setRelearningSteps}
+          placeholder={DEFAULT_RELEARNING_STEPS}
+          autoCapitalize="none"
+          autoCorrect={false}
+          error={isValidSteps(relearningSteps) ? undefined : 'np. 10m — rosnąco, m/h/d'}
+        />
+
+        <Dropdown
+          label="Jak często wracają karty"
+          value={String(retention)}
+          options={retentionOptions({ maximumInterval, learningSteps, relearningSteps })}
+          onChange={(value) => setRetention(Number(value))}
+        />
+
+        <Dropdown
+          label="Karta nie zniknie na dłużej niż"
+          value={customInterval ? CUSTOM_INTERVAL : String(maximumInterval)}
+          options={INTERVAL_OPTIONS}
+          onChange={pickInterval}
+        />
+
+        {customInterval ? (
+          <TextField
+            label="Ile dni"
+            value={customDays}
+            onChangeText={setCustomDays}
+            placeholder="np. 90"
+            keyboardType="number-pad"
+            error={
+              parseMaximumInterval(customDays) === null
+                ? `liczba dni, od 1 do ${NO_INTERVAL_LIMIT}`
+                : undefined
+            }
+          />
+        ) : null}
 
         <View style={styles.limits}>
           <ThemedText type="smallBold">Domyślny układ nowej karty</ThemedText>

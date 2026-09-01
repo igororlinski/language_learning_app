@@ -2,6 +2,7 @@ import { and, asc, desc, eq, inArray, lt, lte, ne, or, sql, type SQLWrapper } fr
 
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
 import { isMediaKind, type MediaKind } from '@/lib/media';
+import { DEFAULT_SCHEDULING, type DeckScheduling } from '@/lib/fsrs-options';
 import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 
 import {
@@ -32,7 +33,6 @@ import {
   decks,
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
-  DEFAULT_RETENTION,
   fsrsState,
   reviewLogs,
   tags,
@@ -42,7 +42,6 @@ import {
   type FieldSide,
   type NewCardOrder,
   type NewCardPlacement,
-  type Retention,
 } from './schema';
 
 /** The transaction handle drizzle hands to a `db.transaction` callback. */
@@ -627,9 +626,17 @@ function withCardLines<T extends LayoutSource>(
   });
 }
 
-/** The deck's retention, for the intervals shown on the grading buttons. */
-export function deckRetention(deckId: number): number {
-  return getDeck(deckId)?.desiredRetention ?? DEFAULT_RETENTION;
+/** What the deck tells FSRS — read once per session for the interval preview. */
+export function deckScheduling(deckId: number): DeckScheduling {
+  const deck = getDeck(deckId);
+  if (!deck) return DEFAULT_SCHEDULING;
+
+  return {
+    desiredRetention: deck.desiredRetention,
+    maximumInterval: deck.maximumInterval,
+    learningSteps: deck.learningSteps,
+    relearningSteps: deck.relearningSteps,
+  };
 }
 
 /** What the deck may still hand out in the study day containing `now`. */
@@ -667,7 +674,7 @@ export type DeckInput = {
   reviewsPerDay: number;
   newCardPlacement?: NewCardPlacement;
   newCardOrder?: NewCardOrder;
-  desiredRetention?: Retention;
+  scheduling?: DeckScheduling;
   /** The layout every new card in this deck starts from. */
   newCardLayout?: CardLayout;
 };
@@ -681,7 +688,7 @@ function deckValues(input: DeckInput) {
     reviewsPerDay: input.reviewsPerDay,
     newCardPlacement: input.newCardPlacement ?? DEFAULT_NEW_CARD_PLACEMENT,
     newCardOrder: input.newCardOrder ?? DEFAULT_NEW_CARD_ORDER,
-    desiredRetention: input.desiredRetention ?? DEFAULT_RETENTION,
+    ...(input.scheduling ?? DEFAULT_SCHEDULING),
     newFrontSide: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).frontSide,
     newFrontPosition: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).frontPosition,
     newBackSide: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).backSide,
@@ -955,13 +962,18 @@ export function gradeCard(cardId: number, grade: Grade, now = new Date()) {
     // Read here rather than passed in: the caller would have to carry it
     // through the whole session, and a deck edited mid-session would be stale.
     const deck = tx
-      .select({ retention: decks.desiredRetention })
+      .select({
+        desiredRetention: decks.desiredRetention,
+        maximumInterval: decks.maximumInterval,
+        learningSteps: decks.learningSteps,
+        relearningSteps: decks.relearningSteps,
+      })
       .from(cards)
       .innerJoin(decks, eq(decks.id, cards.deckId))
       .where(eq(cards.id, cardId))
       .get();
 
-    const { card: next, log } = applyGrade(toFsrsCard(row), grade, now, deck?.retention);
+    const { card: next, log } = applyGrade(toFsrsCard(row), grade, now, deck ?? undefined);
 
     tx.update(fsrsState).set(toStateValues(next)).where(eq(fsrsState.cardId, cardId)).run();
 

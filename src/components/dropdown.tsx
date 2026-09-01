@@ -8,6 +8,8 @@ import { useTheme } from '@/hooks/use-theme';
 export type DropdownOption<T extends string> = { value: T; label: string };
 
 export type DropdownProps<T extends string> = {
+  /** Shown above the field, the way `TextField` shows its own. */
+  label?: string;
   value: T;
   options: readonly DropdownOption<T>[];
   onChange: (value: T) => void;
@@ -26,6 +28,7 @@ export type DropdownProps<T extends string> = {
  * be drawn under the rows or clipped away entirely.
  */
 export function Dropdown<T extends string>({
+  label,
   value,
   options,
   onChange,
@@ -43,7 +46,12 @@ export function Dropdown<T extends string>({
   };
 
   return (
-    <View style={style}>
+    <View style={[styles.wrapper, style]}>
+      {label ? (
+        <ThemedText type="smallBold" themeColor="textSecondary">
+          {label}
+        </ThemedText>
+      ) : null}
       <Pressable
         onPress={() => setOpen((was) => !was)}
         accessibilityRole="button"
@@ -109,6 +117,9 @@ export function Dropdown<T extends string>({
 }
 
 const styles = StyleSheet.create({
+  wrapper: {
+    gap: Spacing.two,
+  },
   field: {
     flexDirection: 'row',
     alignItems: 'center',

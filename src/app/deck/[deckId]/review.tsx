@@ -45,7 +45,7 @@ export default function ReviewScreen() {
   const history = useReviewStore((s) => s.history);
   const undo = useReviewStore((s) => s.undo);
   const refreshCurrent = useReviewStore((s) => s.refreshCurrent);
-  const retention = useReviewStore((s) => s.retention);
+  const scheduling = useReviewStore((s) => s.scheduling);
 
   useEffect(() => {
     start(deckId);
@@ -70,8 +70,8 @@ export default function ReviewScreen() {
     if (!current) return null;
 
     const at = new Date();
-    return { at: at.getTime(), grades: previewGrades(current.fsrs, at, retention) };
-  }, [current, retention]);
+    return { at: at.getTime(), grades: previewGrades(current.fsrs, at, scheduling) };
+  }, [current, scheduling]);
 
   // Anki's bottom bar: what is still ahead in this session, by state.
   const remaining = useMemo(() => countQueueStates(queue.map((card) => card.fsrs.state)), [queue]);

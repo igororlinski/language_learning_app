@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 import {
-  deckRetention,
+  deckScheduling,
   getCardLines,
   gradeCard,
   loadDueCards,
@@ -9,6 +9,7 @@ import {
   type DueCardRow,
 } from '@/db/queries';
 import type { CardLine } from '@/lib/card-layout';
+import type { DeckScheduling } from '@/lib/fsrs-options';
 import { Rating, State, toFsrsCard, type FsrsCard, type Grade } from '@/lib/scheduler';
 
 /**
@@ -56,10 +57,10 @@ const emptySession = () => ({
 type ReviewStore = {
   deckId: number | null;
   /**
-   * The deck's retention, so the grading buttons preview exactly the intervals
-   * the answer will commit. Read once, when the session starts.
+   * The deck's FSRS options, so the grading buttons preview exactly the
+   * intervals the answer will commit. Read once, when the session starts.
    */
-  retention: number | undefined;
+  scheduling: DeckScheduling | undefined;
   queue: ReviewCard[];
   revealed: boolean;
   /** Total answers given, including repeats of the same card. */
@@ -78,13 +79,13 @@ type ReviewStore = {
 
 export const useReviewStore = create<ReviewStore>((set, get) => ({
   deckId: null,
-  retention: undefined,
+  scheduling: undefined,
   ...emptySession(),
 
   start: (deckId) => {
     set({
       deckId,
-      retention: deckRetention(deckId),
+      scheduling: deckScheduling(deckId),
       ...emptySession(),
       queue: loadDueCards(deckId, new Date()).map(toReviewCard),
     });

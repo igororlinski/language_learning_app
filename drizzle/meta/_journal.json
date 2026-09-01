@@ -85,6 +85,13 @@
       "when": 1788277984393,
       "tag": "0011_violet_giant_man",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1788281497607,
+      "tag": "0012_cool_swordsman",
+      "breakpoints": true
     }
   ]
 }

@@ -10,44 +10,53 @@ import {
   type ReviewLog,
 } from 'ts-fsrs';
 
+import type { FsrsStateRow, ReviewLog as ReviewLogRow } from '@/db/schema';
 import {
-  DEFAULT_RETENTION,
-  type FsrsStateRow,
-  type Retention,
-  type ReviewLog as ReviewLogRow,
-} from '@/db/schema';
+  DEFAULT_LEARNING_STEPS,
+  DEFAULT_RELEARNING_STEPS,
+  DEFAULT_SCHEDULING,
+  schedulingKey,
+  stepsOrDefault,
+  type DeckScheduling,
+} from '@/lib/fsrs-options';
 import { dueOnStudyDay } from '@/lib/study-day';
 
-export const RETENTION_LABELS: Record<Retention, string> = {
-  0.9: 'Rzadkie powtórki',
-  0.94: 'Wyważone',
-  0.97: 'Częste powtórki',
-};
-
-export const RETENTION_HINTS: Record<Retention, string> = {
-  0.9: 'Najdłuższe odstępy — mniej pracy dziennie, więcej zapomnianych kart.',
-  0.94: 'Domyślne. Pierwsze „Łatwe" wraca po kilku dniach.',
-  0.97: 'Najkrótsze odstępy — najwięcej powtórek, najmniej wypadków z pamięci.',
-};
-
-const parametersFor = (retention: number) =>
+/**
+ * What is deliberately **not** here: `w`, the twenty one weights of the memory
+ * model. They are fitted to a person's review history, not chosen; editing them
+ * by hand is guessing, and a wrong value gives no signal — it just schedules
+ * worse for months. The answer for `w` is an optimiser over `review_logs`,
+ * which is logged in full from the first day precisely for that.
+ *
+ * `enable_fuzz` stays on and unexposed, as in Anki: it exists so cards answered
+ * on one day do not stay clumped on one day forever. `enable_short_term` stays
+ * on because the learning steps are what express it.
+ */
+const parametersFor = (scheduling: DeckScheduling) =>
   generatorParameters({
-    request_retention: retention,
+    request_retention: scheduling.desiredRetention,
+    maximum_interval: scheduling.maximumInterval,
+    learning_steps: stepsOrDefault(scheduling.learningSteps, DEFAULT_LEARNING_STEPS) as never,
+    relearning_steps: stepsOrDefault(
+      scheduling.relearningSteps,
+      DEFAULT_RELEARNING_STEPS
+    ) as never,
     enable_fuzz: true,
-    // Keeps Anki-style sub-day learning steps (1m / 10m) for new cards.
     enable_short_term: true,
   });
 
-// One engine per retention, built once: `fsrs()` is not free and a session
-// asks for the same one on every card.
-const engines = new Map<number, ReturnType<typeof fsrs>>();
+// One engine per set of options, built once: `fsrs()` is not free and a session
+// asks for the same one on every card. Keyed on the whole set — keying on the
+// retention alone would hand a deck with different steps somebody else's engine.
+const engines = new Map<string, ReturnType<typeof fsrs>>();
 
-export function schedulerFor(retention: number = DEFAULT_RETENTION) {
-  const existing = engines.get(retention);
+export function schedulerFor(scheduling: DeckScheduling = DEFAULT_SCHEDULING) {
+  const key = schedulingKey(scheduling);
+  const existing = engines.get(key);
   if (existing) return existing;
 
-  const engine = fsrs(parametersFor(retention));
-  engines.set(retention, engine);
+  const engine = fsrs(parametersFor(scheduling));
+  engines.set(key, engine);
 
   return engine;
 }
@@ -120,9 +129,9 @@ function onStudyDay(item: RecordLogItem, now: Date): RecordLogItem {
 export function previewGrades(
   card: FsrsCard,
   now: Date,
-  retention?: number
+  scheduling?: DeckScheduling
 ): Record<Grade, RecordLogItem> {
-  const preview = schedulerFor(retention).repeat(card, now);
+  const preview = schedulerFor(scheduling).repeat(card, now);
 
   return GRADES.reduce(
     (all, grade) => ({ ...all, [grade]: onStudyDay(preview[grade], now) }),
@@ -134,9 +143,21 @@ export function applyGrade(
   card: FsrsCard,
   grade: Grade,
   now: Date,
-  retention?: number
+  scheduling?: DeckScheduling
 ): RecordLogItem {
-  return onStudyDay(schedulerFor(retention).next(card, now, grade), now);
+  return onStudyDay(schedulerFor(scheduling).next(card, now, grade), now);
+}
+
+/**
+ * How far out the first `Łatwe` on a brand new card lands, in whole days.
+ *
+ * The deck editor labels its retention choices with this rather than with a
+ * bare number, and the tests assert on it — a change in ts-fsrs or in the
+ * defaults shows up in both places instead of on the phone.
+ */
+export function firstEasyInterval(scheduling: DeckScheduling, now: Date = new Date()): number {
+  const { card } = applyGrade(createEmptyCard(now), Rating.Easy, now, scheduling);
+  return Math.round(card.scheduled_days);
 }
 
 /** Maps a `review_logs` row back onto the ts-fsrs `ReviewLog` shape. */
@@ -162,8 +183,8 @@ export function toReviewLog(row: Omit<ReviewLogRow, 'id' | 'cardId'>): ReviewLog
  * behaviour for an undo button — the card lands back in the queue right away.
  */
 export function rollbackGrade(card: FsrsCard, log: ReviewLog): FsrsCard {
-  // Undoing reads the log rather than the model, so the retention in force
-  // makes no difference here.
+  // Undoing reads the log rather than the model, so the deck's options make no
+  // difference here.
   return schedulerFor().rollback(card, log);
 }
 

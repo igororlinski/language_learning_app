@@ -16,6 +16,7 @@ import {
   cardsMediaFiles,
   allTagsQuery,
   copyCards,
+  deckScheduling,
   deckTagsQuery,
   getCardTagNames,
   setCardTagNames,
@@ -50,6 +51,7 @@ import { decks, fsrsState, reviewLogs } from '@/db/schema';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { sortCards } from '@/lib/card-sort';
 import { filterCards } from '@/lib/search';
+import { DEFAULT_SCHEDULING } from '@/lib/fsrs-options';
 import { filterByTags } from '@/lib/tags';
 import { countQueueStates, Rating, State } from '@/lib/scheduler';
 
@@ -67,6 +69,7 @@ import migration0008 from '../drizzle/0008_mean_lady_mastermind.sql';
 import migration0009 from '../drizzle/0009_curved_jazinda.sql';
 import migration0010 from '../drizzle/0010_quiet_absorbing_man.sql';
 import migration0011 from '../drizzle/0011_violet_giant_man.sql';
+import migration0012 from '../drizzle/0012_cool_swordsman.sql';
 
 for (const migration of [
   migration0000,
@@ -81,6 +84,7 @@ for (const migration of [
   migration0009,
   migration0010,
   migration0011,
+  migration0012,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -1022,3 +1026,41 @@ check(
   loadDueCards(halfDeck.id, now).find((card) => card.cardId === emptyBack.id)?.backLines,
   []
 );
+
+group('Opcje FSRS zapisane przy talii');
+
+const tunedDeck = createDeck({
+  name: 'Nastrojona',
+  newPerDay: 10,
+  reviewsPerDay: 10,
+  scheduling: {
+    desiredRetention: 0.86,
+    maximumInterval: 30,
+    learningSteps: '5m 25m',
+    relearningSteps: '15m',
+  },
+});
+
+check('talia pamieta swoje opcje', deckScheduling(tunedDeck.id), {
+  desiredRetention: 0.86,
+  maximumInterval: 30,
+  learningSteps: '5m 25m',
+  relearningSteps: '15m',
+});
+check('a nowa talia dostaje domyslne', deckScheduling(plain.id), DEFAULT_SCHEDULING);
+
+// The steps a deck sets are the ones its cards actually get.
+const tunedCard = createCard(tunedDeck.id, 'to tune', 'stroic', now);
+gradeCard(tunedCard.id, Rating.Again, now);
+
+check(
+  'pierwszy krok nauki bierze sie z talii',
+  Math.round((snapshot(tunedCard.id).due - now.getTime()) / 60000),
+  5
+);
+
+// And so is the ceiling: nothing in this deck may be scheduled past 30 days.
+const cappedCard = createCard(tunedDeck.id, 'to cap', 'ograniczac', now);
+gradeCard(cappedCard.id, Rating.Easy, now);
+
+check('maksymalny odstep talii obowiazuje', snapshot(cappedCard.id).scheduledDays <= 30, true);

@@ -11,6 +11,7 @@ import './field-rows.test';
 import './media.test';
 import './tags.test';
 import './study-day.test';
+import './fsrs-options.test';
 import './data-layer.test';
 
 import { failureCount } from './harness';

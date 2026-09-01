@@ -1,5 +1,12 @@
 import { index, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
+import {
+  DEFAULT_LEARNING_STEPS,
+  DEFAULT_MAXIMUM_INTERVAL,
+  DEFAULT_RELEARNING_STEPS,
+  DEFAULT_RETENTION,
+} from '@/lib/fsrs-options';
+
 /** Anki's stock deck options, used for every new deck. */
 export const DEFAULT_NEW_PER_DAY = 20;
 export const DEFAULT_REVIEWS_PER_DAY = 200;
@@ -11,20 +18,6 @@ export const DEFAULT_REVIEWS_PER_DAY = 200;
 export const NEW_CARD_PLACEMENTS = ['mixed', 'before', 'after'] as const;
 export type NewCardPlacement = (typeof NEW_CARD_PLACEMENTS)[number];
 export const DEFAULT_NEW_CARD_PLACEMENT: NewCardPlacement = 'mixed';
-
-/**
- * How likely a card should still be remembered when it comes back — the one
- * dial that stretches or tightens every interval. Measured with ts-fsrs, first
- * `Łatwe` on a new card → its follow-up `Dobre`:
- * 0.90 → 8 d → 39 d, 0.94 → 4 d → 13 d, 0.97 → 2 d → 4 d.
- *
- * FSRS's own default is 0.9. Decks here start tighter: eight days for a card
- * seen once, and five weeks for the next look at it, reads as forgetting rather
- * than learning.
- */
-export const RETENTIONS = [0.9, 0.94, 0.97] as const;
-export type Retention = (typeof RETENTIONS)[number];
-export const DEFAULT_RETENTION: Retention = 0.94;
 
 /** Which end of the new backlog today's new cards are taken from. */
 export const NEW_CARD_ORDERS = ['oldest', 'newest', 'random'] as const;
@@ -50,11 +43,14 @@ export const decks = sqliteTable('decks', {
    */
   newPerDay: integer('new_per_day').notNull().default(DEFAULT_NEW_PER_DAY),
   /**
-   * How likely a card should still be remembered when it comes back. The one
-   * dial that stretches or tightens every interval — see `RETENTIONS` in
-   * `src/lib/scheduler.ts`, where the measured numbers are written down.
+   * What this deck tells FSRS. The rules for reading them — and why `w` is not
+   * among them — live in `src/lib/fsrs-options.ts`.
    */
   desiredRetention: real('desired_retention').notNull().default(DEFAULT_RETENTION),
+  maximumInterval: integer('maximum_interval').notNull().default(DEFAULT_MAXIMUM_INTERVAL),
+  /** Space-separated, Anki style: `1m 10m`. */
+  learningSteps: text('learning_steps').notNull().default(DEFAULT_LEARNING_STEPS),
+  relearningSteps: text('relearning_steps').notNull().default(DEFAULT_RELEARNING_STEPS),
   reviewsPerDay: integer('reviews_per_day').notNull().default(DEFAULT_REVIEWS_PER_DAY),
   /** How the session queue is built — see the two constant blocks above. */
   newCardPlacement: text('new_card_placement', { enum: NEW_CARD_PLACEMENTS })
