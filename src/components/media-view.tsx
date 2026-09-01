@@ -1,11 +1,12 @@
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { useMemo } from 'react';
 import { Image, Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { mediaLabel, type MediaKind } from '@/lib/media';
+import { mediaLabel, MEDIA_MISSING_LABELS, type MediaKind } from '@/lib/media';
 import { mediaUri } from '@/lib/media-files';
 
 export type MediaViewProps = {
@@ -22,9 +23,10 @@ export type MediaViewProps = {
 
 /**
  * Shows one media field: a play button for sound, the picture itself for an
- * image. The file lives in the app's own directory and may be gone — a card
- * restored on another install, a copy deleted by hand — so the missing case is
- * shown rather than silently rendering nothing.
+ * image, a player with the usual controls for video. The file lives in the
+ * app's own directory and may be gone — a card restored on another install, a
+ * copy deleted by hand — so the missing case is shown rather than silently
+ * rendering nothing.
  */
 export function MediaView({ kind, fileName, label }: MediaViewProps) {
   const theme = useTheme();
@@ -33,14 +35,15 @@ export function MediaView({ kind, fileName, label }: MediaViewProps) {
   if (!uri) {
     return (
       <ThemedText type="small" style={{ color: theme.danger }}>
-        {kind === 'audio' ? 'Brak pliku dźwiękowego' : 'Brak pliku obrazu'}
+        {MEDIA_MISSING_LABELS[kind]}
       </ThemedText>
     );
   }
 
-  return kind === 'audio' ? (
-    <AudioPlayer uri={uri} label={label} />
-  ) : (
+  if (kind === 'audio') return <AudioPlayer uri={uri} label={label} />;
+  if (kind === 'video') return <VideoPlayer uri={uri} label={label} />;
+
+  return (
     <Image
       source={{ uri }}
       style={styles.image}
@@ -97,6 +100,27 @@ function AudioPlayer({ uri, label }: { uri: string; label?: string }) {
   );
 }
 
+/**
+ * Video: the frame itself with the platform's own controls. Nothing plays on
+ * its own — a card may hold several fields, and a review screen that started
+ * talking the moment it appeared would be unusable.
+ */
+function VideoPlayer({ uri, label }: { uri: string; label?: string }) {
+  const player = useVideoPlayer(uri);
+
+  return (
+    <VideoView
+      player={player}
+      style={styles.video}
+      contentFit="contain"
+      nativeControls
+      fullscreenOptions={{ enable: true }}
+      accessible
+      accessibilityLabel={mediaLabel('video', label ?? '')}
+    />
+  );
+}
+
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
@@ -131,5 +155,13 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 200,
     borderRadius: Radius.medium,
+  },
+  video: {
+    width: '100%',
+    height: 200,
+    borderRadius: Radius.medium,
+    // The frame is letterboxed against black, the way a video player looks
+    // everywhere else, instead of showing the card's background through it.
+    backgroundColor: '#000',
   },
 });

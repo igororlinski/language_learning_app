@@ -14,7 +14,7 @@ export type SegmentedControlProps<T extends string> = {
 };
 
 /**
- * Compact row of choices, for picking between two or three short labels inline.
+ * Compact row of choices, for picking between a handful of short labels inline.
  * `OptionPicker` is the stacked version, for options that need a sentence of
  * explanation; this one is for things like a field's side.
  */
@@ -69,7 +69,9 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   segment: {
-    paddingHorizontal: Spacing.three,
+    // Equal shares rather than label-sized: four options have to fit a phone.
+    flex: 1,
+    paddingHorizontal: Spacing.two,
     paddingVertical: Spacing.two,
     borderRadius: Radius.small,
     alignItems: 'center',

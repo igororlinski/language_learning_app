@@ -24,7 +24,14 @@ import {
 } from '@/db/queries';
 import type { FieldKind, FieldSide } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
-import { formatBytes, isMediaKind, MEDIA_LIMITS, type MediaKind } from '@/lib/media';
+import {
+  formatBytes,
+  isMediaKind,
+  MEDIA_LIMITS,
+  MEDIA_NOUNS,
+  MEDIA_NOUNS_GENITIVE,
+  type MediaKind,
+} from '@/lib/media';
 import { deleteMedia, importMedia, MediaTooLargeError, pickMedia } from '@/lib/media-files';
 import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
 import {
@@ -149,7 +156,7 @@ export default function CardEditorScreen() {
           : 'Nie udało się skopiować pliku.';
 
       Alert.alert(
-        kind === 'audio' ? 'Nie dodano dźwięku' : 'Nie dodano obrazu',
+        `Nie dodano ${MEDIA_NOUNS_GENITIVE[kind]}`,
         message,
         [{ text: 'OK' }],
         { cancelable: true }
@@ -242,7 +249,7 @@ export default function CardEditorScreen() {
       return (
         <>
           <ThemedText type="smallBold" themeColor="textSecondary">
-            {`${rowInfo.label} — ${kind === 'audio' ? 'dźwięk' : 'obraz'}`}
+            {`${rowInfo.label} — ${MEDIA_NOUNS[kind]}`}
           </ThemedText>
           {row.mediaPath ? (
             <MediaView kind={kind} fileName={row.mediaPath} label={row.value} />

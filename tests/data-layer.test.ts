@@ -604,13 +604,14 @@ check(
   ['to run']
 );
 
-group('Pola z plikiem: dzwiek i obraz');
+group('Pola z plikiem: dzwiek, obraz i wideo');
 
 const mediaDeck = createDeck({ name: 'Z plikami', newPerDay: 10, reviewsPerDay: 10 });
 
 const mediaCard = createCard(mediaDeck.id, 'to break', 'lamac', now, [
   { id: null, side: 'front', position: 1, kind: 'audio', value: 'break.m4a', mediaPath: 'a1.m4a' },
   { id: null, side: 'back', position: 1, kind: 'image', value: 'lamanie.jpg', mediaPath: 'i1.jpg' },
+  { id: null, side: 'back', position: 2, kind: 'video', value: 'lamanie.mp4', mediaPath: 'v1.mp4' },
 ]);
 
 check(
@@ -619,6 +620,7 @@ check(
   [
     ['audio', 'break.m4a', 'a1.m4a'],
     ['image', 'lamanie.jpg', 'i1.jpg'],
+    ['video', 'lamanie.mp4', 'v1.mp4'],
   ]
 );
 
@@ -629,21 +631,23 @@ check('linia dzwieku niesie plik i jego rodzaj', mediaQueued()?.frontLines, [
   { text: 'to break', base: true, media: null },
   { text: 'break.m4a', base: false, media: { kind: 'audio', fileName: 'a1.m4a' } },
 ]);
-check('linia obrazu tak samo', mediaQueued()?.backLines, [
+check('linia obrazu i wideo tak samo', mediaQueued()?.backLines, [
   { text: 'lamac', base: true, media: null },
   { text: 'lamanie.jpg', base: false, media: { kind: 'image', fileName: 'i1.jpg' } },
+  { text: 'lamanie.mp4', base: false, media: { kind: 'video', fileName: 'v1.mp4' } },
 ]);
 
-// Deleting has to know the kind: the two live in different directories.
+// Deleting has to know the kind: each one lives in its own directory.
 check(
   'pliki karty do posprzatania, z rodzajem',
   cardMediaFiles(mediaCard.id),
   [
     { kind: 'audio', fileName: 'a1.m4a' },
     { kind: 'image', fileName: 'i1.jpg' },
+    { kind: 'video', fileName: 'v1.mp4' },
   ]
 );
-check('pliki calej talii', deckMediaFiles(mediaDeck.id).length, 2);
+check('pliki calej talii', deckMediaFiles(mediaDeck.id).length, 3);
 
 // A field whose file was cleared shows nothing — like an empty text box.
 saveCardFields(mediaCard.id, [

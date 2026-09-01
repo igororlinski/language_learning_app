@@ -1,16 +1,18 @@
 import type { FieldKind } from '@/db/schema';
 
 /**
- * Rules for the files a card field can carry — sound and pictures — kept free
- * of any file-system calls so they can be tested without a device. The copying
- * itself lives in `src/lib/media-files.ts`.
+ * Rules for the files a card field can carry — sound, pictures and video —
+ * kept free of any file-system calls so they can be tested without a device.
+ * The copying itself lives in `src/lib/media-files.ts`.
  */
 
 /** A field kind that holds a file rather than typed text. */
-export type MediaKind = Extract<FieldKind, 'audio' | 'image'>;
+export type MediaKind = Extract<FieldKind, 'audio' | 'image' | 'video'>;
+
+const MEDIA_KINDS: readonly FieldKind[] = ['audio', 'image', 'video'];
 
 export function isMediaKind(kind: FieldKind): kind is MediaKind {
-  return kind === 'audio' || kind === 'image';
+  return MEDIA_KINDS.includes(kind);
 }
 
 /**
@@ -21,22 +23,29 @@ export function isMediaKind(kind: FieldKind): kind is MediaKind {
 export const MEDIA_DIRECTORIES: Record<MediaKind, string> = {
   audio: 'card-audio',
   image: 'card-images',
+  video: 'card-videos',
 };
 
 /**
- * Per-kind size limits. Ten megabytes is generous for a spoken word or a
- * sentence; a picture on a flashcard needs far less, and holding it down keeps
- * a deck of a few hundred cards from quietly filling the phone.
+ * Per-kind size limits, set by what the kind actually costs. Five megabytes is
+ * already generous for a spoken word or a sentence; a photo straight off a
+ * phone camera routinely passes that, so pictures get ten. Video gets the most
+ * because it cannot be had for less — twenty five megabytes is a short clip,
+ * which is all a flashcard should carry — and it is the one kind where a
+ * careless pick from the gallery is a whole gigabyte. Together they keep a deck
+ * of a few hundred cards from quietly filling the phone.
  */
 export const MEDIA_LIMITS: Record<MediaKind, number> = {
-  audio: 10 * 1024 * 1024,
-  image: 5 * 1024 * 1024,
+  audio: 5 * 1024 * 1024,
+  image: 10 * 1024 * 1024,
+  video: 25 * 1024 * 1024,
 };
 
 /** What the system picker is asked for. */
 export const MEDIA_MIME_TYPES: Record<MediaKind, string> = {
   audio: 'audio/*',
   image: 'image/*',
+  video: 'video/*',
 };
 
 export function withinSizeLimit(kind: MediaKind, bytes: number | undefined): boolean {
@@ -62,6 +71,7 @@ export function extensionOf(fileName: string, fallback: string): string {
 const FALLBACK_EXTENSIONS: Record<MediaKind, string> = {
   audio: 'm4a',
   image: 'jpg',
+  video: 'mp4',
 };
 
 /**
@@ -87,6 +97,28 @@ export function storedFileName(
 export const MEDIA_FALLBACK_LABELS: Record<MediaKind, string> = {
   audio: 'Nagranie',
   image: 'Obraz',
+  video: 'Wideo',
+};
+
+/** The word for a kind inside a sentence: "Przód — pole 1 — dźwięk". */
+export const MEDIA_NOUNS: Record<MediaKind, string> = {
+  audio: 'dźwięk',
+  image: 'obraz',
+  video: 'wideo',
+};
+
+/** The same word in the genitive, for messages built as "Nie dodano …". */
+export const MEDIA_NOUNS_GENITIVE: Record<MediaKind, string> = {
+  audio: 'dźwięku',
+  image: 'obrazu',
+  video: 'wideo',
+};
+
+/** Shown in place of a field whose file is gone. */
+export const MEDIA_MISSING_LABELS: Record<MediaKind, string> = {
+  audio: 'Brak pliku dźwiękowego',
+  image: 'Brak pliku obrazu',
+  video: 'Brak pliku wideo',
 };
 
 /** The label a media field shows: its original file name, or a fallback. */

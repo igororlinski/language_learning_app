@@ -20,8 +20,8 @@ export const DEFAULT_NEW_CARD_ORDER: NewCardOrder = 'oldest';
 /** Which face of a card a field belongs to. */
 export const FIELD_SIDES = ['front', 'back'] as const;
 
-/** A field holds typed text, or one attached file. */
-export const FIELD_KINDS = ['text', 'audio', 'image'] as const;
+/** A field holds typed text, or one attached file: sound, a picture or video. */
+export const FIELD_KINDS = ['text', 'audio', 'image', 'video'] as const;
 export type FieldSide = (typeof FIELD_SIDES)[number];
 export type FieldKind = (typeof FIELD_KINDS)[number];
 
@@ -46,7 +46,7 @@ export const decks = sqliteTable('decks', {
   /**
    * Where a new card in this deck puts its two mandatory fields. The empty
    * extra fields it starts with live in `deck_field_slots`, because they are no
-   * longer interchangeable: each one is either a text box or an audio slot.
+   * longer interchangeable: each one is a text box or a slot for one kind of file.
    * Only a brand new card reads any of this.
    */
   newFrontSide: text('new_front_side', { enum: FIELD_SIDES }).notNull().default('front'),
@@ -129,8 +129,8 @@ export const cardFields = sqliteTable(
     /**
      * File name inside the app's media directory; null for a text field. The
      * SQL column is still called audio_path: it was added when sound was the
-     * only attachment, and renaming it would cost a migration that copies
-     * every row for no gain.
+     * only attachment — pictures and video came later — and renaming it would
+     * cost a migration that copies every row for no gain.
      */
     mediaPath: text('audio_path'),
   },

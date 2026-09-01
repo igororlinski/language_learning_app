@@ -44,7 +44,7 @@ export default function DecksScreen() {
           text: 'Usuń',
           style: 'destructive',
           onPress: () => {
-            // The audio copies are files, not rows, so the cascade misses them.
+            // The media copies are files, not rows, so the cascade misses them.
             const files = deckMediaFiles(deck.id);
             deleteDeck(deck.id);
             deleteMedia(files);

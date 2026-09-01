@@ -32,6 +32,7 @@ import {
   type NewCardPlacement,
 } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
+import { MEDIA_NOUNS } from '@/lib/media';
 import { deleteMedia } from '@/lib/media-files';
 import type { BaseKind } from '@/lib/card-layout';
 import {
@@ -161,7 +162,7 @@ export default function DeckEditorScreen() {
         <ThemedText type="small" themeColor="textSecondary">
           {row.field === 'text'
             ? `${rowInfo.label} — tekst, wypełniany na karcie.`
-            : `${rowInfo.label} — ${row.field === 'audio' ? 'dźwięk' : 'obraz'}, plik wybierany na karcie.`}
+            : `${rowInfo.label} — ${MEDIA_NOUNS[row.field]}, plik wybierany na karcie.`}
         </ThemedText>
         <Pressable
           onPress={() => removeRow(row.key)}
@@ -219,7 +220,7 @@ export default function DeckEditorScreen() {
         text: 'Usuń',
         style: 'destructive',
         onPress: () => {
-          // The audio copies are files, not rows, so the cascade misses them.
+          // The media copies are files, not rows, so the cascade misses them.
           const files = deckMediaFiles(deckId);
           deleteDeck(deckId);
           deleteMedia(files);

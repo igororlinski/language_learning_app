@@ -18,12 +18,14 @@ const KINDS: Segment<FieldKind>[] = [
   { value: 'text', label: 'Tekst' },
   { value: 'audio', label: 'Dźwięk' },
   { value: 'image', label: 'Obraz' },
+  { value: 'video', label: 'Wideo' },
 ];
 
 const KIND_HINTS: Record<FieldKind, string> = {
   text: 'Zwykłe pole tekstowe.',
   audio: 'Po dodaniu wybierzesz plik dźwiękowy.',
   image: 'Po dodaniu wybierzesz obraz.',
+  video: 'Po dodaniu wybierzesz plik wideo.',
 };
 
 export type AddFieldSheetProps = {
@@ -35,8 +37,8 @@ export type AddFieldSheetProps = {
 /**
  * The small menu behind the "+" button: which side the new field goes on and
  * what it holds. The kind is decided here and never again — a field is a text
- * box or an audio slot for its whole life, so the editors never have to make
- * sense of a half-converted one.
+ * box or a slot for one kind of file for its whole life, so the editors never
+ * have to make sense of a half-converted one.
  */
 export function AddFieldSheet({ visible, onClose, onAdd }: AddFieldSheetProps) {
   const theme = useTheme();
