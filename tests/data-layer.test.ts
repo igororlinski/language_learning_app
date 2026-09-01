@@ -12,6 +12,9 @@ import { db, sqliteDb } from '@/db/client';
 import {
   cardMediaFiles,
   cardsInDeckQuery,
+  cardsLines,
+  cardsMediaFiles,
+  copyCards,
   createCard,
   createDeck,
   deckAllowance,
@@ -20,11 +23,13 @@ import {
   deckDueBreakdownQuery,
   decksWithStatsQuery,
   deleteCard,
+  deleteCards,
   deleteDeck,
   getCardFields,
   gradeCard,
   loadDueCards,
-  moveCard,
+  moveCards,
+  resetCards,
   getCardLines,
   getDeckSlots,
   newCardFields,
@@ -349,7 +354,7 @@ check('cele przenosin zawieraja druga talie', moveTargets.some((deck) => deck.id
 check('przed przenosinami karta jest w zrodle', cardCount(source.id, now), 1);
 check('talia docelowa jest pusta', cardCount(target.id, now), 0);
 
-moveCard(moved.id, target.id);
+moveCards([moved.id], target.id);
 
 check('po przenosinach zrodlo jest puste', cardCount(source.id, now), 0);
 check('karta trafila do celu', cardCount(target.id, now), 1);
@@ -541,7 +546,7 @@ group('Przenosiny a pola karty');
 
 const fieldTarget = createDeck({ name: 'Cel', newPerDay: 10, reviewsPerDay: 10 });
 
-moveCard(fieldCard.id, fieldTarget.id);
+moveCards([fieldCard.id], fieldTarget.id);
 
 check(
   'uklad karty przezywa przenosiny w calosci',
@@ -706,3 +711,132 @@ check('po edycji widac nowa tresc', getCardLines(editedCard.id)?.front, [
 deleteCard(editedCard.id);
 
 check('skasowana karta nie ma juz stron', getCardLines(editedCard.id), null);
+
+group('Zaznaczenie: kopiowanie kart');
+
+const sourceDeck = createDeck({ name: 'Zrodlo', newPerDay: 10, reviewsPerDay: 10 });
+const copyDeck = createDeck({ name: 'Cel kopii', newPerDay: 10, reviewsPerDay: 10 });
+
+const withFile = createCard(sourceDeck.id, 'to sing', 'spiewac', now, [
+  { id: null, side: 'back', position: 1, kind: 'audio', value: 'sing.m4a', mediaPath: 'orig.m4a' },
+  { id: null, side: 'back', position: 2, kind: 'text', value: 'sang / sung', mediaPath: null },
+]);
+const plainCopyCard = createCard(sourceDeck.id, 'to swim', 'plywac', now);
+
+// The file system is not available here, so the duplication is injected — the
+// real one lives in `src/lib/media-files.ts` and needs a device.
+const fakeCopier = (kind: 'audio' | 'image' | 'video', fileName: string) => `${kind}-2-${fileName}`;
+
+// Answer one card first: the copy must not inherit any of this.
+gradeCard(withFile.id, Rating.Good, now);
+
+const copied = copyCards([withFile.id, plainCopyCard.id], copyDeck.id, fakeCopier, now);
+
+check('kazda zaznaczona karta ma swoja kopie', copied.length, 2);
+check('oryginaly zostaja na miejscu', cardsInDeckQuery(sourceDeck.id).all().length, 2);
+check('kopie ladują w talii docelowej', cardsInDeckQuery(copyDeck.id).all().length, 2);
+
+const copyOfWithFile = copied[0];
+
+/** Both faces as plain text — the files differ by design, the reading must not. */
+const lineTexts = (cardId: number) => {
+  const row = cardsLines([cardId])[0];
+  return [row.front.map((line) => line.text), row.back.map((line) => line.text)];
+};
+
+check('kopia czyta sie dokladnie jak oryginal', lineTexts(copyOfWithFile), lineTexts(withFile.id));
+
+check(
+  'pola kopii wskazuja WLASNE pliki',
+  getCardFields(copyOfWithFile).map((field) => [field.kind, field.value, field.mediaPath]),
+  [
+    ['audio', 'sing.m4a', 'audio-2-orig.m4a'],
+    ['text', 'sang / sung', null],
+  ]
+);
+check(
+  'a oryginal trzyma swoj plik dalej',
+  getCardFields(withFile.id).map((field) => field.mediaPath),
+  ['orig.m4a', null]
+);
+
+// A copy starts from scratch: same content, none of the schedule or history.
+const copyState = db.select().from(fsrsState).where(eq(fsrsState.cardId, copyOfWithFile)).get()!;
+
+check('kopia zaczyna jako nowa karta', [copyState.state, copyState.reps], [State.New, 0]);
+check('i bez historii powtorek', logCount(copyOfWithFile), 0);
+check('podczas gdy oryginal ma swoja', logCount(withFile.id), 1);
+
+// Copying in place is how a card becomes a variant to edit.
+const inPlace = copyCards([plainCopyCard.id], sourceDeck.id, fakeCopier, now);
+
+check('kopiowac mozna tez do tej samej talii', cardsInDeckQuery(sourceDeck.id).all().length, 3);
+check('kopia w miejscu to osobna karta', inPlace[0] === plainCopyCard.id, false);
+
+check('pusta lista nic nie robi', copyCards([], copyDeck.id, fakeCopier, now), []);
+
+group('Zaznaczenie: usuwanie i podglad');
+
+const bulkDeck = createDeck({ name: 'Hurtem', newPerDay: 10, reviewsPerDay: 10 });
+const bulk = ['a', 'b', 'c'].map((letter) =>
+  createCard(bulkDeck.id, letter, letter.toUpperCase(), now, [
+    {
+      id: null,
+      side: 'front',
+      position: 1,
+      kind: 'image',
+      value: `${letter}.jpg`,
+      mediaPath: `${letter}-1.jpg`,
+    },
+  ])
+);
+
+check('podglad czyta karty w podanej kolejnosci', cardsLines([bulk[2].id, bulk[0].id]).map((row) => row.front[0].text), ['c', 'a']);
+check('i pomija id, ktorego juz nie ma', cardsLines([bulk[0].id, -1]).length, 1);
+check('pusty wybor to pusty podglad', cardsLines([]), []);
+
+const doomed = [bulk[0].id, bulk[1].id];
+
+check('pliki calego zaznaczenia jednym zapytaniem', cardsMediaFiles(doomed), [
+  { kind: 'image', fileName: 'a-1.jpg' },
+  { kind: 'image', fileName: 'b-1.jpg' },
+]);
+
+deleteCards(doomed);
+
+check('zaznaczone karty znikaja', cardsInDeckQuery(bulkDeck.id).all().length, 1);
+check('a niezaznaczona zostaje', cardsInDeckQuery(bulkDeck.id).all()[0].front, 'c');
+check('razem z nimi znikaja ich pola', getCardFields(bulk[0].id).length, 0);
+check('pusta lista nie kasuje niczego', deleteCards([]), undefined);
+
+group('Zaznaczenie: przenoszenie i zerowanie hurtem');
+
+const bulkSource = createDeck({ name: 'Hurt zrodlo', newPerDay: 10, reviewsPerDay: 10 });
+const bulkTarget = createDeck({ name: 'Hurt cel', newPerDay: 10, reviewsPerDay: 10 });
+const trio = ['p', 'q', 'r'].map((letter) =>
+  createCard(bulkSource.id, letter, letter.toUpperCase(), now)
+);
+
+gradeCard(trio[0].id, Rating.Good, now);
+gradeCard(trio[1].id, Rating.Good, now);
+
+moveCards([trio[0].id, trio[1].id], bulkTarget.id);
+
+check('zaznaczone karty zmieniaja talie', cardsInDeckQuery(bulkTarget.id).all().length, 2);
+check('niezaznaczona zostaje', cardsInDeckQuery(bulkSource.id).all()[0].front, 'r');
+// Moving keeps the schedule, exactly as it does for a single card.
+check('przeniesione karty nie wracaja do stanu nowego', snapshot(trio[0].id).state, State.Learning);
+
+resetCards([trio[0].id, trio[1].id], now);
+
+check(
+  'zerowanie obejmuje cale zaznaczenie',
+  [snapshot(trio[0].id).state, snapshot(trio[1].id).state],
+  [State.New, State.New]
+);
+check('a licznik powtorek wraca do zera', snapshot(trio[0].id).reps, 0);
+// The card starts over, but what happened to it stays on the record.
+check('historia powtorek zostaje nietknieta', logCount(trio[0].id), 1);
+check('karta poza zaznaczeniem zachowuje swoj stan', snapshot(trio[2].id).state, State.New);
+check('pusta lista niczego nie przenosi', moveCards([], bulkTarget.id), undefined);
+check('pusta lista niczego nie zeruje', resetCards([], now), undefined);

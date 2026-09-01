@@ -39,6 +39,10 @@ export default function RootLayout() {
               name="deck/[deckId]/review"
               options={{ headerShown: false, animation: 'fade' }}
             />
+            <Stack.Screen
+              name="deck/[deckId]/preview"
+              options={{ headerShown: false, animation: 'fade' }}
+            />
             <Stack.Screen name="deck-editor" options={{ presentation: 'modal' }} />
             <Stack.Screen name="card-editor" options={{ presentation: 'modal' }} />
           </Stack>

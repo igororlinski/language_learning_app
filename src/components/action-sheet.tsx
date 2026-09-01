@@ -11,6 +11,14 @@ export type SheetAction = {
   /** Rendered in the danger colour. */
   destructive?: boolean;
   /**
+   * Greys the entry out and stops it responding. An entry that cannot be used
+   * right now stays on the list rather than disappearing: a menu that quietly
+   * drops items teaches the user the feature does not exist.
+   */
+  disabled?: boolean;
+  /** A second line under the label — mostly why a disabled entry is disabled. */
+  hint?: string;
+  /**
    * Keeps the sheet open — for entries that only swap what it shows. Replacing
    * one `Modal` with another in the same frame drops the animation on Android,
    * so a submenu reuses this sheet instead of opening a second one.
@@ -38,6 +46,7 @@ export function ActionSheet({ visible, title, subtitle, actions, onClose }: Acti
   // Close first: navigating out from under a visible modal is what makes the
   // next screen render behind it.
   const run = (action: SheetAction) => {
+    if (action.disabled) return;
     if (!action.keepOpen) onClose();
     action.onPress();
   };
@@ -77,17 +86,31 @@ export function ActionSheet({ visible, title, subtitle, actions, onClose }: Acti
             <Pressable
               key={`${index}-${action.label}`}
               onPress={() => run(action)}
+              disabled={action.disabled}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: Boolean(action.disabled) }}
+              accessibilityLabel={action.hint ? `${action.label}. ${action.hint}` : action.label}
               style={({ pressed }) => [
                 styles.action,
                 {
                   borderColor: theme.border,
-                  backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+                  backgroundColor:
+                    pressed && !action.disabled ? theme.backgroundSelected : 'transparent',
                 },
               ]}>
               <ThemedText
-                style={[styles.actionLabel, action.destructive ? { color: theme.danger } : null]}>
+                style={[
+                  styles.actionLabel,
+                  action.destructive ? { color: theme.danger } : null,
+                  action.disabled ? styles.disabled : null,
+                ]}>
                 {action.label}
               </ThemedText>
+              {action.hint ? (
+                <ThemedText type="small" themeColor="textSecondary" style={styles.actionHint}>
+                  {action.hint}
+                </ThemedText>
+              ) : null}
             </Pressable>
           ))}
 
@@ -144,6 +167,13 @@ const styles = StyleSheet.create({
   },
   actionLabel: {
     fontSize: 16,
+  },
+  actionHint: {
+    marginTop: Spacing.half,
+  },
+  /** Dimmed rather than hidden, so the entry still says what is possible. */
+  disabled: {
+    opacity: 0.4,
   },
   cancel: {
     marginTop: Spacing.three,

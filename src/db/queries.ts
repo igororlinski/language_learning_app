@@ -207,6 +207,39 @@ export function getCardLines(cardId: number): { front: CardLine[]; back: CardLin
   return { front: sideLines(pieces, 'front'), back: sideLines(pieces, 'back') };
 }
 
+/**
+ * The faces of several cards at once, in the order the ids were given — what
+ * the preview of a hand-picked selection walks through. Reads nothing but the
+ * cards: a preview never touches the schedule.
+ */
+export function cardsLines(
+  cardIds: number[]
+): { cardId: number; front: CardLine[]; back: CardLine[] }[] {
+  if (cardIds.length === 0) return [];
+
+  const rows = db
+    .select({
+      cardId: cards.id,
+      front: cards.front,
+      back: cards.back,
+      frontSide: cards.frontSide,
+      frontPosition: cards.frontPosition,
+      backSide: cards.backSide,
+      backPosition: cards.backPosition,
+    })
+    .from(cards)
+    .where(inArray(cards.id, cardIds))
+    .all();
+
+  const laidOut = new Map(withCardLines(rows).map((row) => [row.cardId, row]));
+
+  return cardIds.flatMap((cardId) => {
+    const row = laidOut.get(cardId);
+    // A card deleted between picking and previewing simply drops out.
+    return row ? [{ cardId, front: row.frontLines, back: row.backLines }] : [];
+  });
+}
+
 /** A card's own extra fields, in card order. */
 export function getCardFields(cardId: number): CardField[] {
   return db
@@ -309,6 +342,22 @@ export function deckMediaFiles(deckId: number): MediaFile[] {
       .from(cardFields)
       .innerJoin(cards, eq(cards.id, cardFields.cardId))
       .where(eq(cards.deckId, deckId))
+      .all()
+  );
+}
+
+/**
+ * The same, for a set of cards — what a bulk delete has to clear afterwards.
+ * One query rather than one per card, because a selection can be the whole deck.
+ */
+export function cardsMediaFiles(cardIds: number[]): MediaFile[] {
+  if (cardIds.length === 0) return [];
+
+  return toMediaFiles(
+    db
+      .select({ kind: cardFields.kind, mediaPath: cardFields.mediaPath })
+      .from(cardFields)
+      .where(inArray(cardFields.cardId, cardIds))
       .all()
   );
 }
@@ -633,8 +682,109 @@ export function updateCard(
  * through `cards.deck_id`, so today's answers move with the card and count
  * against the target deck's daily allowance. Anki does the same.
  */
-export function moveCard(cardId: number, targetDeckId: number) {
-  return db.update(cards).set({ deckId: targetDeckId }).where(eq(cards.id, cardId)).run();
+export function moveCards(cardIds: number[], targetDeckId: number) {
+  if (cardIds.length === 0) return;
+
+  return db.update(cards).set({ deckId: targetDeckId }).where(inArray(cards.id, cardIds)).run();
+}
+
+/**
+ * How a copied card's files are duplicated. Passed in rather than imported,
+ * because the copying itself needs the file system and this module must stay
+ * runnable in the tests, which have none — the real one is `duplicateMedia`
+ * in `src/lib/media-files.ts`.
+ */
+export type MediaCopier = (kind: MediaKind, fileName: string) => string;
+
+/**
+ * Copies whole cards into a deck — the one they are already in included, which
+ * is how a card gets duplicated for editing into a variant.
+ *
+ * A copy is a **new card**: same content, same layout, same fields, but its own
+ * files, a fresh (New) schedule and no history. Nothing about the original
+ * changes. Returns the new ids, in the order the originals were given.
+ *
+ * Each attached file is duplicated rather than shared. Two cards pointing at
+ * one file would look right until either was deleted, and `deleteMedia` would
+ * then clear the file out from under the other one.
+ */
+export function copyCards(
+  cardIds: number[],
+  targetDeckId: number,
+  copyMedia: MediaCopier,
+  now = new Date()
+): number[] {
+  if (cardIds.length === 0) return [];
+
+  return db.transaction((tx) => {
+    const made: number[] = [];
+
+    for (const cardId of cardIds) {
+      const source = tx.select().from(cards).where(eq(cards.id, cardId)).get();
+      if (!source) continue;
+
+      const fields = tx
+        .select()
+        .from(cardFields)
+        .where(eq(cardFields.cardId, cardId))
+        .orderBy(asc(cardFields.position), asc(cardFields.id))
+        .all();
+
+      // The AI-image columns are left at their defaults on purpose: nothing
+      // writes them yet, and `image_path` would be a second shared file.
+      const copy = tx
+        .insert(cards)
+        .values({
+          deckId: targetDeckId,
+          front: source.front,
+          back: source.back,
+          frontSide: source.frontSide,
+          frontPosition: source.frontPosition,
+          backSide: source.backSide,
+          backPosition: source.backPosition,
+          createdAt: now,
+        })
+        .returning()
+        .get();
+
+      tx.insert(fsrsState)
+        .values({ cardId: copy.id, ...newCardState(now) })
+        .run();
+
+      for (const field of fields) {
+        tx.insert(cardFields)
+          .values({
+            cardId: copy.id,
+            side: field.side,
+            position: field.position,
+            kind: field.kind,
+            value: field.value,
+            mediaPath:
+              isMediaKind(field.kind) && field.mediaPath
+                ? copyMedia(field.kind, field.mediaPath)
+                : null,
+          })
+          .run();
+      }
+
+      made.push(copy.id);
+    }
+
+    return made;
+  });
+}
+
+/**
+ * Deletes a whole selection in one transaction — all of it or none. The files
+ * are not rows, so the caller clears them separately; `cardsMediaFiles` has to
+ * be read **before** this runs, while the rows still exist.
+ */
+export function deleteCards(cardIds: number[]) {
+  if (cardIds.length === 0) return;
+
+  return db.transaction((tx) => {
+    tx.delete(cards).where(inArray(cards.id, cardIds)).run();
+  });
 }
 
 export function deleteCard(cardId: number) {
@@ -642,8 +792,19 @@ export function deleteCard(cardId: number) {
 }
 
 /** Resets a card back to New without deleting its review history. */
-export function resetCard(cardId: number, now = new Date()) {
-  return db.update(fsrsState).set(newCardState(now)).where(eq(fsrsState.cardId, cardId)).run();
+/**
+ * Back to square one: the schedule is replaced with a fresh New state. The
+ * review log is deliberately left alone — the card starts over, but what
+ * actually happened to it stays on the record.
+ */
+export function resetCards(cardIds: number[], now = new Date()) {
+  if (cardIds.length === 0) return;
+
+  return db
+    .update(fsrsState)
+    .set(newCardState(now))
+    .where(inArray(fsrsState.cardId, cardIds))
+    .run();
 }
 
 /**

@@ -73,6 +73,27 @@ export async function importMedia(
   return { fileName, name: source.name };
 }
 
+/**
+ * Copies a stored file to a new name in the same directory, for a card being
+ * copied. Two cards must never share a file: deleting either one clears it and
+ * would blank the other.
+ *
+ * Synchronous on purpose — the card copy runs inside a drizzle transaction,
+ * which takes a synchronous callback (`copy()` is the async variant).
+ *
+ * A source that is already gone yields a name with no file behind it, which is
+ * exactly the state the original was in; the field then shows "no file" on both
+ * cards instead of one of them silently keeping the last copy.
+ */
+export function duplicateMedia(kind: MediaKind, fileName: string): string {
+  const copyName = storedFileName(kind, fileName);
+  const source = new File(Paths.document, MEDIA_DIRECTORIES[kind], fileName);
+
+  if (source.exists) source.copySync(new File(directory(kind), copyName));
+
+  return copyName;
+}
+
 /** Removes copies that no field points at any more. Missing files are fine. */
 export function deleteMedia(entries: { kind: MediaKind; fileName: string | null }[]): void {
   for (const entry of entries) {

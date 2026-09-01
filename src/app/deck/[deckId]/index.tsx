@@ -11,27 +11,30 @@ import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
-  cardMediaFiles,
   cardsInDeckQuery,
+  cardsMediaFiles,
+  copyCards,
   deckDueBreakdownQuery,
   deckQuery,
-  deleteCard,
-  moveCard,
+  deleteCards,
+  moveCards,
   otherDecksQuery,
-  resetCard,
+  resetCards,
 } from '@/db/queries';
 import { useNow } from '@/hooks/use-now';
 import { useTheme } from '@/hooks/use-theme';
-import { deleteMedia } from '@/lib/media-files';
+import { deleteMedia, duplicateMedia } from '@/lib/media-files';
 import { cardsLabel, formatDue } from '@/lib/format';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { filterCards } from '@/lib/search';
 import { STATE_LABELS, State } from '@/lib/scheduler';
 
-type CardMenuTarget = { id: number; front: string; back: string };
-
-/** The long-press sheet shows either the card's actions or the list of decks. */
-type CardMenu = { card: CardMenuTarget; view: 'actions' | 'move' };
+/**
+ * What the "⋯" sheet is showing: the things that can be done to the selection,
+ * or the list of decks to copy or move it into. One sheet swaps its contents
+ * rather than opening a second modal — see `SheetAction.keepOpen`.
+ */
+type MenuView = 'actions' | 'copy' | 'move';
 
 /** Placeholder while the aggregate is still loading, so the counters never flicker. */
 const EMPTY_BREAKDOWN = {
@@ -76,7 +79,7 @@ export default function DeckScreen() {
   // cards that are actually due and the ones the deck is allowed to serve.
   const heldBack = raw.newCount + raw.learningCount + raw.reviewCount - due;
 
-  const [menu, setMenu] = useState<CardMenu | null>(null);
+  const [menu, setMenu] = useState<MenuView | null>(null);
   const moveTargets = otherDecks ?? [];
   const [query, setQuery] = useState('');
   const allCards = cards ?? [];
@@ -85,20 +88,63 @@ export default function DeckScreen() {
   // which would be a fresh array on every render.
   const visibleCards = useMemo(() => filterCards(cards ?? [], query), [cards, query]);
 
-  /** Runs once the sheet has closed, so no dialog is opened from inside another. */
-  const confirmDelete = (card: CardMenuTarget) => {
+  // `null` means the list behaves normally; a set — even an empty one — means
+  // the screen is in selection mode, where a tap picks instead of opening.
+  // Holding a card is what gets there, the way a photo gallery works.
+  const [selected, setSelected] = useState<Set<number> | null>(null);
+  const selecting = selected !== null;
+
+  // Taken in list order rather than in the order they were tapped: the preview
+  // should read the way the list does.
+  const selectedIds = useMemo(
+    () => (selected ? (cards ?? []).filter((card) => selected.has(card.id)).map((c) => c.id) : []),
+    [cards, selected]
+  );
+
+  const toggle = (cardId: number) =>
+    setSelected((current) => {
+      const next = new Set(current ?? []);
+      if (!next.delete(cardId)) next.add(cardId);
+      return next;
+    });
+
+  const allVisiblePicked =
+    visibleCards.length > 0 && visibleCards.every((card) => selected?.has(card.id));
+
+  /** Applies to what the search is showing, which is what the user can see. */
+  const toggleAllVisible = () =>
+    setSelected((current) => {
+      const next = new Set(current ?? []);
+      for (const card of visibleCards) {
+        if (allVisiblePicked) next.delete(card.id);
+        else next.add(card.id);
+      }
+      return next;
+    });
+
+  /**
+   * Everything picked goes at once — all of it or none, files included. Runs
+   * once the sheet has closed, so no dialog is opened from inside another.
+   */
+  const confirmDeleteSelected = () => {
+    const ids = selectedIds;
+    if (ids.length === 0) return;
+
     Alert.alert(
-      'Usunąć kartę?',
-      `„${card.front}” zniknie razem z historią powtórek.`,
+      `Usunąć ${cardsLabel(ids.length)}?`,
+      'Zaznaczone karty znikną razem z historią powtórek.',
       [
         { text: 'Anuluj', style: 'cancel' },
         {
           text: 'Usuń',
           style: 'destructive',
           onPress: () => {
-            const files = cardMediaFiles(card.id);
-            deleteCard(card.id);
+            // Read while the rows are still there; the cascade takes the rows,
+            // never the files.
+            const files = cardsMediaFiles(ids);
+            deleteCards(ids);
             deleteMedia(files);
+            setSelected(null);
           },
         },
       ],
@@ -106,42 +152,157 @@ export default function DeckScreen() {
     );
   };
 
-  const cardMenuActions = (card: CardMenuTarget): SheetAction[] => [
-    {
-      label: 'Edytuj kartę',
-      onPress: () => router.push({ pathname: '/card-editor', params: { deckId, cardId: card.id } }),
-    },
-    // Swaps what this sheet shows instead of opening a second one.
-    ...(moveTargets.length > 0
-      ? [
-          {
-            label: 'Przenieś do innej talii',
-            keepOpen: true,
-            onPress: () => setMenu({ card, view: 'move' }),
-          },
-        ]
-      : []),
-    { label: 'Zeruj postęp', onPress: () => resetCard(card.id) },
-    { label: 'Usuń kartę', destructive: true, onPress: () => confirmDelete(card) },
-  ];
+  const copySelectedTo = (target: { id: number; name: string }) => {
+    const ids = selectedIds;
+    if (ids.length === 0) return;
+
+    const made = copyCards(ids, target.id, duplicateMedia);
+    setSelected(null);
+
+    // Copying into another deck leaves nothing to see on this screen, so the
+    // only sign it worked would otherwise be no sign at all.
+    Alert.alert(
+      'Skopiowano',
+      `${cardsLabel(made.length)} → „${target.name}”. Kopie zaczynają jako nowe karty.`,
+      [{ text: 'OK' }],
+      { cancelable: true }
+    );
+  };
 
   /** The card keeps its schedule and history — only the deck changes. */
-  const moveActions = (card: CardMenuTarget): SheetAction[] =>
+  const moveSelectedTo = (target: { id: number; name: string }) => {
+    const ids = selectedIds;
+    if (ids.length === 0) return;
+
+    moveCards(ids, target.id);
+    setSelected(null);
+  };
+
+  /**
+   * Everything that can be done to what is picked. One card selected gets two
+   * extra entries — editing and resetting make sense for exactly one card, and
+   * hiding the rest behind a second menu would only split the same list in two.
+   */
+  const selectionActions = (): SheetAction[] => {
+    const count = selectedIds.length;
+    const nothing = count === 0;
+    const single = count === 1 ? selectedIds[0] : null;
+    const emptyHint = nothing ? 'Najpierw zaznacz karty.' : undefined;
+
+    return [
+      {
+        label: 'Podgląd zaznaczonych',
+        hint: emptyHint ?? 'Przejrzyj je tak, jak zobaczy je uczący się. Nic nie zapisuje.',
+        disabled: nothing,
+        onPress: () =>
+          router.push({
+            pathname: '/deck/[deckId]/preview',
+            params: { deckId, ids: selectedIds.join(',') },
+          }),
+      },
+      ...(single !== null
+        ? [
+            {
+              label: 'Edytuj kartę',
+              onPress: () =>
+                router.push({ pathname: '/card-editor', params: { deckId, cardId: single } }),
+            },
+          ]
+        : []),
+      {
+        label: 'Kopiuj do talii',
+        hint: emptyHint ?? 'Oryginały zostają na miejscu.',
+        disabled: nothing,
+        // Swaps what this sheet shows instead of opening a second one.
+        keepOpen: true,
+        onPress: () => setMenu('copy'),
+      },
+      // Stays on the list even with nowhere to move to, saying why: hiding it
+      // made the whole feature look like it did not exist.
+      {
+        label: 'Przenieś do innej talii',
+        disabled: nothing || moveTargets.length === 0,
+        hint:
+          emptyHint ??
+          (moveTargets.length === 0 ? 'Nie masz drugiej talii, więc nie ma dokąd.' : undefined),
+        keepOpen: true,
+        onPress: () => setMenu('move'),
+      },
+      {
+        label: count === 1 ? 'Zeruj postęp' : 'Zeruj postęp zaznaczonych',
+        hint: emptyHint,
+        disabled: nothing,
+        onPress: () => {
+          resetCards(selectedIds);
+          setSelected(null);
+        },
+      },
+      {
+        label: count === 1 ? 'Usuń kartę' : 'Usuń zaznaczone',
+        hint: emptyHint,
+        disabled: nothing,
+        destructive: true,
+        onPress: confirmDeleteSelected,
+      },
+    ];
+  };
+
+  /** The deck itself first: copying in place is how a card becomes a variant. */
+  const copyActions = (): SheetAction[] => [
+    {
+      label: deck ? `${deck.name} (ta talia)` : 'Ta talia',
+      hint: 'Kopie wylądują tutaj, obok oryginałów.',
+      onPress: () => copySelectedTo({ id: deckId, name: deck?.name ?? 'ta talia' }),
+    },
+    ...moveTargets.map((target) => ({
+      label: target.name,
+      onPress: () => copySelectedTo(target),
+    })),
+  ];
+
+  const moveActions = (): SheetAction[] =>
     moveTargets.map((target) => ({
       label: target.name,
-      onPress: () => moveCard(card.id, target.id),
+      onPress: () => moveSelectedTo(target),
     }));
+
+  const MENU_TITLES: Record<MenuView, string> = {
+    actions: `Zaznaczono ${selectedIds.length}`,
+    copy: 'Kopiuj do talii',
+    move: 'Przenieś do talii',
+  };
 
   return (
     <View style={[styles.screen, { backgroundColor: theme.background }]}>
       <Stack.Screen
         options={{
-          title: deck?.name ?? 'Talia',
+          title: selecting ? `Zaznaczono ${selectedIds.length}` : (deck?.name ?? 'Talia'),
           headerRight: () =>
-            deck ? (
+            selecting ? (
+              <View style={styles.headerActions}>
+                <Pressable
+                  onPress={() => setMenu('actions')}
+                  hitSlop={12}
+                  accessibilityRole="button"
+                  accessibilityLabel="Co zrobić z zaznaczonymi kartami">
+                  <ThemedText style={[styles.dots, { color: theme.accent }]}>⋯</ThemedText>
+                </Pressable>
+                <Pressable
+                  onPress={() => setSelected(null)}
+                  hitSlop={12}
+                  accessibilityRole="button"
+                  accessibilityLabel="Zakończ zaznaczanie">
+                  <ThemedText type="small" style={{ color: theme.accent }}>
+                    Gotowe
+                  </ThemedText>
+                </Pressable>
+              </View>
+            ) : deck ? (
               <Pressable
                 onPress={() => router.push({ pathname: '/deck-editor', params: { deckId } })}
-                hitSlop={12}>
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel="Edytuj talię">
                 <ThemedText type="small" style={{ color: theme.accent }}>
                   Edytuj
                 </ThemedText>
@@ -208,70 +369,120 @@ export default function DeckScreen() {
             />
           )
         }
-        renderItem={({ item }) => (
-          <Pressable
-            onPress={() =>
-              router.push({ pathname: '/card-editor', params: { deckId, cardId: item.id } })
-            }
-            onLongPress={() =>
-              setMenu({
-                card: { id: item.id, front: item.front, back: item.back },
-                view: 'actions',
-              })
-            }
-            style={({ pressed }) => [
-              styles.row,
-              {
-                backgroundColor: theme.backgroundElement,
-                borderColor: theme.border,
-                opacity: pressed ? 0.7 : 1,
-              },
-            ]}>
-            <View style={styles.rowMain}>
-              <ThemedText numberOfLines={2} style={styles.front}>
-                {item.front}
-              </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary" numberOfLines={2}>
-                {item.back}
-              </ThemedText>
-            </View>
-            <View style={styles.rowMeta}>
-              <ThemedText type="small" themeColor="textSecondary">
-                {STATE_LABELS[(item.state ?? State.New) as State]}
-              </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">
-                {formatDue(item.due, now)}
-              </ThemedText>
-            </View>
-          </Pressable>
-        )}
+        renderItem={({ item }) => {
+          const picked = Boolean(selected?.has(item.id));
+
+          return (
+            <Pressable
+              onPress={() =>
+                selecting
+                  ? toggle(item.id)
+                  : router.push({ pathname: '/card-editor', params: { deckId, cardId: item.id } })
+              }
+              // Holding a card is how selection starts, with that card already
+              // picked; from then on a plain tap is enough for the rest.
+              onLongPress={() => (selecting ? toggle(item.id) : setSelected(new Set([item.id])))}
+              accessibilityRole={selecting ? 'checkbox' : 'button'}
+              accessibilityState={selecting ? { checked: picked } : undefined}
+              accessibilityLabel={item.front}
+              style={({ pressed }) => [
+                styles.row,
+                {
+                  backgroundColor: picked ? theme.backgroundSelected : theme.backgroundElement,
+                  borderColor: picked ? theme.accent : theme.border,
+                  opacity: pressed ? 0.7 : 1,
+                },
+              ]}>
+              {selecting ? (
+                <View
+                  style={[
+                    styles.tick,
+                    {
+                      borderColor: picked ? theme.accent : theme.border,
+                      backgroundColor: picked ? theme.accent : 'transparent',
+                    },
+                  ]}>
+                  {picked ? (
+                    <ThemedText type="smallBold" style={{ color: theme.onAccent }}>
+                      ✓
+                    </ThemedText>
+                  ) : null}
+                </View>
+              ) : null}
+
+              <View style={styles.rowMain}>
+                <ThemedText numberOfLines={2} style={styles.front}>
+                  {item.front}
+                </ThemedText>
+                <ThemedText type="small" themeColor="textSecondary" numberOfLines={2}>
+                  {item.back}
+                </ThemedText>
+              </View>
+              <View style={styles.rowMeta}>
+                <ThemedText type="small" themeColor="textSecondary">
+                  {STATE_LABELS[(item.state ?? State.New) as State]}
+                </ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  {formatDue(item.due, now)}
+                </ThemedText>
+              </View>
+            </Pressable>
+          );
+        }}
       />
 
       <View style={[styles.footer, { borderColor: theme.border }]}>
-        <Button
-          title={
-            due > 0
-              ? `Ucz się (${due})`
-              : heldBack > 0
-                ? "Limit na dziś wyczerpany"
-                : "Nic do powtórki"
-          }
-          disabled={due === 0}
-          onPress={() => router.push({ pathname: '/deck/[deckId]/review', params: { deckId } })}
-        />
-        <Button
-          title="Dodaj kartę"
-          variant="secondary"
-          onPress={() => router.push({ pathname: '/card-editor', params: { deckId } })}
-        />
+        {selecting ? (
+          // The verbs all live under "⋯" in the header; what stays down here is
+          // only what helps with picking.
+          <View style={styles.selectionBar}>
+            <ThemedText type="small" themeColor="textSecondary">
+              {selectedIds.length === 0
+                ? 'Dotknij kart, żeby je zaznaczyć'
+                : `Zaznaczono ${cardsLabel(selectedIds.length)} — akcje pod ⋯`}
+            </ThemedText>
+            {visibleCards.length > 0 ? (
+              <Pressable onPress={toggleAllVisible} hitSlop={12} accessibilityRole="button">
+                <ThemedText type="small" style={{ color: theme.accent }}>
+                  {allVisiblePicked ? 'Odznacz wszystkie' : 'Zaznacz wszystkie'}
+                </ThemedText>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : (
+          <>
+            <Button
+              title={
+                due > 0
+                  ? `Ucz się (${due})`
+                  : heldBack > 0
+                    ? 'Limit na dziś wyczerpany'
+                    : 'Nic do powtórki'
+              }
+              disabled={due === 0}
+              onPress={() => router.push({ pathname: '/deck/[deckId]/review', params: { deckId } })}
+            />
+            <Button
+              title="Dodaj kartę"
+              variant="secondary"
+              onPress={() => router.push({ pathname: '/card-editor', params: { deckId } })}
+            />
+          </>
+        )}
       </View>
 
       {menu ? (
         <ActionSheet
           visible
-          title={menu.view === 'move' ? 'Przenieś do talii' : menu.card.front}
-          subtitle={menu.view === 'move' ? menu.card.front : menu.card.back}
-          actions={menu.view === 'move' ? moveActions(menu.card) : cardMenuActions(menu.card)}
+          title={MENU_TITLES[menu]}
+          subtitle={
+            menu === 'actions'
+              ? undefined
+              : `${cardsLabel(selectedIds.length)}${menu === 'copy' ? ' — oryginały zostają na miejscu' : ''}`
+          }
+          actions={
+            menu === 'copy' ? copyActions() : menu === 'move' ? moveActions() : selectionActions()
+          }
           onClose={() => setMenu(null)}
         />
       ) : null}
@@ -308,6 +519,38 @@ const styles = StyleSheet.create({
     padding: Spacing.three,
     borderRadius: Radius.large,
     borderWidth: StyleSheet.hairlineWidth,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+  },
+  /** The checkbox that only exists while the list is picking. */
+  tick: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+    paddingBottom: Spacing.one,
+  },
+  dots: {
+    fontSize: 22,
+    lineHeight: 24,
+  },
+  selectionActions: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  selectionAction: {
+    flex: 1,
   },
   rowMain: {
     flex: 1,
