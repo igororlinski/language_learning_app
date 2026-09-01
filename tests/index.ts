@@ -13,6 +13,7 @@ import './media.test';
 import './tags.test';
 import './study-day.test';
 import './fsrs-options.test';
+import './fsrs-optimizer.test';
 import './data-layer.test';
 
 import { failureCount } from './harness';

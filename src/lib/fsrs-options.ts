@@ -110,7 +110,26 @@ export type DeckScheduling = {
   maximumInterval: number;
   learningSteps: string;
   relearningSteps: string;
+  /** Weights fitted to this deck's history, or null while it uses the defaults. */
+  weights?: number[] | null;
 };
+
+/** The stored JSON, or null when there is none — or when it is not usable. */
+export function parseWeights(json: string | null): number[] | null {
+  if (!json) return null;
+
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    if (!parsed.every((value) => typeof value === 'number' && Number.isFinite(value))) return null;
+
+    return parsed as number[];
+  } catch {
+    // A row written by a future version, or corrupted: fall back on the
+    // defaults rather than taking the whole deck down with it.
+    return null;
+  }
+}
 
 export const DEFAULT_SCHEDULING: DeckScheduling = {
   desiredRetention: DEFAULT_RETENTION,
@@ -126,5 +145,6 @@ export function schedulingKey(scheduling: DeckScheduling): string {
     scheduling.maximumInterval,
     scheduling.learningSteps,
     scheduling.relearningSteps,
+    scheduling.weights ? scheduling.weights.join(',') : 'default',
   ].join('|');
 }

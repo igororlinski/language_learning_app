@@ -2,7 +2,8 @@ import { and, asc, desc, eq, inArray, lt, lte, ne, or, sql, type SQLWrapper } fr
 
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
 import { isMediaKind, type MediaKind } from '@/lib/media';
-import { DEFAULT_SCHEDULING, type DeckScheduling } from '@/lib/fsrs-options';
+import { DEFAULT_SCHEDULING, parseWeights, type DeckScheduling } from '@/lib/fsrs-options';
+import { type StabilitySample } from '@/lib/fsrs-optimizer';
 import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 
 import {
@@ -636,7 +637,73 @@ export function deckScheduling(deckId: number): DeckScheduling {
     maximumInterval: deck.maximumInterval,
     learningSteps: deck.learningSteps,
     relearningSteps: deck.relearningSteps,
+    weights: parseWeights(deck.fsrsWeights),
   };
+}
+
+/**
+ * What the optimiser learns from: one row per card that finished a first study
+ * day and came back on a later one.
+ *
+ * Read whole rather than aggregated in SQL — the grouping is by **study day**
+ * (which starts at 4:00, not midnight) and by what a card's first day *ended*
+ * on, neither of which SQLite knows about. A deck's history is thousands of
+ * rows at most, and this runs when a button is pressed, not on every render.
+ */
+export function stabilitySamples(deckId: number, dayStart: (now: Date) => Date): StabilitySample[] {
+  const rows = db
+    .select({
+      cardId: reviewLogs.cardId,
+      rating: reviewLogs.rating,
+      reviewedAt: reviewLogs.reviewedAt,
+    })
+    .from(reviewLogs)
+    .innerJoin(cards, eq(cards.id, reviewLogs.cardId))
+    .where(eq(cards.deckId, deckId))
+    .orderBy(asc(reviewLogs.cardId), asc(reviewLogs.reviewedAt))
+    .all();
+
+  const byCard = new Map<number, typeof rows>();
+  for (const row of rows) {
+    const own = byCard.get(row.cardId);
+    if (own) own.push(row);
+    else byCard.set(row.cardId, [row]);
+  }
+
+  const samples: StabilitySample[] = [];
+
+  for (const history of byCard.values()) {
+    const firstDay = dayStart(history[0].reviewedAt).getTime();
+
+    // Where the card's first study day ends and the next review begins.
+    const next = history.findIndex((row) => dayStart(row.reviewedAt).getTime() !== firstDay);
+    if (next < 1) continue;
+
+    const last = history[next - 1];
+    const after = history[next];
+    const deltaDays = Math.round(
+      (dayStart(after.reviewedAt).getTime() - firstDay) / (24 * 60 * 60 * 1000)
+    );
+
+    if (deltaDays < 1) continue;
+
+    samples.push({
+      rating: last.rating as StabilitySample['rating'],
+      deltaDays,
+      recalled: after.rating !== 1,
+    });
+  }
+
+  return samples;
+}
+
+/** Stores fitted weights, or clears them back to the FSRS defaults. */
+export function setDeckWeights(deckId: number, weights: number[] | null) {
+  return db
+    .update(decks)
+    .set({ fsrsWeights: weights ? JSON.stringify(weights) : null })
+    .where(eq(decks.id, deckId))
+    .run();
 }
 
 /** What the deck may still hand out in the study day containing `now`. */

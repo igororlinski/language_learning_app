@@ -51,6 +51,12 @@ export const decks = sqliteTable('decks', {
   /** Space-separated, Anki style: `1m 10m`. */
   learningSteps: text('learning_steps').notNull().default(DEFAULT_LEARNING_STEPS),
   relearningSteps: text('relearning_steps').notNull().default(DEFAULT_RELEARNING_STEPS),
+  /**
+   * The twenty one FSRS weights as JSON, or null while the deck still uses the
+   * defaults. Written only by the optimiser — see `src/lib/fsrs-optimizer.ts`,
+   * which explains why they are not an editable setting.
+   */
+  fsrsWeights: text('fsrs_weights'),
   reviewsPerDay: integer('reviews_per_day').notNull().default(DEFAULT_REVIEWS_PER_DAY),
   /** How the session queue is built — see the two constant blocks above. */
   newCardPlacement: text('new_card_placement', { enum: NEW_CARD_PLACEMENTS })

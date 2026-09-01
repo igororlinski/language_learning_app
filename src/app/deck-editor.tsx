@@ -19,6 +19,7 @@ import {
   getDeck,
   newCardFields,
   newCardLayout,
+  stabilitySamples,
   syncDeckSlots,
   updateDeck,
 } from '@/db/queries';
@@ -47,9 +48,12 @@ import {
   MAXIMUM_INTERVALS,
   NO_INTERVAL_LIMIT,
   parseMaximumInterval,
+  parseWeights,
   RETENTIONS,
 } from '@/lib/fsrs-options';
-import { firstEasyInterval } from '@/lib/scheduler';
+import { MIN_SAMPLES, optimizeWeights, RATING_ORDER } from '@/lib/fsrs-optimizer';
+import { firstEasyInterval, GRADE_LABELS } from '@/lib/scheduler';
+import { studyDayStart } from '@/lib/study-day';
 import { deleteMedia } from '@/lib/media-files';
 import type { BaseKind } from '@/lib/card-layout';
 import {
@@ -190,6 +194,51 @@ export default function DeckEditorScreen() {
     existing?.relearningSteps ?? DEFAULT_RELEARNING_STEPS
   );
 
+  // Weights fitted to this deck's own history. Held in state so the button can
+  // report what it did without the screen having to be left and reopened.
+  const [weights, setWeights] = useState<number[] | null>(
+    existing ? parseWeights(existing.fsrsWeights) : null
+  );
+
+  /**
+   * Fits what the history supports, and says exactly what it could not.
+   * A deck too young to learn anything from must hear that, rather than get
+   * four confident numbers pulled out of a handful of answers.
+   */
+  const optimize = () => {
+    if (!deckId) return;
+
+    const result = optimizeWeights(
+      stabilitySamples(deckId, studyDayStart),
+      weights ?? undefined
+    );
+
+    if (result.fitted.length === 0) {
+      Alert.alert(
+        'Za mało historii',
+        `Ta talia ma ${result.total} ${result.total === 1 ? 'powtórkę' : 'powtórek'} nadających się do policzenia. Każda ocena potrzebuje ${MIN_SAMPLES}, żeby cokolwiek z niej wyszło.`,
+        [{ text: 'OK' }],
+        { cancelable: true }
+      );
+      return;
+    }
+
+    setWeights(result.weights);
+
+    const counted = RATING_ORDER.map(
+      (rating) => `${GRADE_LABELS[rating]}: ${result.counts[rating]}`
+    ).join(', ');
+
+    Alert.alert(
+      'Dopasowano',
+      `Policzone z ${result.total} powtórek (${counted}). Zmienione oceny: ${result.fitted
+        .map((rating) => GRADE_LABELS[rating])
+        .join(', ')}. Zapisz talię, żeby to zostało.`,
+      [{ text: 'OK' }],
+      { cancelable: true }
+    );
+  };
+
   const stepsOk =
     isValidSteps(learningSteps) &&
     isValidSteps(relearningSteps) &&
@@ -283,6 +332,7 @@ export default function DeckEditorScreen() {
         maximumInterval: savedInterval,
         learningSteps: learningSteps.trim().toLowerCase(),
         relearningSteps: relearningSteps.trim().toLowerCase(),
+        weights,
       },
       newCardLayout: placement,
     };
@@ -426,6 +476,24 @@ export default function DeckEditorScreen() {
                 ? `liczba dni, od 1 do ${NO_INTERVAL_LIMIT}`
                 : undefined
             }
+          />
+        ) : null}
+
+        <View style={styles.limits}>
+          <ThemedText type="smallBold">
+            {weights ? 'Wagi dopasowane do tej talii' : 'Wagi domyślne FSRS'}
+          </ThemedText>
+        </View>
+
+        {deckId ? (
+          <Button title="Optymalizuj" variant="secondary" onPress={optimize} />
+        ) : null}
+
+        {weights ? (
+          <Button
+            title="Wróć do domyślnych"
+            variant="ghost"
+            onPress={() => setWeights(null)}
           />
         ) : null}
 

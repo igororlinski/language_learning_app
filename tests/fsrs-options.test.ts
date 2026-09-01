@@ -12,6 +12,7 @@ import {
   isValidSteps,
   NO_INTERVAL_LIMIT,
   parseMaximumInterval,
+  parseWeights,
   parseSteps,
   RETENTIONS,
   schedulingKey,
@@ -111,3 +112,14 @@ check('ponad nia juz nie', parseMaximumInterval(String(NO_INTERVAL_LIMIT + 1)), 
 // Which values the editor shows as a preset, and which open the "own" field.
 check('rok to gotowa pozycja', isPresetInterval(365), true);
 check('a dziewiecdziesiat dni to wlasne', isPresetInterval(90), false);
+
+group('Wagi zapisane jako tekst');
+
+check('brak kolumny to brak wag', parseWeights(null), null);
+check('poprawna lista wraca', parseWeights('[1,2,3]'), [1, 2, 3]);
+// A row written by a future version, or corrupted, must not take the deck down.
+check('niepoprawny JSON spada na domyslne', parseWeights('{'), null);
+check('nie-lista tez', parseWeights('{"w":1}'), null);
+check('lista z tekstem tez', parseWeights('[1,"dwa"]'), null);
+check('lista z NaN tez', parseWeights('[1,null]'), null);
+check('pusta lista tez', parseWeights('[]'), null);

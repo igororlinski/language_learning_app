@@ -20,6 +20,8 @@ import {
   deckTagsQuery,
   getCardTagNames,
   setCardTagNames,
+  setDeckWeights,
+  stabilitySamples,
   createCard,
   createDeck,
   deckAllowance,
@@ -51,7 +53,8 @@ import { decks, fsrsState, reviewLogs } from '@/db/schema';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { sortCards } from '@/lib/card-sort';
 import { filterCards } from '@/lib/search';
-import { DEFAULT_SCHEDULING } from '@/lib/fsrs-options';
+import { DEFAULT_SCHEDULING, schedulingKey } from '@/lib/fsrs-options';
+import { optimizeWeights } from '@/lib/fsrs-optimizer';
 import { filterByTags } from '@/lib/tags';
 import { countQueueStates, Rating, State } from '@/lib/scheduler';
 
@@ -70,6 +73,7 @@ import migration0009 from '../drizzle/0009_curved_jazinda.sql';
 import migration0010 from '../drizzle/0010_quiet_absorbing_man.sql';
 import migration0011 from '../drizzle/0011_violet_giant_man.sql';
 import migration0012 from '../drizzle/0012_cool_swordsman.sql';
+import migration0013 from '../drizzle/0013_messy_nova.sql';
 
 for (const migration of [
   migration0000,
@@ -85,6 +89,7 @@ for (const migration of [
   migration0010,
   migration0011,
   migration0012,
+  migration0013,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -1046,8 +1051,13 @@ check('talia pamieta swoje opcje', deckScheduling(tunedDeck.id), {
   maximumInterval: 30,
   learningSteps: '5m 25m',
   relearningSteps: '15m',
+  // Never optimised, so it still uses the FSRS defaults.
+  weights: null,
 });
-check('a nowa talia dostaje domyslne', deckScheduling(plain.id), DEFAULT_SCHEDULING);
+check('a nowa talia dostaje domyslne', deckScheduling(plain.id), {
+  ...DEFAULT_SCHEDULING,
+  weights: null,
+});
 
 // The steps a deck sets are the ones its cards actually get.
 const tunedCard = createCard(tunedDeck.id, 'to tune', 'stroic', now);
@@ -1064,3 +1074,64 @@ const cappedCard = createCard(tunedDeck.id, 'to cap', 'ograniczac', now);
 gradeCard(cappedCard.id, Rating.Easy, now);
 
 check('maksymalny odstep talii obowiazuje', snapshot(cappedCard.id).scheduledDays <= 30, true);
+
+group('Probki dla optymalizatora');
+
+const optDeck = createDeck({ name: 'Historia', newPerDay: 50, reviewsPerDay: 50 });
+
+// Answered twice on its first day, then again two days later. The sample takes
+// how the first day *ended*, not how it began.
+const twoOnDayOne = createCard(optDeck.id, 'a', 'A', now);
+gradeCard(twoOnDayOne.id, Rating.Again, at(12, 0, 30));
+gradeCard(twoOnDayOne.id, Rating.Good, at(12, 20, 30));
+gradeCard(twoOnDayOne.id, Rating.Good, at(12, 0, 32));
+
+// Graduated on the first answer, forgotten three days later.
+const straightOut = createCard(optDeck.id, 'b', 'B', now);
+gradeCard(straightOut.id, Rating.Easy, at(12, 0, 30));
+gradeCard(straightOut.id, Rating.Again, at(12, 0, 33));
+
+// Never came back — nothing to learn from it yet.
+const onlyOnce = createCard(optDeck.id, 'c', 'C', now);
+gradeCard(onlyOnce.id, Rating.Good, at(12, 0, 30));
+
+// Answered twice, but both on the same day: R(0) = 1 for any stability, so it
+// says nothing about which one is right.
+const sameDayOnly = createCard(optDeck.id, 'd', 'D', now);
+gradeCard(sameDayOnly.id, Rating.Again, at(12, 0, 30));
+gradeCard(sameDayOnly.id, Rating.Good, at(12, 30, 30));
+
+const samples = stabilitySamples(optDeck.id, studyDayStart);
+
+check('tylko karty z powrotem w kolejnym dniu', samples.length, 2);
+check(
+  'ocena konczaca pierwszy dzien, odstep w dniach i wynik',
+  samples.map((sample) => [sample.rating, sample.deltaDays, sample.recalled]).sort(),
+  [
+    [Rating.Good, 2, true],
+    [Rating.Easy, 3, false],
+  ].sort()
+);
+
+// A review at 2 AM belongs to the previous study day, so it must not look like
+// a fresh day of its own.
+const nightDeck = createDeck({ name: 'Noc', newPerDay: 50, reviewsPerDay: 50 });
+const nightCard = createCard(nightDeck.id, 'e', 'E', now);
+gradeCard(nightCard.id, Rating.Good, at(23, 0, 30));
+gradeCard(nightCard.id, Rating.Good, at(2, 0, 31));
+
+check('noc nalezy do poprzedniego dnia nauki', stabilitySamples(nightDeck.id, studyDayStart), []);
+
+group('Wagi zapisane przy talii');
+
+check('bez optymalizacji talia nie ma wag', deckScheduling(optDeck.id).weights, null);
+
+const fitted = optimizeWeights(stabilitySamples(optDeck.id, studyDayStart)).weights;
+setDeckWeights(optDeck.id, fitted);
+
+check('zapisane wagi wracaja z bazy', deckScheduling(optDeck.id).weights, fitted);
+check('i zmieniaja klucz silnika', schedulingKey(deckScheduling(optDeck.id)) === schedulingKey({ ...deckScheduling(optDeck.id), weights: null }), false);
+
+setDeckWeights(optDeck.id, null);
+
+check('powrot do domyslnych czysci kolumne', deckScheduling(optDeck.id).weights, null);

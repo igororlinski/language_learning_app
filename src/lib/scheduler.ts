@@ -1,4 +1,5 @@
 import {
+  clipParameters,
   createEmptyCard,
   fsrs,
   generatorParameters,
@@ -43,6 +44,10 @@ const parametersFor = (scheduling: DeckScheduling) =>
     ) as never,
     enable_fuzz: true,
     enable_short_term: true,
+    // Only when the deck has been optimised; `generatorParameters` fills in
+    // the defaults otherwise, and clipping keeps a stored set inside the
+    // ranges ts-fsrs will accept.
+    ...(scheduling.weights ? { w: clipParameters([...scheduling.weights], 1) } : {}),
   });
 
 // One engine per set of options, built once: `fsrs()` is not free and a session
