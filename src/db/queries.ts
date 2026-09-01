@@ -153,6 +153,18 @@ const fieldText = sql<string>`(
   from ${cardFields} as cfs
   where cfs.card_id = ${cards.id})`;
 
+/**
+ * How many extra fields a card carries — one of the orders the card list can be
+ * sorted by. The two mandatory fields are not counted: every card has both, so
+ * they would shift each number by two and change nothing about the ordering.
+ *
+ * Written the same way as `fieldText`, and for the same reason — see pitfall 7.
+ */
+const fieldCount = sql<number>`(
+  select count(*)
+  from ${cardFields} as cfn
+  where cfn.card_id = ${cards.id})`;
+
 export function cardsInDeckQuery(deckId: number) {
   return db
     .select({
@@ -161,6 +173,8 @@ export function cardsInDeckQuery(deckId: number) {
       back: cards.back,
       /** Only the search reads this; the list itself shows front and back. */
       fields: fieldText,
+      /** Only the sort reads this. */
+      fieldCount,
       imageStatus: cards.imageStatus,
       createdAt: cards.createdAt,
       due: fsrsState.due,

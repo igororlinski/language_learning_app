@@ -6,6 +6,7 @@
 import './search.test';
 import './queue-order.test';
 import './card-layout.test';
+import './card-sort.test';
 import './field-rows.test';
 import './media.test';
 import './data-layer.test';

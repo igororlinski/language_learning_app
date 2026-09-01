@@ -19,7 +19,6 @@ export type FieldLayoutListProps = {
   onChange: (rows: Row[]) => void;
   /** The contents of one row — a text field in the card editor, a note in the deck's. */
   renderRow: (row: Row, info: RowInfo) => ReactNode;
-  hint: string;
 };
 
 /**
@@ -28,7 +27,7 @@ export type FieldLayoutListProps = {
  * be dragged anywhere, so a mandatory field may change sides and a face may end
  * up empty.
  */
-export function FieldLayoutList({ rows, info, onChange, renderRow, hint }: FieldLayoutListProps) {
+export function FieldLayoutList({ rows, info, onChange, renderRow }: FieldLayoutListProps) {
   const reorder = (event: ReorderableListReorderEvent) =>
     onChange(reorderItems(rows, event.from, event.to));
 
@@ -42,9 +41,6 @@ export function FieldLayoutList({ rows, info, onChange, renderRow, hint }: Field
       ListHeaderComponent={
         <View style={styles.header}>
           <SideBoundary label="Przód karty" />
-          <ThemedText type="small" themeColor="textSecondary">
-            {hint}
-          </ThemedText>
         </View>
       }
       renderItem={({ item }) => {

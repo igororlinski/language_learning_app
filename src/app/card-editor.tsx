@@ -48,10 +48,6 @@ const BASE_LABELS: Record<BaseKind, string> = {
   back: 'Odpowiedź',
 };
 
-const HINT =
-  'Przeciągnij dowolne pole za uchwyt: nad linią „Tył karty” jest przód, ' +
-  'pod nią — tył. Strona może zostać pusta.';
-
 export default function CardEditorScreen() {
   const theme = useTheme();
   const router = useRouter();
@@ -234,9 +230,6 @@ export default function CardEditorScreen() {
             style={styles.input}
             multiline
           />
-          <ThemedText type="small" themeColor="textSecondary">
-            Pole podstawowe — nie da się go usunąć.
-          </ThemedText>
         </>
       );
     }
@@ -284,7 +277,6 @@ export default function CardEditorScreen() {
           label={rowInfo.label}
           value={row.value}
           onChangeText={(value) => patchRow(row.key, value)}
-          placeholder="Puste pole nie pokaże się przy nauce"
           style={styles.input}
           multiline
         />
@@ -350,7 +342,6 @@ export default function CardEditorScreen() {
           info={info}
           onChange={setRows}
           renderRow={renderRow}
-          hint={HINT}
         />
 
         <Pressable

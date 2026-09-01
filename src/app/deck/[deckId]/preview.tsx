@@ -109,10 +109,6 @@ export default function PreviewScreen() {
             style={styles.step}
           />
         </View>
-
-        <ThemedText type="small" themeColor="textSecondary" style={styles.note}>
-          Podgląd niczego nie zapisuje — harmonogram tych kart zostaje nietknięty.
-        </ThemedText>
       </View>
     </SafeAreaView>
   );
@@ -142,8 +138,5 @@ const styles = StyleSheet.create({
   },
   step: {
     flex: 1,
-  },
-  note: {
-    textAlign: 'center',
   },
 });

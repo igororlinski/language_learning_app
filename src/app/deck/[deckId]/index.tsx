@@ -1,11 +1,12 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useEffect, useMemo, useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { Button } from '@/components/button';
 import { DueCounts } from '@/components/due-counts';
+import { Dropdown, type DropdownOption } from '@/components/dropdown';
 import { EmptyState } from '@/components/empty-state';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
@@ -24,7 +25,17 @@ import {
 import { useNow } from '@/hooks/use-now';
 import { useTheme } from '@/hooks/use-theme';
 import { deleteMedia, duplicateMedia } from '@/lib/media-files';
-import { cardsLabel, formatDue } from '@/lib/format';
+import {
+  CARD_ORDERS,
+  CARD_ORDER_LABELS,
+  DEFAULT_CARD_ORDER,
+  DEFAULT_DIRECTIONS,
+  DIRECTION_LABELS,
+  sortCards,
+  type CardOrder,
+  type SortDirection,
+} from '@/lib/card-sort';
+import { cardsLabel, formatDate, formatDue } from '@/lib/format';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { filterCards } from '@/lib/search';
 import { STATE_LABELS, State } from '@/lib/scheduler';
@@ -35,6 +46,11 @@ import { STATE_LABELS, State } from '@/lib/scheduler';
  * rather than opening a second modal — see `SheetAction.keepOpen`.
  */
 type MenuView = 'actions' | 'copy' | 'move';
+
+const SORT_OPTIONS: DropdownOption<CardOrder>[] = CARD_ORDERS.map((value) => ({
+  value,
+  label: CARD_ORDER_LABELS[value],
+}));
 
 /** Placeholder while the aggregate is still loading, so the counters never flicker. */
 const EMPTY_BREAKDOWN = {
@@ -86,7 +102,20 @@ export default function DeckScreen() {
   const searching = query.trim().length > 0;
   // Depends on `cards` (stable from useLiveQuery), not on the `?? []` fallback,
   // which would be a fresh array on every render.
-  const visibleCards = useMemo(() => filterCards(cards ?? [], query), [cards, query]);
+  const [order, setOrder] = useState<CardOrder>(DEFAULT_CARD_ORDER);
+  const [direction, setDirection] = useState<SortDirection>(DEFAULT_DIRECTIONS[DEFAULT_CARD_ORDER]);
+  const visibleCards = useMemo(
+    () => sortCards(filterCards(cards ?? [], query), order, direction),
+    [cards, direction, order, query]
+  );
+
+  // A freshly picked order starts the way round it is usually wanted, and the
+  // toggle turns it from there — otherwise choosing "alphabetically" while the
+  // list happened to be descending would hand back Z to A.
+  const pickOrder = (next: CardOrder) => {
+    setOrder(next);
+    setDirection(DEFAULT_DIRECTIONS[next]);
+  };
 
   // `null` means the list behaves normally; a set — even an empty one — means
   // the screen is in selection mode, where a tap picks instead of opening.
@@ -100,6 +129,21 @@ export default function DeckScreen() {
     () => (selected ? (cards ?? []).filter((card) => selected.has(card.id)).map((c) => c.id) : []),
     [cards, selected]
   );
+
+  const navigation = useNavigation();
+
+  // Going back drops the selection instead of leaving the deck — one rule for
+  // the header arrow, the phone's back button and the back gesture alike, since
+  // all three come through here. `expo-router` (SDK 57) exports no
+  // `usePreventRemove`, so the navigation event is listened to directly.
+  useEffect(() => {
+    if (!selecting) return;
+
+    return navigation.addListener('beforeRemove', (event) => {
+      event.preventDefault();
+      setSelected(null);
+    });
+  }, [navigation, selecting]);
 
   const toggle = (cardId: number) =>
     setSelected((current) => {
@@ -179,9 +223,10 @@ export default function DeckScreen() {
   };
 
   /**
-   * Everything that can be done to what is picked. One card selected gets two
-   * extra entries — editing and resetting make sense for exactly one card, and
-   * hiding the rest behind a second menu would only split the same list in two.
+   * Everything that can be done to what is picked. With exactly one card there
+   * is one entry more — editing, which needs a single card to mean anything;
+   * the rest only change their wording. Splitting this into a per-card menu and
+   * a per-selection menu would be two lists saying the same thing.
    */
   const selectionActions = (): SheetAction[] => {
     const count = selectedIds.length;
@@ -192,7 +237,7 @@ export default function DeckScreen() {
     return [
       {
         label: 'Podgląd zaznaczonych',
-        hint: emptyHint ?? 'Przejrzyj je tak, jak zobaczy je uczący się. Nic nie zapisuje.',
+        hint: emptyHint,
         disabled: nothing,
         onPress: () =>
           router.push({
@@ -211,7 +256,7 @@ export default function DeckScreen() {
         : []),
       {
         label: 'Kopiuj do talii',
-        hint: emptyHint ?? 'Oryginały zostają na miejscu.',
+        hint: emptyHint,
         disabled: nothing,
         // Swaps what this sheet shows instead of opening a second one.
         keepOpen: true,
@@ -251,7 +296,6 @@ export default function DeckScreen() {
   const copyActions = (): SheetAction[] => [
     {
       label: deck ? `${deck.name} (ta talia)` : 'Ta talia',
-      hint: 'Kopie wylądują tutaj, obok oryginałów.',
       onPress: () => copySelectedTo({ id: deckId, name: deck?.name ?? 'ta talia' }),
     },
     ...moveTargets.map((target) => ({
@@ -279,24 +323,13 @@ export default function DeckScreen() {
           title: selecting ? `Zaznaczono ${selectedIds.length}` : (deck?.name ?? 'Talia'),
           headerRight: () =>
             selecting ? (
-              <View style={styles.headerActions}>
-                <Pressable
-                  onPress={() => setMenu('actions')}
-                  hitSlop={12}
-                  accessibilityRole="button"
-                  accessibilityLabel="Co zrobić z zaznaczonymi kartami">
-                  <ThemedText style={[styles.dots, { color: theme.accent }]}>⋯</ThemedText>
-                </Pressable>
-                <Pressable
-                  onPress={() => setSelected(null)}
-                  hitSlop={12}
-                  accessibilityRole="button"
-                  accessibilityLabel="Zakończ zaznaczanie">
-                  <ThemedText type="small" style={{ color: theme.accent }}>
-                    Gotowe
-                  </ThemedText>
-                </Pressable>
-              </View>
+              <Pressable
+                onPress={() => setMenu('actions')}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel="Co zrobić z zaznaczonymi kartami">
+                <ThemedText style={[styles.dots, { color: theme.accent }]}>⋯</ThemedText>
+              </Pressable>
             ) : deck ? (
               <Pressable
                 onPress={() => router.push({ pathname: '/deck-editor', params: { deckId } })}
@@ -330,7 +363,7 @@ export default function DeckScreen() {
             <DueCounts counts={counts} showLabels />
             {heldBack > 0 ? (
               <ThemedText type="small" themeColor="textSecondary">
-                {`Dzienny limit wstrzymuje ${cardsLabel(heldBack)} — wrócą jutro.`}
+                {`Wstrzymane limitem: ${cardsLabel(heldBack)}`}
               </ThemedText>
             ) : null}
 
@@ -351,6 +384,35 @@ export default function DeckScreen() {
                       Wyczyść
                     </ThemedText>
                   </Pressable>
+                ) : null}
+
+                {allCards.length > 1 ? (
+                  <View style={styles.sort}>
+                    <Dropdown
+                      value={order}
+                      options={SORT_OPTIONS}
+                      onChange={pickOrder}
+                      accessibilityLabel="Kolejność kart"
+                      style={styles.sortField}
+                    />
+                    <Pressable
+                      onPress={() => setDirection(direction === 'asc' ? 'desc' : 'asc')}
+                      accessibilityRole="button"
+                      accessibilityLabel={DIRECTION_LABELS[order][direction]}
+                      style={({ pressed }) => [
+                        styles.direction,
+                        {
+                          borderColor: theme.border,
+                          backgroundColor: pressed
+                            ? theme.backgroundSelected
+                            : theme.backgroundElement,
+                        },
+                      ]}>
+                      <ThemedText type="small" style={{ color: theme.accent }}>
+                        {direction === 'asc' ? '↑' : '↓'}
+                      </ThemedText>
+                    </Pressable>
+                  </View>
                 ) : null}
               </View>
             ) : null}
@@ -425,6 +487,9 @@ export default function DeckScreen() {
                 <ThemedText type="small" themeColor="textSecondary">
                   {formatDue(item.due, now)}
                 </ThemedText>
+                <ThemedText type="small" themeColor="textSecondary" style={styles.added}>
+                  {formatDate(item.createdAt, new Date(now))}
+                </ThemedText>
               </View>
             </Pressable>
           );
@@ -436,10 +501,10 @@ export default function DeckScreen() {
           // The verbs all live under "⋯" in the header; what stays down here is
           // only what helps with picking.
           <View style={styles.selectionBar}>
-            <ThemedText type="small" themeColor="textSecondary">
+            <ThemedText type="small" themeColor="textSecondary" style={styles.selectionHint}>
               {selectedIds.length === 0
-                ? 'Dotknij kart, żeby je zaznaczyć'
-                : `Zaznaczono ${cardsLabel(selectedIds.length)} — akcje pod ⋯`}
+                ? 'Nic nie zaznaczono'
+                : cardsLabel(selectedIds.length)}
             </ThemedText>
             {visibleCards.length > 0 ? (
               <Pressable onPress={toggleAllVisible} hitSlop={12} accessibilityRole="button">
@@ -476,9 +541,7 @@ export default function DeckScreen() {
           visible
           title={MENU_TITLES[menu]}
           subtitle={
-            menu === 'actions'
-              ? undefined
-              : `${cardsLabel(selectedIds.length)}${menu === 'copy' ? ' — oryginały zostają na miejscu' : ''}`
+            menu === 'copy' || menu === 'move' ? cardsLabel(selectedIds.length) : undefined
           }
           actions={
             menu === 'copy' ? copyActions() : menu === 'move' ? moveActions() : selectionActions()
@@ -505,6 +568,22 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.two,
     gap: Spacing.one,
   },
+  sort: {
+    flexDirection: 'row',
+    // Top-aligned so the toggle stays put while the list unfolds downwards.
+    alignItems: 'flex-start',
+    gap: Spacing.two,
+    marginTop: Spacing.one,
+  },
+  sortField: {
+    flex: 1,
+  },
+  direction: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    borderRadius: Radius.medium,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   clear: {
     alignSelf: 'flex-end',
   },
@@ -519,6 +598,10 @@ const styles = StyleSheet.create({
     padding: Spacing.three,
     borderRadius: Radius.large,
     borderWidth: StyleSheet.hairlineWidth,
+  },
+  /** Dimmer than the rest of the meta column — it is the least urgent number. */
+  added: {
+    opacity: 0.7,
   },
   headerActions: {
     flexDirection: 'row',
@@ -544,6 +627,9 @@ const styles = StyleSheet.create({
   dots: {
     fontSize: 22,
     lineHeight: 24,
+  },
+  selectionHint: {
+    flexShrink: 1,
   },
   selectionActions: {
     flexDirection: 'row',

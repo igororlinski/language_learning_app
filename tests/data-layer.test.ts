@@ -43,6 +43,7 @@ import {
 } from '@/db/queries';
 import { decks, fsrsState, reviewLogs } from '@/db/schema';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
+import { sortCards } from '@/lib/card-sort';
 import { filterCards } from '@/lib/search';
 import { countQueueStates, Rating, State } from '@/lib/scheduler';
 
@@ -596,6 +597,22 @@ check(
   'karta bez pol dodatkowych daje pusty tekst',
   searchRows.find((card) => card.front === 'to run')?.fields,
   ''
+);
+
+// The same shape of subquery as `fields`, so it carries the same risk — two of
+// them in one select is exactly where an unqualified column would surface.
+check(
+  'licznik pol tez liczy sie na karte',
+  [
+    searchRows.find((card) => card.front === 'to break')?.fieldCount,
+    searchRows.find((card) => card.front === 'to run')?.fieldCount,
+  ],
+  [2, 0]
+);
+check(
+  'sortowanie po liczbie pol dostaje karte z polami na gorze',
+  sortCards(searchRows, 'fields').map((card) => card.front),
+  ['to break', 'to run']
 );
 
 check(

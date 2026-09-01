@@ -51,10 +51,6 @@ const BASE_LABELS: Record<BaseKind, string> = {
   back: 'Odpowiedź',
 };
 
-const LAYOUT_HINT =
-  'Ten sam układ, co w edytorze karty: przeciągnij pole za uchwyt, ' +
-  'nad linią „Tył karty” jest przód, pod nią — tył.';
-
 const PLACEMENT_OPTIONS: PickerOption<NewCardPlacement>[] = [
   {
     value: 'mixed',
@@ -150,7 +146,7 @@ export default function DeckEditorScreen() {
     if (row.kind === 'base') {
       return (
         <ThemedText type="small" themeColor="textSecondary">
-          {`${rowInfo.label} — pole podstawowe, wypełniane przy dodawaniu karty.`}
+          {rowInfo.label}
         </ThemedText>
       );
     }
@@ -160,9 +156,7 @@ export default function DeckEditorScreen() {
     return (
       <View style={styles.slot}>
         <ThemedText type="small" themeColor="textSecondary">
-          {row.field === 'text'
-            ? `${rowInfo.label} — tekst, wypełniany na karcie.`
-            : `${rowInfo.label} — ${MEDIA_NOUNS[row.field]}, plik wybierany na karcie.`}
+          {row.field === 'text' ? rowInfo.label : `${rowInfo.label} — ${MEDIA_NOUNS[row.field]}`}
         </ThemedText>
         <Pressable
           onPress={() => removeRow(row.key)}
@@ -257,11 +251,6 @@ export default function DeckEditorScreen() {
 
         <View style={styles.limits}>
           <ThemedText type="smallBold">Dzienne limity</ThemedText>
-          <ThemedText type="small" themeColor="textSecondary">
-            Ile kart talia wypuści w ciągu jednego dnia nauki. Karty w trakcie
-            nauki wracają zawsze, niezależnie od limitów. Wpisz 0, żeby wyłączyć
-            dany rodzaj. Dzień liczy się od 4:00, jak w Anki.
-          </ThemedText>
         </View>
 
         <TextField
@@ -281,10 +270,6 @@ export default function DeckEditorScreen() {
 
         <View style={styles.limits}>
           <ThemedText type="smallBold">Kolejka nauki</ThemedText>
-          <ThemedText type="small" themeColor="textSecondary">
-            Jak sesja układa nowe karty względem powtórek i skąd bierze nowe
-            karty, kiedy zaległych jest więcej niż dzienny limit.
-          </ThemedText>
         </View>
 
         <OptionPicker
@@ -302,12 +287,6 @@ export default function DeckEditorScreen() {
 
         <View style={styles.limits}>
           <ThemedText type="smallBold">Domyślny układ nowej karty</ThemedText>
-          <ThemedText type="small" themeColor="textSecondary">
-            Tak będzie wyglądać każda nowa karta w tej talii, zanim cokolwiek
-            w niej wpiszesz. To tylko punkt wyjścia: w edytorze karty można
-            wszystko poprzestawiać, a zmiany tutaj nie ruszają kart już
-            istniejących.
-          </ThemedText>
         </View>
 
         <FieldLayoutList
@@ -315,7 +294,6 @@ export default function DeckEditorScreen() {
           info={info}
           onChange={setRows}
           renderRow={renderRow}
-          hint={LAYOUT_HINT}
         />
 
         <Pressable

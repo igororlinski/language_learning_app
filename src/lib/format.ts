@@ -23,6 +23,32 @@ export function formatDue(due: Date | null, now = Date.now()): string {
   return `za ${formatInterval(delta)}`;
 }
 
+const MONTHS = [
+  'sty',
+  'lut',
+  'mar',
+  'kwi',
+  'maj',
+  'cze',
+  'lip',
+  'sie',
+  'wrz',
+  'paź',
+  'lis',
+  'gru',
+];
+
+/**
+ * A date as it appears next to a card in the list: `31 sie`, and `31 sie 2025`
+ * once the year stops being obvious. Written out rather than left to
+ * `toLocaleDateString`, whose Polish output depends on the device's ICU data.
+ */
+export function formatDate(date: Date, now = new Date()): string {
+  const day = `${date.getDate()} ${MONTHS[date.getMonth()]}`;
+
+  return date.getFullYear() === now.getFullYear() ? day : `${day} ${date.getFullYear()}`;
+}
+
 export function pluralize(count: number, one: string, few: string, many: string): string {
   const mod10 = count % 10;
   const mod100 = count % 100;
