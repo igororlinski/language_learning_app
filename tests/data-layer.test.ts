@@ -14,7 +14,11 @@ import {
   cardsInDeckQuery,
   cardsLines,
   cardsMediaFiles,
+  allTagsQuery,
   copyCards,
+  deckTagsQuery,
+  getCardTagNames,
+  setCardTagNames,
   createCard,
   createDeck,
   deckAllowance,
@@ -45,6 +49,7 @@ import { decks, fsrsState, reviewLogs } from '@/db/schema';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { sortCards } from '@/lib/card-sort';
 import { filterCards } from '@/lib/search';
+import { filterByTags } from '@/lib/tags';
 import { countQueueStates, Rating, State } from '@/lib/scheduler';
 
 import { check, group } from './harness';
@@ -59,6 +64,7 @@ import migration0006 from '../drizzle/0006_moaning_shiva.sql';
 import migration0007 from '../drizzle/0007_bouncy_the_enforcers.sql';
 import migration0008 from '../drizzle/0008_mean_lady_mastermind.sql';
 import migration0009 from '../drizzle/0009_curved_jazinda.sql';
+import migration0010 from '../drizzle/0010_quiet_absorbing_man.sql';
 
 for (const migration of [
   migration0000,
@@ -71,6 +77,7 @@ for (const migration of [
   migration0007,
   migration0008,
   migration0009,
+  migration0010,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -857,3 +864,68 @@ check('historia powtorek zostaje nietknieta', logCount(trio[0].id), 1);
 check('karta poza zaznaczeniem zachowuje swoj stan', snapshot(trio[2].id).state, State.New);
 check('pusta lista niczego nie przenosi', moveCards([], bulkTarget.id), undefined);
 check('pusta lista niczego nie zeruje', resetCards([], now), undefined);
+
+group('Tagi kart');
+
+const tagDeck = createDeck({ name: 'Tagi', newPerDay: 10, reviewsPerDay: 10 });
+const tagged = createCard(tagDeck.id, 'to sleep', 'spac', now);
+const alsoTagged = createCard(tagDeck.id, 'to wake', 'budzic sie', now);
+createCard(tagDeck.id, 'bez tagow', 'nic', now);
+
+setCardTagNames(tagged.id, ['Czasownik', 'trudne']);
+setCardTagNames(alsoTagged.id, ['czasownik']);
+
+check('karta pamieta swoje tagi', getCardTagNames(tagged.id), ['Czasownik', 'trudne']);
+// The second card asked for a different spelling of a tag that already exists;
+// uniqueness runs on the folded slug, so it joins the same row.
+check('rozna pisownia to ten sam tag', allTagsQuery().all().length, 2);
+check(
+  'druga karta dostala istniejacy tag, nie nowy',
+  getCardTagNames(alsoTagged.id),
+  ['Czasownik']
+);
+
+const deckTags = deckTagsQuery(tagDeck.id).all();
+
+check(
+  'talia widzi swoje tagi z licznikami',
+  deckTags.map((tag) => [tag.name, tag.cardCount]),
+  [
+    ['Czasownik', 2],
+    ['trudne', 1],
+  ]
+);
+
+const taggedRows = cardsInDeckQuery(tagDeck.id).all();
+const verbId = deckTags.find((tag) => tag.name === 'Czasownik')!.id;
+const hardId = deckTags.find((tag) => tag.name === 'trudne')!.id;
+
+// Same correlated-subquery shape as `fields` and `fieldCount`, same pitfall.
+check(
+  'kolumna z tagami trzyma kwalifikator tabeli',
+  cardsInDeckQuery(tagDeck.id).toSQL().sql.includes('"cards"."id"'),
+  true
+);
+check(
+  'filtr po jednym tagu',
+  filterByTags(taggedRows, [verbId]).map((card) => card.front).sort(),
+  ['to sleep', 'to wake']
+);
+check(
+  'filtr po dwoch tagach wymaga obu',
+  filterByTags(taggedRows, [verbId, hardId]).map((card) => card.front),
+  ['to sleep']
+);
+
+// Taking a tag off the last card that had it takes the tag itself: every tag is
+// born attached to a card, so one with no cards is a typo, not a category.
+setCardTagNames(tagged.id, ['Czasownik']);
+
+check('tag bez kart znika', allTagsQuery().all().map((tag) => tag.name), ['Czasownik']);
+check('a tag nadal uzywany zostaje', getCardTagNames(tagged.id), ['Czasownik']);
+
+// Deleting a card takes its links with it, and with them any tag left orphaned.
+deleteCards([tagged.id, alsoTagged.id]);
+setCardTagNames(createCard(tagDeck.id, 'nowa', 'new', now).id, []);
+
+check('kaskada zabiera powiazania', allTagsQuery().all(), []);

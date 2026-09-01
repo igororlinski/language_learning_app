@@ -17,6 +17,7 @@ import {
   copyCards,
   deckDueBreakdownQuery,
   deckQuery,
+  deckTagsQuery,
   deleteCards,
   moveCards,
   otherDecksQuery,
@@ -38,6 +39,7 @@ import {
 import { cardsLabel, formatDate, formatDue } from '@/lib/format';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { filterCards } from '@/lib/search';
+import { filterByTags } from '@/lib/tags';
 import { STATE_LABELS, State } from '@/lib/scheduler';
 
 /**
@@ -72,6 +74,7 @@ export default function DeckScreen() {
   const { data: deckRows } = useLiveQuery(deckQuery(deckId), [deckId]);
   const { data: cards } = useLiveQuery(cardsInDeckQuery(deckId), [deckId]);
   const { data: otherDecks } = useLiveQuery(otherDecksQuery(deckId), [deckId]);
+  const { data: deckTags } = useLiveQuery(deckTagsQuery(deckId), [deckId]);
   const dayStart = studyDayStart(new Date(now)).getTime();
   const { data: dueRows } = useLiveQuery(deckDueBreakdownQuery(deckId, now, dayStart), [
     deckId,
@@ -102,11 +105,24 @@ export default function DeckScreen() {
   const searching = query.trim().length > 0;
   // Depends on `cards` (stable from useLiveQuery), not on the `?? []` fallback,
   // which would be a fresh array on every render.
+  // Tag ids, not names: the filter compares against what the query glued
+  // together per card, and a renamed tag keeps its id.
+  const [pickedTags, setPickedTags] = useState<number[]>([]);
+  const tagChips = deckTags ?? [];
+
+  const toggleTag = (tagId: number) =>
+    setPickedTags((current) =>
+      current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId]
+    );
+
+  // Whatever is hiding cards right now — the search box, the tag chips, or both.
+  const narrowed = searching || pickedTags.length > 0;
+
   const [order, setOrder] = useState<CardOrder>(DEFAULT_CARD_ORDER);
   const [direction, setDirection] = useState<SortDirection>(DEFAULT_DIRECTIONS[DEFAULT_CARD_ORDER]);
   const visibleCards = useMemo(
-    () => sortCards(filterCards(cards ?? [], query), order, direction),
-    [cards, direction, order, query]
+    () => sortCards(filterByTags(filterCards(cards ?? [], query), pickedTags), order, direction),
+    [cards, direction, order, pickedTags, query]
   );
 
   // A freshly picked order starts the way round it is usually wanted, and the
@@ -356,7 +372,7 @@ export default function DeckScreen() {
               </ThemedText>
             ) : null}
             <ThemedText type="small" themeColor="textSecondary">
-              {searching
+              {narrowed
                 ? `${visibleCards.length} z ${cardsLabel(allCards.length)}`
                 : cardsLabel(allCards.length)}
             </ThemedText>
@@ -384,6 +400,40 @@ export default function DeckScreen() {
                       Wyczyść
                     </ThemedText>
                   </Pressable>
+                ) : null}
+
+                {tagChips.length > 0 ? (
+                  <View style={styles.tags}>
+                    {tagChips.map((tag) => {
+                      const picked = pickedTags.includes(tag.id);
+
+                      return (
+                        <Pressable
+                          key={tag.id}
+                          onPress={() => toggleTag(tag.id)}
+                          accessibilityRole="checkbox"
+                          accessibilityState={{ checked: picked }}
+                          accessibilityLabel={`${tag.name}, ${cardsLabel(tag.cardCount)}`}
+                          style={({ pressed }) => [
+                            styles.tag,
+                            {
+                              borderColor: picked ? theme.accent : theme.border,
+                              backgroundColor: picked
+                                ? theme.backgroundSelected
+                                : pressed
+                                  ? theme.backgroundSelected
+                                  : 'transparent',
+                            },
+                          ]}>
+                          <ThemedText
+                            type={picked ? 'smallBold' : 'small'}
+                            style={picked ? { color: theme.accent } : undefined}>
+                            {`${tag.name} ${tag.cardCount}`}
+                          </ThemedText>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
                 ) : null}
 
                 {allCards.length > 1 ? (
@@ -419,11 +469,8 @@ export default function DeckScreen() {
           </View>
         }
         ListEmptyComponent={
-          searching ? (
-            <EmptyState
-              title="Nic nie pasuje"
-              hint={`Żadna karta w tej talii nie zawiera „${query.trim()}”.`}
-            />
+          narrowed ? (
+            <EmptyState title="Nic nie pasuje" />
           ) : (
             <EmptyState
               title="Ta talia jest pusta"
@@ -567,6 +614,18 @@ const styles = StyleSheet.create({
   search: {
     paddingTop: Spacing.two,
     gap: Spacing.one,
+  },
+  tags: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+    marginTop: Spacing.two,
+  },
+  tag: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    borderRadius: Radius.large,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   sort: {
     flexDirection: 'row',

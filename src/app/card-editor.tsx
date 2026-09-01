@@ -1,3 +1,4 @@
+import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
@@ -5,6 +6,7 @@ import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
 import { AddFieldSheet } from '@/components/add-field-sheet';
+import { TagSheet } from '@/components/tag-sheet';
 import { CardFaces } from '@/components/card-faces';
 import { MediaView } from '@/components/media-view';
 import { Button } from '@/components/button';
@@ -13,13 +15,16 @@ import { ThemedText } from '@/components/themed-text';
 import { TextField } from '@/components/text-field';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
+  allTagsQuery,
   cardMediaFiles,
   createCard,
   deleteCard,
   getCard,
   getCardFields,
+  getCardTagNames,
   newCardFields,
   newCardLayout,
+  setCardTagNames,
   updateCard,
 } from '@/db/queries';
 import type { FieldKind, FieldSide } from '@/db/schema';
@@ -33,6 +38,7 @@ import {
   type MediaKind,
 } from '@/lib/media';
 import { deleteMedia, importMedia, MediaTooLargeError, pickMedia } from '@/lib/media-files';
+import { dedupeTags, tagSlug } from '@/lib/tags';
 import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
 import {
   BOUNDARY,
@@ -77,6 +83,14 @@ export default function CardEditorScreen() {
   const [back, setBack] = useState(existing?.back ?? '');
   const [rows, setRows] = useState<Row[]>(initialRows);
   const [savedCount, setSavedCount] = useState(0);
+
+  // Names, not ids: a tag typed here has no row until the card is saved, so a
+  // card that is never saved leaves nothing behind.
+  const [cardTags, setCardTags] = useState<string[]>(() =>
+    cardId ? getCardTagNames(cardId) : []
+  );
+  const [taggingOpen, setTaggingOpen] = useState(false);
+  const { data: knownTags } = useLiveQuery(allTagsQuery(), []);
   const [adding, setAdding] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
@@ -175,6 +189,7 @@ export default function CardEditorScreen() {
       // imported here and then replaced.
       const before = cardMediaFiles(cardId);
       updateCard(cardId, { front, back, fields, layout: placement });
+      setCardTagNames(cardId, cardTags);
 
       deleteMedia(
         [...before, ...imported.current].filter((file) => !kept.has(file.fileName))
@@ -188,9 +203,13 @@ export default function CardEditorScreen() {
 
     // Fast entry: saving a new card clears the form and keeps the editor open so
     // a whole batch can be typed in one go. Leaving is the header back arrow.
-    createCard(deckId, front, back, new Date(), fields, placement);
+    const card = createCard(deckId, front, back, new Date(), fields, placement);
+    setCardTagNames(card.id, cardTags);
+
     setFront('');
     setBack('');
+    // The tags stay on for the next card: a batch typed in one go is usually
+    // one batch of tags too, and taking them off is one tap.
     // The next card in the batch starts from the deck's default layout again.
     setRows(buildRows(newCardLayout(deckId), newCardFields(deckId)));
     setSavedCount((count) => count + 1);
@@ -306,6 +325,43 @@ export default function CardEditorScreen() {
       <ScrollViewContainer
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled">
+        <View style={styles.tags}>
+          {cardTags.map((name) => (
+            <Pressable
+              key={tagSlug(name)}
+              onPress={() => setCardTags((own) => own.filter((tag) => tag !== name))}
+              accessibilityRole="button"
+              accessibilityLabel={`Zdejmij tag ${name}`}
+              style={({ pressed }) => [
+                styles.tag,
+                {
+                  borderColor: theme.accent,
+                  backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+                  opacity: pressed ? 0.7 : 1,
+                },
+              ]}>
+              <ThemedText type="small" style={{ color: theme.accent }}>
+                {`${name}  ×`}
+              </ThemedText>
+            </Pressable>
+          ))}
+          <Pressable
+            onPress={() => setTaggingOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Tagi karty"
+            style={({ pressed }) => [
+              styles.tag,
+              {
+                borderColor: theme.border,
+                backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+              },
+            ]}>
+            <ThemedText type="small" themeColor="textSecondary">
+              {cardTags.length > 0 ? '+ tag' : '+ tagi'}
+            </ThemedText>
+          </Pressable>
+        </View>
+
         <View
           style={[
             styles.preview,
@@ -367,12 +423,32 @@ export default function CardEditorScreen() {
         {cardId ? <Button title="Usuń kartę" variant="danger" onPress={confirmDelete} /> : null}
       </View>
 
+      <TagSheet
+        visible={taggingOpen}
+        picked={cardTags}
+        known={(knownTags ?? []).map((tag) => tag.name)}
+        onChange={(picked) => setCardTags(dedupeTags(picked))}
+        onClose={() => setTaggingOpen(false)}
+      />
+
       <AddFieldSheet visible={adding} onClose={() => setAdding(false)} onAdd={addField} />
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  tags: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  tag: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    borderRadius: Radius.large,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   screen: {
     flex: 1,
   },

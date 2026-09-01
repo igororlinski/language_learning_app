@@ -1,4 +1,4 @@
-import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 /** Anki's stock deck options, used for every new deck. */
 export const DEFAULT_NEW_PER_DAY = 20;
@@ -137,6 +137,41 @@ export const cardFields = sqliteTable(
   (table) => [index('card_fields_card_id_idx').on(table.cardId)]
 );
 
+/**
+ * Tags are shared by every deck, the way they are in Anki: a card moved to
+ * another deck keeps them, and a tag typed once can be picked from then on.
+ *
+ * `slug` is the name with case and diacritics folded away (`src/lib/tags.ts`),
+ * and it is what uniqueness is checked against — SQLite's own `nocase` folds
+ * ASCII only, so `Łatwe` and `łatwe` would otherwise be two different tags.
+ * `name` keeps whatever the user actually typed, which is what is shown.
+ */
+export const tags = sqliteTable('tags', {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    slug: text('slug').notNull().unique(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .$defaultFn(() => new Date()),
+});
+
+/** Which cards carry which tags. */
+export const cardTags = sqliteTable(
+  'card_tags',
+  {
+    cardId: integer('card_id')
+      .notNull()
+      .references(() => cards.id, { onDelete: 'cascade' }),
+    tagId: integer('tag_id')
+      .notNull()
+      .references(() => tags.id, { onDelete: 'cascade' }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.cardId, table.tagId] }),
+    index('card_tags_tag_id_idx').on(table.tagId),
+  ]
+);
+
 /** 1:1 with `cards`. Fields mirror the ts-fsrs `Card` shape. */
 export const fsrsState = sqliteTable(
   'fsrs_state',
@@ -189,3 +224,4 @@ export type DeckFieldSlot = typeof deckFieldSlots.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type FsrsStateRow = typeof fsrsState.$inferSelect;
 export type ReviewLog = typeof reviewLogs.$inferSelect;
+export type Tag = typeof tags.$inferSelect;

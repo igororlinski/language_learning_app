@@ -2,6 +2,7 @@ import { and, asc, desc, eq, inArray, lte, ne, sql, type SQLWrapper } from 'driz
 
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
 import { isMediaKind, type MediaKind } from '@/lib/media';
+import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 
 import {
   remainingAllowance,
@@ -26,12 +27,14 @@ import { db } from './client';
 import {
   cardFields,
   cards,
+  cardTags,
   deckFieldSlots,
   decks,
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
   fsrsState,
   reviewLogs,
+  tags,
   type CardField,
   type DeckFieldSlot,
   type FieldKind,
@@ -165,6 +168,15 @@ const fieldCount = sql<number>`(
   from ${cardFields} as cfn
   where cfn.card_id = ${cards.id})`;
 
+/**
+ * The tag ids of one card, glued together for the deck list's tag filter. Same
+ * shape — and same literal-text discipline — as `fieldText`; see pitfall 7.
+ */
+const tagIds = sql<string>`(
+  select coalesce(group_concat(ctg.tag_id, ','), '')
+  from ${cardTags} as ctg
+  where ctg.card_id = ${cards.id})`;
+
 export function cardsInDeckQuery(deckId: number) {
   return db
     .select({
@@ -175,6 +187,8 @@ export function cardsInDeckQuery(deckId: number) {
       fields: fieldText,
       /** Only the sort reads this. */
       fieldCount,
+      /** Only the tag filter reads this. */
+      tagIds,
       imageStatus: cards.imageStatus,
       createdAt: cards.createdAt,
       due: fsrsState.due,
@@ -374,6 +388,82 @@ export function cardsMediaFiles(cardIds: number[]): MediaFile[] {
       .where(inArray(cardFields.cardId, cardIds))
       .all()
   );
+}
+
+/** Every tag ever created, for the picker in the card editor. */
+export function allTagsQuery() {
+  return db.select().from(tags).orderBy(asc(tags.name));
+}
+
+/**
+ * The tags actually used in one deck, with how many of its cards carry each —
+ * what the deck list offers to filter by. A tag used only in another deck would
+ * filter this list down to nothing, so it is not offered here.
+ */
+export function deckTagsQuery(deckId: number) {
+  return db
+    .select({
+      id: tags.id,
+      name: tags.name,
+      cardCount: sql<number>`count(${cardTags.cardId})`,
+    })
+    .from(tags)
+    .innerJoin(cardTags, eq(cardTags.tagId, tags.id))
+    .innerJoin(cards, eq(cards.id, cardTags.cardId))
+    .where(eq(cards.deckId, deckId))
+    .groupBy(tags.id)
+    .orderBy(asc(tags.name));
+}
+
+/** The tags on one card, in the order they are shown. */
+export function getCardTagNames(cardId: number): string[] {
+  return db
+    .select({ name: tags.name })
+    .from(cardTags)
+    .innerJoin(tags, eq(tags.id, cardTags.tagId))
+    .where(eq(cardTags.cardId, cardId))
+    .orderBy(asc(tags.name))
+    .all()
+    .map((row) => row.name);
+}
+
+/**
+ * Makes a card's tags match the list the editor holds, creating whatever does
+ * not exist yet. The editor works in **names**, not ids: a tag typed into it
+ * may not have a row until the card is saved, and resolving that here is what
+ * keeps a tag from being created for a card that is then abandoned.
+ *
+ * Tags left on no card at all are deleted. Every tag is born attached to a
+ * card, so one that has just lost its last card is a typo or a change of mind,
+ * not a category waiting to be used.
+ */
+export function setCardTagNames(cardId: number, names: string[]) {
+  return db.transaction((tx) => {
+    tx.delete(cardTags).where(eq(cardTags.cardId, cardId)).run();
+
+    for (const name of dedupeTags(names)) {
+      const slug = tagSlug(name);
+      const existing = tx.select().from(tags).where(eq(tags.slug, slug)).get();
+
+      const tag =
+        existing ??
+        tx.insert(tags).values({ name: tagName(name), slug }).returning().get();
+
+      tx.insert(cardTags).values({ cardId, tagId: tag.id }).run();
+    }
+
+    pruneTags(tx);
+  });
+}
+
+/** Drops tags nothing points at any more. */
+function pruneTags(tx: Tx) {
+  const used = tx.selectDistinct({ tagId: cardTags.tagId }).from(cardTags).all();
+  const keep = new Set(used.map((row) => row.tagId));
+
+  for (const tag of tx.select({ id: tags.id }).from(tags).all()) {
+    if (!keep.has(tag.id)) tx.delete(tags).where(eq(tags.id, tag.id)).run();
+  }
 }
 
 /** Every deck a card could be moved into: all of them except the one it is in. */
