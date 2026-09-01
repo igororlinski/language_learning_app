@@ -27,6 +27,12 @@ const RATING_COLOR: Record<Grade, string> = {
   [Rating.Easy]: RatingColors.easy,
 };
 
+/**
+ * Expo Router renders this in place of the screen when it throws, keeping the
+ * navigator — and the way back — alive. See `src/components/error-screen.tsx`.
+ */
+export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
+
 export default function ReviewScreen() {
   const theme = useTheme();
   const router = useRouter();

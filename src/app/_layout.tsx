@@ -12,6 +12,13 @@ import { Spacing } from '@/constants/theme';
 import { db } from '@/db/client';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
+/**
+ * The catch-all: anything thrown outside a screen that has its own boundary
+ * lands here instead of on a white screen. Every route exports the same one, so
+ * a failure inside a screen keeps the navigator — and the way back — alive.
+ */
+export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
+
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const { success, error } = useMigrations(db, migrations);

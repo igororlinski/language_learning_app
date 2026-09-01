@@ -7,6 +7,7 @@ import './search.test';
 import './queue-order.test';
 import './card-layout.test';
 import './card-sort.test';
+import './card-draft.test';
 import './field-rows.test';
 import './media.test';
 import './tags.test';

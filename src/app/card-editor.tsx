@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useMemo, useRef, useState } from 'react';
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
@@ -40,6 +40,7 @@ import {
 import { deleteMedia, importMedia, MediaTooLargeError, pickMedia } from '@/lib/media-files';
 import { dedupeTags, tagSlug } from '@/lib/tags';
 import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
+import { draftSignature } from '@/lib/card-draft';
 import {
   BOUNDARY,
   buildRows,
@@ -53,6 +54,12 @@ const BASE_LABELS: Record<BaseKind, string> = {
   front: 'Pytanie',
   back: 'Odpowiedź',
 };
+
+/**
+ * Expo Router renders this in place of the screen when it throws, keeping the
+ * navigator — and the way back — alive. See `src/components/error-screen.tsx`.
+ */
+export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
 
 export default function CardEditorScreen() {
   const theme = useTheme();
@@ -174,6 +181,52 @@ export default function CardEditorScreen() {
     }
   };
 
+  /**
+   * Comparing what the form says now against what it said when it was last
+   * saved is what tells an abandoned edit from an untouched form — a flag set
+   * by each `onChange` would also fire for typing a letter and deleting it.
+   */
+  const signature = useMemo(
+    () => draftSignature(front, back, rows, cardTags),
+    [back, cardTags, front, rows]
+  );
+
+  const saved = useRef(signature);
+  const navigation = useNavigation();
+
+  useEffect(
+    () =>
+      // The same navigation event the deck screen uses to end its selection: it
+      // covers the header arrow, the phone's back button and the swipe alike.
+      navigation.addListener('beforeRemove', (event) => {
+        if (signature === saved.current) return;
+
+        event.preventDefault();
+
+        Alert.alert(
+          'Porzucić zmiany?',
+          'Wpisana treść i wybrane pliki przepadną.',
+          [
+            { text: 'Wróć do edycji', style: 'cancel' },
+            {
+              text: 'Porzuć',
+              style: 'destructive',
+              onPress: () => {
+                // Files copied here point at no row in the database, so leaving
+                // without saving is exactly what makes them rubbish.
+                deleteMedia(imported.current);
+                imported.current = [];
+
+                navigation.dispatch(event.data.action);
+              },
+            },
+          ],
+          { cancelable: true }
+        );
+      }),
+    [navigation, signature]
+  );
+
   const questionInput = useRef<TextInput>(null);
   // Only the question is required: plenty of cards are a prompt with a picture
   // or a recording for an answer, and some are a prompt with nothing at all.
@@ -196,6 +249,9 @@ export default function CardEditorScreen() {
       deleteMedia(
         [...before, ...imported.current].filter((file) => !kept.has(file.fileName))
       );
+
+      // Saved, so leaving is not abandoning anything.
+      saved.current = signature;
       router.back();
       return;
     }
@@ -213,7 +269,14 @@ export default function CardEditorScreen() {
     // The tags stay on for the next card: a batch typed in one go is usually
     // one batch of tags too, and taking them off is one tap.
     // The next card in the batch starts from the deck's default layout again.
-    setRows(buildRows(newCardLayout(deckId), newCardFields(deckId)));
+    const nextRows = buildRows(newCardLayout(deckId), newCardFields(deckId));
+    setRows(nextRows);
+
+    // The form the next card starts from is what "saved" means from here on —
+    // it is empty, but the tags kept for the batch would otherwise read as an
+    // unsaved edit the moment the back arrow was touched.
+    saved.current = draftSignature('', '', nextRows, cardTags);
+
     setSavedCount((count) => count + 1);
     questionInput.current?.focus();
   };
@@ -228,7 +291,10 @@ export default function CardEditorScreen() {
         onPress: () => {
           const files = cardMediaFiles(cardId);
           deleteCard(cardId);
-          deleteMedia(files);
+          deleteMedia([...files, ...imported.current]);
+
+          // The card is gone; there is nothing left to abandon.
+          saved.current = signature;
           router.back();
         },
       },

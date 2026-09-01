@@ -20,6 +20,12 @@ import { useTheme } from '@/hooks/use-theme';
  * The selection arrives as ids in the route parameter rather than through a
  * store: it is read once, on entry, and the queue never changes afterwards.
  */
+/**
+ * Expo Router renders this in place of the screen when it throws, keeping the
+ * navigator — and the way back — alive. See `src/components/error-screen.tsx`.
+ */
+export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
+
 export default function PreviewScreen() {
   const theme = useTheme();
   const router = useRouter();

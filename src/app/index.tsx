@@ -18,6 +18,12 @@ import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 
 type DeckMenuTarget = { id: number; name: string; cardCount: number; due: number };
 
+/**
+ * Expo Router renders this in place of the screen when it throws, keeping the
+ * navigator — and the way back — alive. See `src/components/error-screen.tsx`.
+ */
+export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
+
 export default function DecksScreen() {
   const theme = useTheme();
   const router = useRouter();

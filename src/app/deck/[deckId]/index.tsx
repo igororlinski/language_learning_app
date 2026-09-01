@@ -63,6 +63,12 @@ const EMPTY_BREAKDOWN = {
   reviewsDoneToday: 0,
 };
 
+/**
+ * Expo Router renders this in place of the screen when it throws, keeping the
+ * navigator — and the way back — alive. See `src/components/error-screen.tsx`.
+ */
+export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
+
 export default function DeckScreen() {
   const theme = useTheme();
   const router = useRouter();
