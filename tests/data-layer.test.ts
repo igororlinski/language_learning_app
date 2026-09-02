@@ -56,7 +56,15 @@ import { filterCards } from '@/lib/search';
 import { DEFAULT_SCHEDULING, schedulingKey } from '@/lib/fsrs-options';
 import { optimizeWeights } from '@/lib/fsrs-optimizer';
 import { filterByTags } from '@/lib/tags';
-import { countQueueStates, Rating, State } from '@/lib/scheduler';
+import {
+  countQueueStates,
+  GRADE_LABELS,
+  previewGrades,
+  Rating,
+  State,
+  toFsrsCard,
+  type Grade,
+} from '@/lib/scheduler';
 
 import { check, group } from './harness';
 
@@ -1135,3 +1143,98 @@ check('i zmieniaja klucz silnika', schedulingKey(deckScheduling(optDeck.id)) ===
 setDeckWeights(optDeck.id, null);
 
 check('powrot do domyslnych czysci kolumne', deckScheduling(optDeck.id).weights, null);
+
+// Saving a deck from the editor has to keep them too: the editor holds the
+// fitted weights in its own state and passes them back through `scheduling`,
+// and a save that dropped them made the whole optimiser a no-op.
+const editorWeights = optimizeWeights(stabilitySamples(optDeck.id, studyDayStart)).weights;
+
+updateDeck(optDeck.id, {
+  name: 'Historia',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  scheduling: { ...DEFAULT_SCHEDULING, weights: editorWeights },
+});
+
+check('zapis talii zachowuje wagi', deckScheduling(optDeck.id).weights, editorWeights);
+
+updateDeck(optDeck.id, {
+  name: 'Historia',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  scheduling: { ...DEFAULT_SCHEDULING, weights: null },
+});
+
+check('a zapis bez wag wraca do domyslnych', deckScheduling(optDeck.id).weights, null);
+
+const bornWithWeights = createDeck({
+  name: 'Od razu dopasowana',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  scheduling: { ...DEFAULT_SCHEDULING, weights: editorWeights },
+});
+
+check('nowa talia tez je zapisuje', deckScheduling(bornWithWeights.id).weights, editorWeights);
+
+group('Podglad ocen a to, co zapisuje odpowiedz');
+
+/**
+ * The property that matters, and the one that was broken: whatever the four
+ * grading buttons show, the answer writes. Checked against a deck with weights
+ * of its own, because that is where preview and commit came apart — `gradeCard`
+ * read the deck's options without `fsrs_weights` and scheduled with the FSRS
+ * defaults while the buttons promised the fitted ones.
+ *
+ * The fuzz stays on: ts-fsrs seeds it from the card and the review time alike,
+ * so the same card graded at the same instant lands in the same place.
+ */
+const promiseDeck = createDeck({
+  name: 'Obietnica',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  // Every one of the twenty one moved away from the defaults, not just the
+  // four initial stabilities: those only speak at a card's first review, so a
+  // deck that changed nothing else would agree with the wrong engine from the
+  // second review on, and the test would pass while the bug was still there.
+  scheduling: {
+    ...DEFAULT_SCHEDULING,
+    weights: [...optimizeWeights([]).weights].map((w, i) =>
+      i < 4 ? [40, 60, 90, 120][i] : w * 1.4 + 0.05
+    ),
+  },
+});
+
+
+/** Grades one card and checks the answer landed where the button said it would. */
+const checkPromise = (label: string, cardId: number, rating: Grade, when: Date) => {
+  const before = db.select().from(fsrsState).where(eq(fsrsState.cardId, cardId)).get()!;
+  const promised = previewGrades(toFsrsCard(before), when, deckScheduling(promiseDeck.id))[rating]
+    .card;
+  const committed = gradeCard(cardId, rating, when);
+
+  check(
+    label,
+    { days: committed.scheduled_days, due: committed.due.getTime() },
+    { days: promised.scheduled_days, due: promised.due.getTime() }
+  );
+};
+
+const RATINGS: Grade[] = [Rating.Again, Rating.Hard, Rating.Good, Rating.Easy];
+
+// A brand new card. Only "Łatwe" graduates here — the other three land on a
+// learning step measured in minutes, where the weights have nothing to say, so
+// on their own they would agree even with the wrong ones.
+for (const rating of RATINGS) {
+  const card = createCard(promiseDeck.id, `nowa ${rating}`, 'obiecana', now);
+  checkPromise(`${GRADE_LABELS[rating]} na nowej karcie`, card.id, rating, at(12, 0, 30));
+}
+
+// And a card already out of learning, where every answer but "Znowu" is an
+// interval grown from the stability those weights set. This is the half that
+// actually exercises them.
+for (const rating of RATINGS) {
+  const card = createCard(promiseDeck.id, `wyuczona ${rating}`, 'obiecana', now);
+  gradeCard(card.id, Rating.Easy, at(12, 0, 30));
+
+  checkPromise(`${GRADE_LABELS[rating]} na karcie w powtorkach`, card.id, rating, at(12, 0, 60));
+}

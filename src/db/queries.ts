@@ -627,18 +627,43 @@ function withCardLines<T extends LayoutSource>(
   });
 }
 
+/**
+ * The columns a deck's scheduling is stored in. Named once so a query that
+ * needs them cannot quietly ask for a subset — leaving `fsrs_weights` out of
+ * the read in `gradeCard` is exactly what made the grading buttons promise an
+ * interval the answer then did not write.
+ */
+const SCHEDULING_COLUMNS = {
+  desiredRetention: decks.desiredRetention,
+  maximumInterval: decks.maximumInterval,
+  learningSteps: decks.learningSteps,
+  relearningSteps: decks.relearningSteps,
+  fsrsWeights: decks.fsrsWeights,
+};
+
+/** Those columns as the scheduler wants them — one mapping, every reader. */
+function toScheduling(row: {
+  desiredRetention: number;
+  maximumInterval: number;
+  learningSteps: string;
+  relearningSteps: string;
+  fsrsWeights: string | null;
+}): DeckScheduling {
+  return {
+    desiredRetention: row.desiredRetention,
+    maximumInterval: row.maximumInterval,
+    learningSteps: row.learningSteps,
+    relearningSteps: row.relearningSteps,
+    weights: parseWeights(row.fsrsWeights),
+  };
+}
+
 /** What the deck tells FSRS — read once per session for the interval preview. */
 export function deckScheduling(deckId: number): DeckScheduling {
   const deck = getDeck(deckId);
   if (!deck) return DEFAULT_SCHEDULING;
 
-  return {
-    desiredRetention: deck.desiredRetention,
-    maximumInterval: deck.maximumInterval,
-    learningSteps: deck.learningSteps,
-    relearningSteps: deck.relearningSteps,
-    weights: parseWeights(deck.fsrsWeights),
-  };
+  return toScheduling(deck);
 }
 
 /**
@@ -697,11 +722,16 @@ export function stabilitySamples(deckId: number, dayStart: (now: Date) => Date):
   return samples;
 }
 
+/** How fitted weights are stored: JSON, or nothing at all for the defaults. */
+function weightsJson(weights: number[] | null | undefined): string | null {
+  return weights && weights.length > 0 ? JSON.stringify(weights) : null;
+}
+
 /** Stores fitted weights, or clears them back to the FSRS defaults. */
 export function setDeckWeights(deckId: number, weights: number[] | null) {
   return db
     .update(decks)
-    .set({ fsrsWeights: weights ? JSON.stringify(weights) : null })
+    .set({ fsrsWeights: weightsJson(weights) })
     .where(eq(decks.id, deckId))
     .run();
 }
@@ -748,6 +778,9 @@ export type DeckInput = {
 
 /** The columns a deck form writes, with the queue options defaulted. */
 function deckValues(input: DeckInput) {
+  const scheduling = input.scheduling ?? DEFAULT_SCHEDULING;
+  const layout = input.newCardLayout ?? DEFAULT_CARD_LAYOUT;
+
   return {
     name: input.name.trim(),
     description: input.description?.trim() || null,
@@ -755,11 +788,19 @@ function deckValues(input: DeckInput) {
     reviewsPerDay: input.reviewsPerDay,
     newCardPlacement: input.newCardPlacement ?? DEFAULT_NEW_CARD_PLACEMENT,
     newCardOrder: input.newCardOrder ?? DEFAULT_NEW_CARD_ORDER,
-    ...(input.scheduling ?? DEFAULT_SCHEDULING),
-    newFrontSide: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).frontSide,
-    newFrontPosition: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).frontPosition,
-    newBackSide: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).backSide,
-    newBackPosition: (input.newCardLayout ?? DEFAULT_CARD_LAYOUT).backPosition,
+    desiredRetention: scheduling.desiredRetention,
+    maximumInterval: scheduling.maximumInterval,
+    learningSteps: scheduling.learningSteps,
+    relearningSteps: scheduling.relearningSteps,
+    // Written column by column rather than spread: `weights` is not a column
+    // (the deck holds them as JSON in `fsrs_weights`), and drizzle silently
+    // ignores a key that names no column — which is how a whole optimiser run
+    // used to vanish on save, with neither `tsc` nor a test noticing.
+    fsrsWeights: weightsJson(scheduling.weights),
+    newFrontSide: layout.frontSide,
+    newFrontPosition: layout.frontPosition,
+    newBackSide: layout.backSide,
+    newBackPosition: layout.backPosition,
   };
 }
 
@@ -1028,19 +1069,22 @@ export function gradeCard(cardId: number, grade: Grade, now = new Date()) {
 
     // Read here rather than passed in: the caller would have to carry it
     // through the whole session, and a deck edited mid-session would be stale.
+    // The whole set of columns, never a hand-picked subset — the review screen
+    // previews with all of them, and an answer that committed with fewer would
+    // write an interval the button never showed.
     const deck = tx
-      .select({
-        desiredRetention: decks.desiredRetention,
-        maximumInterval: decks.maximumInterval,
-        learningSteps: decks.learningSteps,
-        relearningSteps: decks.relearningSteps,
-      })
+      .select(SCHEDULING_COLUMNS)
       .from(cards)
       .innerJoin(decks, eq(decks.id, cards.deckId))
       .where(eq(cards.id, cardId))
       .get();
 
-    const { card: next, log } = applyGrade(toFsrsCard(row), grade, now, deck ?? undefined);
+    const { card: next, log } = applyGrade(
+      toFsrsCard(row),
+      grade,
+      now,
+      deck ? toScheduling(deck) : undefined
+    );
 
     tx.update(fsrsState).set(toStateValues(next)).where(eq(fsrsState.cardId, cardId)).run();
 
