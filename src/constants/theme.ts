@@ -9,6 +9,8 @@ export const Colors = {
     background: '#F5F6F8',
     backgroundElement: '#FFFFFF',
     backgroundSelected: '#E8EBEF',
+    /** Warm tint marking the two mandatory fields in the layout editors. */
+    backgroundHighlight: '#FBEEE8',
     border: '#E1E4E9',
     accent: '#2F6FED',
     onAccent: '#FFFFFF',
@@ -20,6 +22,7 @@ export const Colors = {
     background: '#0E0F11',
     backgroundElement: '#1A1C1F',
     backgroundSelected: '#26292D',
+    backgroundHighlight: '#2C211D',
     border: '#2A2D31',
     accent: '#5A8DF6',
     onAccent: '#0E0F11',
@@ -35,6 +38,16 @@ export const RatingColors = {
   hard: '#F5A524',
   good: '#30A46C',
   easy: '#3E8FF5',
+} as const;
+
+/**
+ * Queue counters follow Anki's palette: blue for new, red for learning,
+ * green for review. Like `RatingColors`, identical in both schemes.
+ */
+export const QueueColors = {
+  new: '#3E8FF5',
+  learning: '#E5484D',
+  review: '#30A46C',
 } as const;
 
 export const Fonts = Platform.select({

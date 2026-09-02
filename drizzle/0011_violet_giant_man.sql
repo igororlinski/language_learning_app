@@ -1,0 +1,1 @@
+ALTER TABLE `decks` ADD `desired_retention` real DEFAULT 0.94 NOT NULL;

@@ -15,12 +15,51 @@ export function formatInterval(ms: number): string {
   return `${round1(value / YEAR)} lat`;
 }
 
+/**
+ * What a grading button promises.
+ *
+ * Once a card is scheduled in days it comes back at the start of that study
+ * day, so the time left on the clock is not the interval: answering at 20:00
+ * with a one-day interval means "tomorrow", eight hours away. The button says
+ * `1 dni`, because that is the promise being made — the clock reading would be
+ * true and useless.
+ */
+export function formatSchedule(scheduledDays: number, untilDueMs: number): string {
+  return scheduledDays >= 1 ? formatInterval(scheduledDays * DAY) : formatInterval(untilDueMs);
+}
+
 export function formatDue(due: Date | null, now = Date.now()): string {
   if (!due) return 'brak danych';
 
   const delta = due.getTime() - now;
   if (delta <= 0) return 'do powtórki';
   return `za ${formatInterval(delta)}`;
+}
+
+const MONTHS = [
+  'sty',
+  'lut',
+  'mar',
+  'kwi',
+  'maj',
+  'cze',
+  'lip',
+  'sie',
+  'wrz',
+  'paź',
+  'lis',
+  'gru',
+];
+
+/**
+ * A date as it appears next to a card in the list: `31 sie`, and `31 sie 2025`
+ * once the year stops being obvious. Written out rather than left to
+ * `toLocaleDateString`, whose Polish output depends on the device's ICU data.
+ */
+export function formatDate(date: Date, now = new Date()): string {
+  const day = `${date.getDate()} ${MONTHS[date.getMonth()]}`;
+
+  return date.getFullYear() === now.getFullYear() ? day : `${day} ${date.getFullYear()}`;
 }
 
 export function pluralize(count: number, one: string, few: string, many: string): string {

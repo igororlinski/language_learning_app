@@ -1,14 +1,23 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useMemo } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { CardFaces, cardFacesLayout } from '@/components/card-faces';
 import { Button } from '@/components/button';
+import { DueCounts } from '@/components/due-counts';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { formatInterval } from '@/lib/format';
-import { GRADE_LABELS, GRADES, previewGrades, Rating, type Grade } from '@/lib/scheduler';
+import { formatSchedule } from '@/lib/format';
+import {
+  countQueueStates,
+  GRADE_LABELS,
+  GRADES,
+  previewGrades,
+  Rating,
+  type Grade,
+} from '@/lib/scheduler';
 import { useReviewStore } from '@/stores/review-store';
 
 const RATING_COLOR: Record<Grade, string> = {
@@ -17,6 +26,12 @@ const RATING_COLOR: Record<Grade, string> = {
   [Rating.Good]: RatingColors.good,
   [Rating.Easy]: RatingColors.easy,
 };
+
+/**
+ * Expo Router renders this in place of the screen when it throws, keeping the
+ * navigator — and the way back — alive. See `src/components/error-screen.tsx`.
+ */
+export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
 
 export default function ReviewScreen() {
   const theme = useTheme();
@@ -33,48 +48,97 @@ export default function ReviewScreen() {
   const reveal = useReviewStore((s) => s.reveal);
   const answer = useReviewStore((s) => s.answer);
   const reset = useReviewStore((s) => s.reset);
+  const history = useReviewStore((s) => s.history);
+  const undo = useReviewStore((s) => s.undo);
+  const refreshCurrent = useReviewStore((s) => s.refreshCurrent);
+  const scheduling = useReviewStore((s) => s.scheduling);
 
   useEffect(() => {
     start(deckId);
     return reset;
   }, [deckId, start, reset]);
 
+  // Coming back from the editor: the queue is a snapshot, so the card it holds
+  // has to be read again before it is shown any further.
+  useFocusEffect(
+    useCallback(() => {
+      refreshCurrent();
+    }, [refreshCurrent])
+  );
+
   const current = queue[0];
 
   // Recomputed per card so the buttons show the interval each answer would set.
-  const preview = useMemo(() => (current ? previewGrades(current.fsrs, new Date()) : null), [current]);
+  // The instant is carried along with it: the labels have to be measured against
+  // the same moment the schedule was computed for, and reading the clock while
+  // rendering is impure — React Compiler may reorder or skip such a render.
+  const preview = useMemo(() => {
+    if (!current) return null;
+
+    const at = new Date();
+    return { at: at.getTime(), grades: previewGrades(current.fsrs, at, scheduling) };
+  }, [current, scheduling]);
+
+  // Anki's bottom bar: what is still ahead in this session, by state.
+  const remaining = useMemo(() => countQueueStates(queue.map((card) => card.fsrs.state)), [queue]);
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: theme.background }]} edges={['top', 'bottom']}>
       <View style={styles.topBar}>
-        <ThemedText type="small" themeColor="textSecondary">
-          {current ? `Pozostało: ${queue.length}` : `Odpowiedzi: ${answered}`}
-        </ThemedText>
-        <Pressable onPress={() => router.back()} hitSlop={12}>
-          <ThemedText type="small" style={{ color: theme.accent }}>
-            Zakończ
+        {current ? (
+          <DueCounts counts={remaining} />
+        ) : (
+          <ThemedText type="small" themeColor="textSecondary">
+            {`Odpowiedzi: ${answered}`}
           </ThemedText>
-        </Pressable>
+        )}
+        <View style={styles.topActions}>
+          {current ? (
+            <Pressable
+              onPress={() =>
+                router.push({
+                  pathname: '/card-editor',
+                  params: { deckId, cardId: current.cardId },
+                })
+              }
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Edytuj tę kartę">
+              <ThemedText type="small" style={{ color: theme.accent }}>
+                Edytuj
+              </ThemedText>
+            </Pressable>
+          ) : null}
+          {history.length > 0 ? (
+            <Pressable onPress={undo} hitSlop={12}>
+              <ThemedText type="small" style={{ color: theme.accent }}>
+                Cofnij
+              </ThemedText>
+            </Pressable>
+          ) : null}
+          <Pressable onPress={() => router.back()} hitSlop={12}>
+            <ThemedText type="small" style={{ color: theme.accent }}>
+              Zakończ
+            </ThemedText>
+          </Pressable>
+        </View>
       </View>
 
       {current ? (
         <>
-          <ScrollView contentContainerStyle={styles.cardArea}>
-            <ThemedText style={styles.face}>{current.front}</ThemedText>
-
-            {revealed ? (
-              <>
-                <View style={[styles.divider, { backgroundColor: theme.border }]} />
-                <ThemedText style={[styles.face, styles.back]}>{current.back}</ThemedText>
-              </>
-            ) : null}
+          <ScrollView contentContainerStyle={cardFacesLayout.area}>
+            <CardFaces
+              frontLines={current.frontLines}
+              backLines={current.backLines}
+              revealed={revealed}
+            />
           </ScrollView>
 
           <View style={styles.controls}>
             {revealed && preview ? (
               <View style={styles.grades}>
                 {GRADES.map((grade) => {
-                  const next = preview[grade].card.due.getTime() - Date.now();
+                  const next = preview.grades[grade].card;
                   return (
                     <Pressable
                       key={grade}
@@ -87,7 +151,7 @@ export default function ReviewScreen() {
                         {GRADE_LABELS[grade]}
                       </ThemedText>
                       <ThemedText type="small" style={styles.gradeInterval}>
-                        {formatInterval(next)}
+                        {formatSchedule(next.scheduled_days, next.due.getTime() - preview.at)}
                       </ThemedText>
                     </Pressable>
                   );
@@ -135,35 +199,17 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
   },
+  topActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+  },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.two,
-  },
-  cardArea: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: Spacing.four,
-    padding: Spacing.four,
-    maxWidth: MaxContentWidth,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  face: {
-    fontSize: 26,
-    lineHeight: 34,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  back: {
-    fontWeight: '400',
-  },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    alignSelf: 'stretch',
   },
   controls: {
     padding: Spacing.three,

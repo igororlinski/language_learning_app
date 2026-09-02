@@ -7,10 +7,12 @@ import { useTheme } from '@/hooks/use-theme';
 
 export type TextFieldProps = TextInputProps & {
   label: string;
+  /** Shown under the field and paints its border: what is wrong with the value. */
+  error?: string;
   ref?: Ref<TextInput>;
 };
 
-export function TextField({ label, style, multiline, ref, ...rest }: TextFieldProps) {
+export function TextField({ label, error, style, multiline, ref, ...rest }: TextFieldProps) {
   const theme = useTheme();
 
   return (
@@ -27,13 +29,18 @@ export function TextField({ label, style, multiline, ref, ...rest }: TextFieldPr
           {
             color: theme.text,
             backgroundColor: theme.backgroundElement,
-            borderColor: theme.border,
+            borderColor: error ? theme.danger : theme.border,
           },
           multiline && styles.multiline,
           style,
         ]}
         {...rest}
       />
+      {error ? (
+        <ThemedText type="small" style={{ color: theme.danger }}>
+          {error}
+        </ThemedText>
+      ) : null}
     </View>
   );
 }

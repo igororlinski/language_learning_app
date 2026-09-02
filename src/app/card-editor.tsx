@@ -1,21 +1,65 @@
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useMemo, useRef, useState } from 'react';
-import {
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  View,
-} from 'react-native';
+import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { ScrollViewContainer } from 'react-native-reorderable-list';
 
+import { AddFieldSheet } from '@/components/add-field-sheet';
+import { TagSheet } from '@/components/tag-sheet';
+import { CardFaces } from '@/components/card-faces';
+import { MediaView } from '@/components/media-view';
 import { Button } from '@/components/button';
+import { FieldLayoutList } from '@/components/field-layout-list';
 import { ThemedText } from '@/components/themed-text';
 import { TextField } from '@/components/text-field';
-import { MaxContentWidth, Spacing } from '@/constants/theme';
-import { createCard, deleteCard, getCard, updateCard } from '@/db/queries';
+import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import {
+  allTagsQuery,
+  cardMediaFiles,
+  createCard,
+  deleteCard,
+  getCard,
+  getCardFields,
+  getCardTagNames,
+  newCardFields,
+  newCardLayout,
+  setCardTagNames,
+  updateCard,
+} from '@/db/queries';
+import type { FieldKind, FieldSide } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
+import {
+  formatBytes,
+  isMediaKind,
+  MEDIA_LIMITS,
+  MEDIA_NOUNS,
+  MEDIA_NOUNS_GENITIVE,
+  type MediaKind,
+} from '@/lib/media';
+import { deleteMedia, importMedia, MediaTooLargeError, pickMedia } from '@/lib/media-files';
+import { dedupeTags, tagSlug } from '@/lib/tags';
+import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
+import { draftSignature } from '@/lib/card-draft';
+import {
+  BOUNDARY,
+  buildRows,
+  describeRows,
+  toPlacement,
+  type Row,
+  type RowInfo,
+} from '@/lib/field-rows';
+
+const BASE_LABELS: Record<BaseKind, string> = {
+  front: 'Pytanie',
+  back: 'Odpowiedź',
+};
+
+/**
+ * Expo Router renders this in place of the screen when it throws, keeping the
+ * navigator — and the way back — alive. See `src/components/error-screen.tsx`.
+ */
+export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
 
 export default function CardEditorScreen() {
   const theme = useTheme();
@@ -25,36 +69,216 @@ export default function CardEditorScreen() {
     deckId: string;
     cardId?: string;
   }>();
-  const deckId = Number(deckIdParam);
   const cardId = cardIdParam ? Number(cardIdParam) : null;
 
   const existing = useMemo(() => (cardId ? getCard(cardId) : undefined), [cardId]);
 
+  // An edited card knows its own deck; only a brand new one relies on the param.
+  const deckId = existing?.deckId ?? Number(deckIdParam);
+
+  // Fields belong to the card. A new one starts from the deck's default layout,
+  // an existing one from its own — after that the deck has no say.
+  const initialRows = useMemo(
+    () =>
+      cardId && existing
+        ? buildRows(existing, getCardFields(cardId))
+        : buildRows(newCardLayout(deckId), newCardFields(deckId)),
+    [cardId, deckId, existing]
+  );
+
   const [front, setFront] = useState(existing?.front ?? '');
   const [back, setBack] = useState(existing?.back ?? '');
+  const [rows, setRows] = useState<Row[]>(initialRows);
   const [savedCount, setSavedCount] = useState(0);
 
-  const frontInput = useRef<TextInput>(null);
-  const canSave = front.trim().length > 0 && back.trim().length > 0;
+  // Names, not ids: a tag typed here has no row until the card is saved, so a
+  // card that is never saved leaves nothing behind.
+  const [cardTags, setCardTags] = useState<string[]>(() =>
+    cardId ? getCardTagNames(cardId) : []
+  );
+  const [taggingOpen, setTaggingOpen] = useState(false);
+  const { data: knownTags } = useLiveQuery(allTagsQuery(), []);
+  const [adding, setAdding] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+
+  // Rows added here have no database id yet, so they need a key of their own to
+  // stay put while they are being edited.
+  const nextKey = useRef(0);
+
+  // Copies imported in this session. Whatever the save does not keep is deleted
+  // there, so replacing a file twice does not leave two of them behind.
+  const imported = useRef<{ kind: MediaKind; fileName: string }[]>([]);
+
+  const info = describeRows(rows, BASE_LABELS);
+
+  // The preview runs through the very same functions the session uses, so what
+  // it shows is what the card will read like — including the empty fields it
+  // leaves out and the order dragging produced.
+  const preview = useMemo(() => {
+    const { fields, placement } = toPlacement(rows);
+    const pieces = cardPieces({ front, back, ...placement }, fields);
+
+    return { front: sideLines(pieces, 'front'), back: sideLines(pieces, 'back') };
+  }, [rows, front, back]);
+
+  const addField = ({ side, kind }: { side: FieldSide; kind: FieldKind }) => {
+    nextKey.current += 1;
+    const key = `new-${nextKey.current}`;
+    const added: Row = { key, kind: 'extra', id: null, field: kind, value: '', mediaPath: null };
+
+    setRows((current) => {
+      // A front field goes just above the boundary, a back one to the very end
+      // — in both cases where the user would expect it to appear.
+      const boundary = current.findIndex((row) => row.key === BOUNDARY);
+      return side === 'front'
+        ? [...current.slice(0, boundary), added, ...current.slice(boundary)]
+        : [...current, added];
+    });
+
+    // An empty media field is useless, so the picker opens straight away.
+    if (isMediaKind(kind)) void attachMedia(key, kind);
+  };
+
+  const patchRow = (key: string, value: string) =>
+    setRows((current) =>
+      current.map((row) => (row.kind === 'extra' && row.key === key ? { ...row, value } : row))
+    );
+
+  const removeRow = (key: string) =>
+    setRows((current) => current.filter((row) => row.key !== key));
+
+  /**
+   * Picks a file and copies it into the app's own directory. The size is checked
+   * before the copy, so an oversized file never lands on the device.
+   */
+  const attachMedia = async (key: string, kind: MediaKind) => {
+    try {
+      const picked = await pickMedia(kind);
+      if (!picked) return;
+
+      const { fileName, name } = await importMedia(kind, picked);
+      imported.current = [...imported.current, { kind, fileName }];
+
+      setRows((current) =>
+        current.map((row) =>
+          row.kind === 'extra' && row.key === key
+            ? { ...row, value: name, mediaPath: fileName }
+            : row
+        )
+      );
+    } catch (error) {
+      const message =
+        error instanceof MediaTooLargeError
+          ? `Ten plik ma ${formatBytes(error.size)}, a limit to ${formatBytes(MEDIA_LIMITS[kind])}.`
+          : 'Nie udało się skopiować pliku.';
+
+      Alert.alert(
+        `Nie dodano ${MEDIA_NOUNS_GENITIVE[kind]}`,
+        message,
+        [{ text: 'OK' }],
+        { cancelable: true }
+      );
+    }
+  };
+
+  /**
+   * Comparing what the form says now against what it said when it was last
+   * saved is what tells an abandoned edit from an untouched form — a flag set
+   * by each `onChange` would also fire for typing a letter and deleting it.
+   */
+  const signature = useMemo(
+    () => draftSignature(front, back, rows, cardTags),
+    [back, cardTags, front, rows]
+  );
+
+  const saved = useRef(signature);
+  const navigation = useNavigation();
+
+  useEffect(
+    () =>
+      // The same navigation event the deck screen uses to end its selection: it
+      // covers the header arrow, the phone's back button and the swipe alike.
+      navigation.addListener('beforeRemove', (event) => {
+        if (signature === saved.current) return;
+
+        event.preventDefault();
+
+        Alert.alert(
+          'Porzucić zmiany?',
+          'Wpisana treść i wybrane pliki przepadną.',
+          [
+            { text: 'Wróć do edycji', style: 'cancel' },
+            {
+              text: 'Porzuć',
+              style: 'destructive',
+              onPress: () => {
+                // Files copied here point at no row in the database, so leaving
+                // without saving is exactly what makes them rubbish.
+                deleteMedia(imported.current);
+                imported.current = [];
+
+                navigation.dispatch(event.data.action);
+              },
+            },
+          ],
+          { cancelable: true }
+        );
+      }),
+    [navigation, signature]
+  );
+
+  const questionInput = useRef<TextInput>(null);
+  // Only the question is required: plenty of cards are a prompt with a picture
+  // or a recording for an answer, and some are a prompt with nothing at all.
+  const canSave = front.trim().length > 0;
 
   const save = () => {
     if (!canSave) return;
-    if (cardId) {
-      updateCard(cardId, { front, back });
-    } else {
-      createCard(deckId, front, back);
-    }
-    router.back();
-  };
 
-  /** Fast entry: keeps the editor open so a whole batch can be typed in one go. */
-  const saveAndNext = () => {
-    if (!canSave) return;
-    createCard(deckId, front, back);
+    const { fields, placement } = toPlacement(rows);
+    const kept = new Set(fields.map((field) => field.mediaPath).filter(Boolean));
+
+    if (cardId) {
+      // The copies live outside the database, so files the card no longer points
+      // at have to be cleared by hand — the ones it dropped and the ones
+      // imported here and then replaced.
+      const before = cardMediaFiles(cardId);
+      updateCard(cardId, { front, back, fields, layout: placement });
+      setCardTagNames(cardId, cardTags);
+
+      deleteMedia(
+        [...before, ...imported.current].filter((file) => !kept.has(file.fileName))
+      );
+
+      // Saved, so leaving is not abandoning anything.
+      saved.current = signature;
+      router.back();
+      return;
+    }
+
+    deleteMedia(imported.current.filter((file) => !kept.has(file.fileName)));
+    imported.current = [];
+
+    // Fast entry: saving a new card clears the form and keeps the editor open so
+    // a whole batch can be typed in one go. Leaving is the header back arrow.
+    const card = createCard(deckId, front, back, new Date(), fields, placement);
+    setCardTagNames(card.id, cardTags);
+
     setFront('');
     setBack('');
+    // The tags stay on for the next card: a batch typed in one go is usually
+    // one batch of tags too, and taking them off is one tap.
+    // The next card in the batch starts from the deck's default layout again.
+    const nextRows = buildRows(newCardLayout(deckId), newCardFields(deckId));
+    setRows(nextRows);
+
+    // The form the next card starts from is what "saved" means from here on —
+    // it is empty, but the tags kept for the batch would otherwise read as an
+    // unsaved edit the moment the back arrow was touched.
+    saved.current = draftSignature('', '', nextRows, cardTags);
+
     setSavedCount((count) => count + 1);
-    frontInput.current?.focus();
+    questionInput.current?.focus();
   };
 
   const confirmDelete = () => {
@@ -65,62 +289,234 @@ export default function CardEditorScreen() {
         text: 'Usuń',
         style: 'destructive',
         onPress: () => {
+          const files = cardMediaFiles(cardId);
           deleteCard(cardId);
+          deleteMedia([...files, ...imported.current]);
+
+          // The card is gone; there is nothing left to abandon.
+          saved.current = signature;
           router.back();
         },
       },
-    ]);
+    ], { cancelable: true });
+  };
+
+  const renderRow = (row: Row, rowInfo: RowInfo) => {
+    if (row.kind === 'base') {
+      const isQuestion = row.base === 'front';
+
+      return (
+        <>
+          <TextField
+            ref={isQuestion ? questionInput : undefined}
+            label={rowInfo.label}
+            value={isQuestion ? front : back}
+            onChangeText={isQuestion ? setFront : setBack}
+            placeholder={isQuestion ? 'np. to break' : 'np. broke / broken — łamać'}
+            autoFocus={isQuestion && !cardId}
+            style={styles.input}
+            multiline
+          />
+        </>
+      );
+    }
+
+    if (row.kind === 'boundary') return null;
+
+    if (isMediaKind(row.field)) {
+      const kind = row.field;
+
+      return (
+        <>
+          <ThemedText type="smallBold" themeColor="textSecondary">
+            {`${rowInfo.label} — ${MEDIA_NOUNS[kind]}`}
+          </ThemedText>
+          {row.mediaPath ? (
+            <MediaView kind={kind} fileName={row.mediaPath} label={row.value} />
+          ) : null}
+          <View style={styles.rowActions}>
+            <Pressable
+              onPress={() => attachMedia(row.key, kind)}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel={`${row.mediaPath ? 'Zmień' : 'Wybierz'} plik: ${rowInfo.label}`}>
+              <ThemedText type="small" style={{ color: theme.accent }}>
+                {row.mediaPath ? 'Zmień plik' : 'Wybierz plik'}
+              </ThemedText>
+            </Pressable>
+            <Pressable
+              onPress={() => removeRow(row.key)}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel={`Usuń ${rowInfo.label}`}>
+              <ThemedText type="small" style={{ color: theme.danger }}>
+                Usuń pole
+              </ThemedText>
+            </Pressable>
+          </View>
+        </>
+      );
+    }
+
+    return (
+      <>
+        <TextField
+          label={rowInfo.label}
+          value={row.value}
+          onChangeText={(value) => patchRow(row.key, value)}
+          style={styles.input}
+          multiline
+        />
+        <View style={styles.rowActions}>
+          <Pressable
+            onPress={() => removeRow(row.key)}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel={`Usuń ${rowInfo.label}`}>
+            <ThemedText type="small" style={{ color: theme.danger }}>
+              Usuń pole
+            </ThemedText>
+          </Pressable>
+        </View>
+      </>
+    );
   };
 
   return (
     <KeyboardAvoidingView
       style={[styles.screen, { backgroundColor: theme.background }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      behavior="padding"
+      automaticOffset>
       <Stack.Screen options={{ title: cardId ? 'Edytuj kartę' : 'Nowa karta' }} />
 
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <TextField
-          ref={frontInput}
-          label="Przód (pytanie)"
-          value={front}
-          onChangeText={setFront}
-          placeholder="np. to break"
-          autoFocus={!cardId}
-          multiline
+      {/* ScrollViewContainer is the scroll parent the nested list needs to drag. */}
+      <ScrollViewContainer
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled">
+        <View style={styles.tags}>
+          {cardTags.map((name) => (
+            <Pressable
+              key={tagSlug(name)}
+              onPress={() => setCardTags((own) => own.filter((tag) => tag !== name))}
+              accessibilityRole="button"
+              accessibilityLabel={`Zdejmij tag ${name}`}
+              style={({ pressed }) => [
+                styles.tag,
+                {
+                  borderColor: theme.accent,
+                  backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+                  opacity: pressed ? 0.7 : 1,
+                },
+              ]}>
+              <ThemedText type="small" style={{ color: theme.accent }}>
+                {`${name}  ×`}
+              </ThemedText>
+            </Pressable>
+          ))}
+          <Pressable
+            onPress={() => setTaggingOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Tagi karty"
+            style={({ pressed }) => [
+              styles.tag,
+              {
+                borderColor: theme.border,
+                backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+              },
+            ]}>
+            <ThemedText type="small" themeColor="textSecondary">
+              {cardTags.length > 0 ? '+ tag' : '+ tagi'}
+            </ThemedText>
+          </Pressable>
+        </View>
+
+        <View
+          style={[
+            styles.preview,
+            { borderColor: theme.border, backgroundColor: theme.backgroundElement },
+          ]}>
+          <Pressable
+            onPress={() => setShowPreview((shown) => !shown)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: showPreview }}
+            accessibilityLabel="Podgląd karty"
+            style={styles.previewHeader}>
+            <ThemedText type="smallBold" themeColor="textSecondary">
+              PODGLĄD KARTY
+            </ThemedText>
+            <ThemedText type="small" style={{ color: theme.accent }}>
+              {showPreview ? 'Ukryj' : 'Pokaż'}
+            </ThemedText>
+          </Pressable>
+
+          {showPreview ? (
+            <View style={styles.previewCard}>
+              <CardFaces
+                frontLines={preview.front}
+                backLines={preview.back}
+                revealed
+                compact
+              />
+            </View>
+          ) : null}
+        </View>
+
+        <FieldLayoutList
+          rows={rows}
+          info={info}
+          onChange={setRows}
+          renderRow={renderRow}
         />
-        <TextField
-          label="Tył (odpowiedź)"
-          value={back}
-          onChangeText={setBack}
-          placeholder="np. broke / broken — łamać"
-          multiline
-        />
+
+        <Pressable
+          onPress={() => setAdding(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Dodaj pole"
+          style={({ pressed }) => [
+            styles.add,
+            { borderColor: theme.border, opacity: pressed ? 0.7 : 1 },
+          ]}>
+          <ThemedText style={[styles.addGlyph, { color: theme.accent }]}>+</ThemedText>
+        </Pressable>
 
         {savedCount > 0 ? (
           <ThemedText type="small" themeColor="textSecondary">
             Dodano w tej sesji: {savedCount}
           </ThemedText>
         ) : null}
-      </ScrollView>
+      </ScrollViewContainer>
 
       <View style={[styles.footer, { borderColor: theme.border }]}>
         <Button title="Zapisz" onPress={save} disabled={!canSave} />
-        {cardId ? (
-          <Button title="Usuń kartę" variant="danger" onPress={confirmDelete} />
-        ) : (
-          <Button
-            title="Zapisz i dodaj kolejną"
-            variant="secondary"
-            onPress={saveAndNext}
-            disabled={!canSave}
-          />
-        )}
+        {cardId ? <Button title="Usuń kartę" variant="danger" onPress={confirmDelete} /> : null}
       </View>
+
+      <TagSheet
+        visible={taggingOpen}
+        picked={cardTags}
+        known={(knownTags ?? []).map((tag) => tag.name)}
+        onChange={(picked) => setCardTags(dedupeTags(picked))}
+        onClose={() => setTaggingOpen(false)}
+      />
+
+      <AddFieldSheet visible={adding} onClose={() => setAdding(false)} onAdd={addField} />
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  tags: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  tag: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    borderRadius: Radius.large,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   screen: {
     flex: 1,
   },
@@ -130,6 +526,45 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
     width: '100%',
     alignSelf: 'center',
+  },
+  preview: {
+    borderRadius: Radius.medium,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: Spacing.three,
+    gap: Spacing.two,
+  },
+  previewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  previewCard: {
+    alignItems: 'center',
+    gap: Spacing.three,
+    paddingVertical: Spacing.two,
+  },
+  input: {
+    // Grows with the text instead of always reserving room for four lines.
+    minHeight: 44,
+    paddingTop: Spacing.two,
+  },
+  rowActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: Spacing.three,
+  },
+  add: {
+    alignSelf: 'center',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addGlyph: {
+    fontSize: 26,
+    lineHeight: 30,
   },
   footer: {
     padding: Spacing.three,
