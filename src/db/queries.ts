@@ -3,6 +3,14 @@ import { and, asc, desc, eq, inArray, lt, lte, ne, or, sql, type SQLWrapper } fr
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
 import { isMediaKind, type MediaKind } from '@/lib/media';
 import { DEFAULT_SCHEDULING, parseWeights, type DeckScheduling } from '@/lib/fsrs-options';
+import {
+  allLanguages,
+  dedupeLanguages,
+  languagesJson,
+  NO_LANGUAGES,
+  parseLanguages,
+  type DeckLanguages,
+} from '@/lib/languages';
 import { type StabilitySample } from '@/lib/fsrs-optimizer';
 import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 
@@ -666,6 +674,45 @@ export function deckScheduling(deckId: number): DeckScheduling {
   return toScheduling(deck);
 }
 
+/** Those two columns as a pair — one mapping, every reader. */
+function toLanguages(row: {
+  frontLanguages: string | null;
+  backLanguages: string | null;
+}): DeckLanguages {
+  return {
+    front: parseLanguages(row.frontLanguages),
+    back: parseLanguages(row.backLanguages),
+  };
+}
+
+/**
+ * What languages a deck declares for its question and answer.
+ *
+ * Nothing schedules or validates on this — it is here for whatever needs to
+ * know what it is reading, the first of those being picture generation from
+ * the likeness between a card's two texts.
+ */
+export function deckLanguages(deckId: number): DeckLanguages {
+  const deck = getDeck(deckId);
+  if (!deck) return NO_LANGUAGES;
+
+  return toLanguages(deck);
+}
+
+/**
+ * Every language any deck already names, so one can be reused rather than
+ * retyped — the same courtesy tags get, without a table of their own: a
+ * language is only ever a name, so the deck rows already hold the whole set.
+ */
+export function usedLanguages(): string[] {
+  const rows = db
+    .select({ frontLanguages: decks.frontLanguages, backLanguages: decks.backLanguages })
+    .from(decks)
+    .all();
+
+  return dedupeLanguages(rows.flatMap((row) => allLanguages(toLanguages(row))));
+}
+
 /**
  * What the optimiser learns from: one row per card that finished a first study
  * day and came back on a later one.
@@ -772,6 +819,8 @@ export type DeckInput = {
   newCardPlacement?: NewCardPlacement;
   newCardOrder?: NewCardOrder;
   scheduling?: DeckScheduling;
+  /** What the question and the answer are written in. Declarative only. */
+  languages?: DeckLanguages;
   /** The layout every new card in this deck starts from. */
   newCardLayout?: CardLayout;
 };
@@ -780,6 +829,7 @@ export type DeckInput = {
 function deckValues(input: DeckInput) {
   const scheduling = input.scheduling ?? DEFAULT_SCHEDULING;
   const layout = input.newCardLayout ?? DEFAULT_CARD_LAYOUT;
+  const languages = input.languages ?? NO_LANGUAGES;
 
   return {
     name: input.name.trim(),
@@ -801,6 +851,11 @@ function deckValues(input: DeckInput) {
     newFrontPosition: layout.frontPosition,
     newBackSide: layout.backSide,
     newBackPosition: layout.backPosition,
+    // Named columns again, for the reason spelled out above `fsrsWeights`:
+    // `front` and `back` are not column names, and a spread would drop them
+    // in silence.
+    frontLanguages: languagesJson(languages.front),
+    backLanguages: languagesJson(languages.back),
   };
 }
 

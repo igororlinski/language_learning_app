@@ -16,6 +16,7 @@ import {
   cardsMediaFiles,
   allTagsQuery,
   copyCards,
+  deckLanguages,
   deckScheduling,
   deckTagsQuery,
   getCardTagNames,
@@ -50,12 +51,14 @@ import {
   updateDeck,
   type MediaCopier,
 } from '@/db/queries';
+import { usedLanguages } from '@/db/queries';
 import { decks, fsrsState, reviewLogs } from '@/db/schema';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { sortCards } from '@/lib/card-sort';
 import { filterCards } from '@/lib/search';
 import { DEFAULT_SCHEDULING, schedulingKey } from '@/lib/fsrs-options';
 import { optimizeWeights } from '@/lib/fsrs-optimizer';
+import { languageSlug } from '@/lib/languages';
 import { filterByTags } from '@/lib/tags';
 import {
   countQueueStates,
@@ -83,6 +86,7 @@ import migration0010 from '../drizzle/0010_quiet_absorbing_man.sql';
 import migration0011 from '../drizzle/0011_violet_giant_man.sql';
 import migration0012 from '../drizzle/0012_cool_swordsman.sql';
 import migration0013 from '../drizzle/0013_messy_nova.sql';
+import migration0014 from '../drizzle/0014_cultured_sphinx.sql';
 
 for (const migration of [
   migration0000,
@@ -99,6 +103,7 @@ for (const migration of [
   migration0011,
   migration0012,
   migration0013,
+  migration0014,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -1239,3 +1244,83 @@ for (const rating of RATINGS) {
 
   checkPromise(`${GRADE_LABELS[rating]} na karcie w powtorkach`, card.id, rating, at(12, 0, 60));
 }
+
+
+group('Jezyki talii');
+
+/**
+ * The property this shares with the FSRS weights, and the reason it gets a test
+ * at all: `front` and `back` are not column names, so a save written as a spread
+ * would drop them without a word from `tsc` or from drizzle. What the editor
+ * sends has to be what comes back.
+ */
+const langDeck = createDeck({
+  name: 'Angielski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+});
+
+check('nowa talia nie deklaruje jezykow', deckLanguages(langDeck.id), { front: [], back: [] });
+
+updateDeck(langDeck.id, {
+  name: 'Angielski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  languages: { front: ['polski'], back: ['angielski'] },
+});
+
+check('zapisane jezyki wracaja z bazy', deckLanguages(langDeck.id), {
+  front: ['polski'],
+  back: ['angielski'],
+});
+
+// Several per side is the point — a deck may mix them.
+updateDeck(langDeck.id, {
+  name: 'Angielski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  languages: { front: ['polski', 'łacina'], back: ['angielski'] },
+});
+
+check('kilka jezykow na stronie tez', deckLanguages(langDeck.id).front, ['polski', 'łacina']);
+
+// Two spellings of one language are one language, or the future reader would
+// be told the question is in two.
+updateDeck(langDeck.id, {
+  name: 'Angielski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  languages: { front: ['Polski', 'polski'], back: [] },
+});
+
+check('powtorzona pisownia sklada sie w jedna', deckLanguages(langDeck.id).front, ['Polski']);
+check('pusta strona wraca pusta', deckLanguages(langDeck.id).back, []);
+
+// A brand new deck has to carry them too, not only an edited one.
+const bornWithLanguages = createDeck({
+  name: 'Od razu z jezykami',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  languages: { front: ['niemiecki'], back: ['polski'] },
+});
+
+check('nowa talia tez je zapisuje', deckLanguages(bornWithLanguages.id), {
+  front: ['niemiecki'],
+  back: ['polski'],
+});
+
+// What the picker offers: every language any deck already uses, once.
+const known = usedLanguages();
+const knownTimes = (name: string) =>
+  known.filter((own) => languageSlug(own) === languageSlug(name)).length;
+
+check('podpowiedzi znaja jezyk z innej talii', knownTimes('niemiecki'), 1);
+check('i ten z drugiej strony', knownTimes('polski'), 1);
+
+// The suggestion list is folded across decks, so one deck writing `Polski` and
+// another `polski` offers a single chip — and the spelling that survives is the
+// first one seen, not the last. Anything else would let the picker suggest two
+// entries for one language.
+check('a sklejona pisownia to ta pierwsza', known.includes('Polski'), true);
+check('nie ta pozniejsza', known.includes('polski'), false);
+check('talia bez jezykow nic nie dokłada', known.includes(''), false);

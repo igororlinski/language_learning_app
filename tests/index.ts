@@ -11,6 +11,7 @@ import './card-draft.test';
 import './field-rows.test';
 import './media.test';
 import './ai-image.test';
+import './languages.test';
 import './tags.test';
 import './study-day.test';
 import './fsrs-options.test';

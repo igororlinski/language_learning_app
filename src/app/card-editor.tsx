@@ -6,7 +6,7 @@ import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
 import { AddFieldSheet } from '@/components/add-field-sheet';
-import { TagSheet } from '@/components/tag-sheet';
+import { NameSheet } from '@/components/name-sheet';
 import { CardFaces } from '@/components/card-faces';
 import { MediaView } from '@/components/media-view';
 import { Button } from '@/components/button';
@@ -46,7 +46,7 @@ import {
   saveGeneratedImage,
 } from '@/lib/media-files';
 import { AiImageError, generateImage } from '@/lib/ai-image';
-import { dedupeTags, tagSlug } from '@/lib/tags';
+import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
 import { draftSignature } from '@/lib/card-draft';
 import {
@@ -620,10 +620,15 @@ export default function CardEditorScreen() {
         {cardId ? <Button title="Usuń kartę" variant="danger" onPress={confirmDelete} /> : null}
       </View>
 
-      <TagSheet
+      <NameSheet
         visible={taggingOpen}
+        title="Tagi karty"
+        inputLabel="Nowy tag"
+        placeholder="np. czasownik"
         picked={cardTags}
         known={(knownTags ?? []).map((tag) => tag.name)}
+        normalize={tagName}
+        identity={tagSlug}
         onChange={(picked) => setCardTags(dedupeTags(picked))}
         onClose={() => setTaggingOpen(false)}
       />

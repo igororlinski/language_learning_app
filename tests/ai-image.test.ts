@@ -136,7 +136,10 @@ const asked = body as { prompt?: unknown; steps?: unknown };
 // The Worker builds nothing: it forwards the prompt as given, so the whole
 // prompt has to leave the app.
 check('w ciele jedzie gotowy prompt', asked.prompt, buildPrompt('dog'));
-check('i liczba krokow', asked.steps, 8);
+
+// Steps are 80% of what a picture costs, so this number is a spending decision
+// rather than a tuning detail — it gets an assertion, not a default.
+check('i liczba krokow', asked.steps, 4);
 
 // No key travels any more — that is the entire point of the Worker. A header
 // creeping back in here would mean a token had crept back into the bundle.

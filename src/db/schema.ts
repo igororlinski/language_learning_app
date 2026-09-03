@@ -84,6 +84,18 @@ export const decks = sqliteTable('decks', {
   newFrontPosition: integer('new_front_position').notNull().default(0),
   newBackSide: text('new_back_side', { enum: FIELD_SIDES }).notNull().default('back'),
   newBackPosition: integer('new_back_position').notNull().default(0),
+  /**
+   * Which languages this deck writes its questions and answers in, as JSON
+   * arrays of names, or null while the deck has not said. Nothing validates a
+   * card against them — see `src/lib/languages.ts` for why they exist and what
+   * counts as the same language.
+   *
+   * They follow `cards.front` and `cards.back`, the two mandatory fields, not
+   * the two sides of the card: a question may be laid out on the back, and it
+   * is still the question whose language this names.
+   */
+  frontLanguages: text('front_languages'),
+  backLanguages: text('back_languages'),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .$defaultFn(() => new Date()),

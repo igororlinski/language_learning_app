@@ -37,8 +37,22 @@ export const WORKER_URL: string = 'https://flashcards-ai.orli-dev.workers.dev';
  */
 const APP_SECRET: string = '';
 
-/** The model's ceiling. More steps is a better picture and the same price tier. */
-const STEPS = 8;
+/**
+ * How many denoising steps to ask for, and the single biggest lever on cost.
+ *
+ * Cloudflare prices this model at 4.80 neurons per 512x512 tile plus **9.60 per
+ * step**, so a 1024x1024 picture (four tiles) costs `19.2 + 9.6 * steps`. Steps
+ * are therefore most of the bill, not a rounding error: eight of them cost 96
+ * neurons — about 104 pictures inside the 10 000-neuron daily free allowance —
+ * where four cost 57.6, or about 173 pictures.
+ *
+ * Four rather than the model's ceiling of eight because **schnell is a distilled
+ * model, built to generate in one to four steps**. Asked for the same prompt at
+ * 8, 4, 2 and 1 steps, it showed no visible degradation down to at least two;
+ * the extra steps were buying nothing and costing 40% more. Raising this above
+ * `MAX_STEPS` in the Worker needs a redeploy — the Worker clamps what it gets.
+ */
+const STEPS = 4;
 
 /** Cloudflare's own limit on the prompt. */
 const MAX_PROMPT = 2048;

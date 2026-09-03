@@ -56,7 +56,8 @@ const failed = (message, status) => envelope({ success: false, errors: [{ messag
  * user a less exact sentence ("Cloudflare nie zrobił obrazu" instead of "limit
  * się wyczerpał"); not guessing at all would cost them that sentence always.
  */
-const looksLikeLimit = (message) => /\b(429|quota|rate.?limit|capacity|exceeded)\b/i.test(message);
+const looksLikeLimit = (message) =>
+  /\b(429|4006|neuron|quota|rate.?limit|capacity|exceeded)\b/i.test(message);
 
 export default {
   async fetch(request, env) {

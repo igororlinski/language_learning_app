@@ -8,10 +8,11 @@ import { AddFieldSheet } from '@/components/add-field-sheet';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
 import { Dropdown, type DropdownOption } from '@/components/dropdown';
+import { NameSheet } from '@/components/name-sheet';
 import { OptionPicker, type PickerOption } from '@/components/option-picker';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
-import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
   createDeck,
   deckMediaFiles,
@@ -22,6 +23,7 @@ import {
   stabilitySamples,
   syncDeckSlots,
   updateDeck,
+  usedLanguages,
 } from '@/db/queries';
 import {
   type FieldKind,
@@ -34,6 +36,12 @@ import {
   type NewCardPlacement,
 } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
+import {
+  dedupeLanguages,
+  languageName,
+  languageSlug,
+  parseLanguages,
+} from '@/lib/languages';
 import { MEDIA_NOUNS } from '@/lib/media';
 import {
   DEFAULT_LEARNING_STEPS,
@@ -151,6 +159,20 @@ export default function DeckEditorScreen() {
   const existing = useMemo(() => (deckId ? getDeck(deckId) : undefined), [deckId]);
 
   const [name, setName] = useState(existing?.name ?? '');
+  const [frontLanguages, setFrontLanguages] = useState(() =>
+    parseLanguages(existing?.frontLanguages)
+  );
+  const [backLanguages, setBackLanguages] = useState(() =>
+    parseLanguages(existing?.backLanguages)
+  );
+  /** Which of the two lists the sheet is editing, or null while it is closed. */
+  const [languageSheet, setLanguageSheet] = useState<'front' | 'back' | null>(null);
+  /**
+   * Read once: every language any deck already names, so this one can reuse a
+   * spelling instead of inventing a second one. Not a live query — it is a
+   * convenience in a picker, and it must not move while the picker is open.
+   */
+  const knownLanguages = useMemo(() => usedLanguages(), []);
   const [description, setDescription] = useState(existing?.description ?? '');
   const [newPerDay, setNewPerDay] = useState(String(existing?.newPerDay ?? DEFAULT_NEW_PER_DAY));
   const [reviewsPerDay, setReviewsPerDay] = useState(
@@ -306,6 +328,58 @@ export default function DeckEditorScreen() {
     );
   };
 
+  /**
+   * One labelled row of chips: each language picked, removable by tapping it,
+   * plus the chip that opens the sheet. The same gesture the card editor gives
+   * tags, because it is the same kind of list.
+   */
+  const renderLanguages = (
+    label: string,
+    picked: string[],
+    setPicked: (next: string[]) => void,
+    open: () => void
+  ) => (
+    <View style={styles.limits}>
+      <ThemedText type="smallBold">{label}</ThemedText>
+      <View style={styles.languages}>
+        {picked.map((language) => (
+          <Pressable
+            key={languageSlug(language)}
+            onPress={() => setPicked(picked.filter((own) => own !== language))}
+            accessibilityRole="button"
+            accessibilityLabel={`Usuń język ${language}`}
+            style={({ pressed }) => [
+              styles.language,
+              {
+                borderColor: theme.accent,
+                backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+                opacity: pressed ? 0.7 : 1,
+              },
+            ]}>
+            <ThemedText type="small" style={{ color: theme.accent }}>
+              {`${language}  ×`}
+            </ThemedText>
+          </Pressable>
+        ))}
+        <Pressable
+          onPress={open}
+          accessibilityRole="button"
+          accessibilityLabel={label}
+          style={({ pressed }) => [
+            styles.language,
+            {
+              borderColor: theme.border,
+              backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+            },
+          ]}>
+          <ThemedText type="small" themeColor="textSecondary">
+            {picked.length > 0 ? '+ język' : '+ języki'}
+          </ThemedText>
+        </Pressable>
+      </View>
+    </View>
+  );
+
   const canSave = name.trim().length > 0 && stepsOk;
 
   const save = () => {
@@ -335,6 +409,7 @@ export default function DeckEditorScreen() {
         weights,
       },
       newCardLayout: placement,
+      languages: { front: frontLanguages, back: backLanguages },
     };
 
     if (deckId) {
@@ -497,6 +572,20 @@ export default function DeckEditorScreen() {
           />
         ) : null}
 
+        {renderLanguages(
+          'Języki pytania',
+          frontLanguages,
+          setFrontLanguages,
+          () => setLanguageSheet('front')
+        )}
+
+        {renderLanguages(
+          'Języki odpowiedzi',
+          backLanguages,
+          setBackLanguages,
+          () => setLanguageSheet('back')
+        )}
+
         <View style={styles.limits}>
           <ThemedText type="smallBold">Domyślny układ nowej karty</ThemedText>
         </View>
@@ -519,6 +608,23 @@ export default function DeckEditorScreen() {
           <ThemedText style={[styles.addGlyph, { color: theme.accent }]}>+</ThemedText>
         </Pressable>
       </ScrollViewContainer>
+
+      <NameSheet
+        visible={languageSheet !== null}
+        title={languageSheet === 'back' ? 'Języki odpowiedzi' : 'Języki pytania'}
+        inputLabel="Nowy język"
+        placeholder="np. angielski"
+        picked={languageSheet === 'back' ? backLanguages : frontLanguages}
+        known={knownLanguages}
+        normalize={languageName}
+        identity={languageSlug}
+        onChange={(picked) =>
+          (languageSheet === 'back' ? setBackLanguages : setFrontLanguages)(
+            dedupeLanguages(picked)
+          )
+        }
+        onClose={() => setLanguageSheet(null)}
+      />
 
       <AddFieldSheet visible={adding} onClose={() => setAdding(false)} onAdd={addField} />
 
@@ -543,6 +649,18 @@ const styles = StyleSheet.create({
   limits: {
     gap: Spacing.one,
     paddingTop: Spacing.two,
+  },
+  languages: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  language: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    borderRadius: Radius.large,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   content: {
     padding: Spacing.three,
