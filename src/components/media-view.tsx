@@ -24,7 +24,8 @@ export type MediaViewProps = {
 
 /**
  * Shows one media field: a play button for sound, the picture itself for an
- * image, the frame itself for video. The file lives in the app's own directory
+ * image — generated or chosen, they render the same — the frame itself for
+ * video. The file lives in the app's own directory
  * and may be gone — a card restored on another install, a copy deleted by hand
  * — so the missing case is shown rather than silently rendering nothing.
  */

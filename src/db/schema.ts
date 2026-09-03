@@ -27,8 +27,17 @@ export const DEFAULT_NEW_CARD_ORDER: NewCardOrder = 'oldest';
 /** Which face of a card a field belongs to. */
 export const FIELD_SIDES = ['front', 'back'] as const;
 
-/** A field holds typed text, or one attached file: sound, a picture or video. */
-export const FIELD_KINDS = ['text', 'audio', 'image', 'video'] as const;
+/**
+ * A field holds typed text, or one attached file: sound, a picture, video, or a
+ * picture generated from the card's own words (`ai-image`). The generated one is
+ * a kind of its own rather than a flag on `image`, because how a field is filled
+ * in is the one thing about it that never changes afterwards.
+ *
+ * The SQL column is plain text with no CHECK, so a new kind needs no migration —
+ * `npm run db:generate` says "nothing to migrate". What it does need is an entry
+ * in every record in `src/lib/media.ts`; `tests/media.test.ts` enforces that.
+ */
+export const FIELD_KINDS = ['text', 'audio', 'image', 'video', 'ai-image'] as const;
 export type FieldSide = (typeof FIELD_SIDES)[number];
 export type FieldKind = (typeof FIELD_KINDS)[number];
 

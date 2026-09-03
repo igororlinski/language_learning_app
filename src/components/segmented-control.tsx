@@ -4,7 +4,16 @@ import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
-export type Segment<T extends string> = { value: T; label: string };
+export type Segment<T extends string> = {
+  value: T;
+  label: string;
+  /**
+   * What a screen reader says, when the chip has to be shorter than the thing
+   * it names. Five segments share a phone's width, so a label sometimes has to
+   * lose a word that the spoken version keeps.
+   */
+  accessibilityLabel?: string;
+};
 
 export type SegmentedControlProps<T extends string> = {
   value: T;
@@ -40,7 +49,7 @@ export function SegmentedControl<T extends string>({
             onPress={() => onChange(option.value)}
             accessibilityRole="radio"
             accessibilityState={{ selected }}
-            accessibilityLabel={option.label}
+            accessibilityLabel={option.accessibilityLabel ?? option.label}
             style={({ pressed }) => [
               styles.segment,
               {
@@ -69,7 +78,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   segment: {
-    // Equal shares rather than label-sized: four options have to fit a phone.
+    // Equal shares rather than label-sized: five options have to fit a phone.
     flex: 1,
     paddingHorizontal: Spacing.two,
     paddingVertical: Spacing.two,

@@ -48,6 +48,7 @@ import {
   syncDeckSlots,
   updateCard,
   updateDeck,
+  type MediaCopier,
 } from '@/db/queries';
 import { decks, fsrsState, reviewLogs } from '@/db/schema';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
@@ -769,7 +770,7 @@ const plainCopyCard = createCard(sourceDeck.id, 'to swim', 'plywac', now);
 
 // The file system is not available here, so the duplication is injected — the
 // real one lives in `src/lib/media-files.ts` and needs a device.
-const fakeCopier = (kind: 'audio' | 'image' | 'video', fileName: string) => `${kind}-2-${fileName}`;
+const fakeCopier: MediaCopier = (kind, fileName) => `${kind}-2-${fileName}`;
 
 // Answer one card first: the copy must not inherit any of this.
 gradeCard(withFile.id, Rating.Good, now);

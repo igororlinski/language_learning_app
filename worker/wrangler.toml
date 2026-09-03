@@ -1,0 +1,16 @@
+# The picture generator. See src/index.js for what it does and why it exists.
+#
+#   cd worker && npx wrangler login && npx wrangler deploy
+#
+# There is no API token anywhere in here: the [ai] binding below is how this
+# Worker reaches Workers AI, and Cloudflare attaches it at deploy time.
+
+name = "flashcards-ai"
+main = "src/index.js"
+
+# Today's date at the time of writing. If wrangler complains that this is in
+# the future, move it back — it only selects runtime defaults.
+compatibility_date = "2026-09-03"
+
+[ai]
+binding = "AI"

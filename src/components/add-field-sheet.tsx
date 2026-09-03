@@ -19,6 +19,8 @@ const KINDS: Segment<FieldKind>[] = [
   { value: 'audio', label: 'Dźwięk' },
   { value: 'image', label: 'Obraz' },
   { value: 'video', label: 'Wideo' },
+  // Shortened to fit five segments across a phone; the spoken name stays whole.
+  { value: 'ai-image', label: 'AI', accessibilityLabel: 'Obraz AI' },
 ];
 
 export type AddFieldSheetProps = {
@@ -31,7 +33,8 @@ export type AddFieldSheetProps = {
  * The small menu behind the "+" button: which side the new field goes on and
  * what it holds. The kind is decided here and never again — a field is a text
  * box or a slot for one kind of file for its whole life, so the editors never
- * have to make sense of a half-converted one.
+ * have to make sense of a half-converted one. That includes how it gets filled:
+ * "Obraz" takes a file off the phone, "AI" makes one out of the card's words.
  */
 export function AddFieldSheet({ visible, onClose, onAdd }: AddFieldSheetProps) {
   const theme = useTheme();

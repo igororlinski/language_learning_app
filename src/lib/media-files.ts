@@ -73,6 +73,34 @@ export async function importMedia(
   return { fileName, name: source.name };
 }
 
+/** What the generator hands back. Declared above its only reader, on purpose. */
+const GENERATED_EXTENSION = 'jpg';
+
+/**
+ * Writes a generated picture — base64, straight out of the provider's JSON —
+ * into the app's directory for its kind, and returns the stored name.
+ *
+ * The size check happens *after* the write, which is the opposite of an
+ * imported file: nothing was picked, so there was no chance to refuse it in
+ * advance. An oversized file is deleted again rather than left on the device,
+ * so the limit still means what it says everywhere else.
+ */
+export async function saveGeneratedImage(kind: MediaKind, base64: string): Promise<string> {
+  const fileName = storedFileName(kind, `generated.${GENERATED_EXTENSION}`);
+  const file = new File(directory(kind), fileName);
+
+  file.create({ overwrite: true, intermediates: true });
+  file.write(base64, { encoding: 'base64' });
+
+  if (!withinSizeLimit(kind, file.size)) {
+    const size = file.size;
+    file.delete();
+    throw new MediaTooLargeError(kind, size);
+  }
+
+  return fileName;
+}
+
 /**
  * Copies a stored file to a new name in the same directory, for a card being
  * copied. Two cards must never share a file: deleting either one clears it and

@@ -1,7 +1,7 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
@@ -31,13 +31,21 @@ import type { FieldKind, FieldSide } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
 import {
   formatBytes,
+  isGeneratedKind,
   isMediaKind,
   MEDIA_LIMITS,
   MEDIA_NOUNS,
   MEDIA_NOUNS_GENITIVE,
   type MediaKind,
 } from '@/lib/media';
-import { deleteMedia, importMedia, MediaTooLargeError, pickMedia } from '@/lib/media-files';
+import {
+  deleteMedia,
+  importMedia,
+  MediaTooLargeError,
+  pickMedia,
+  saveGeneratedImage,
+} from '@/lib/media-files';
+import { AiImageError, generateImage } from '@/lib/ai-image';
 import { dedupeTags, tagSlug } from '@/lib/tags';
 import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
 import { draftSignature } from '@/lib/card-draft';
@@ -106,8 +114,14 @@ export default function CardEditorScreen() {
   const nextKey = useRef(0);
 
   // Copies imported in this session. Whatever the save does not keep is deleted
-  // there, so replacing a file twice does not leave two of them behind.
+  // there, so replacing a file twice does not leave two of them behind. A
+  // generated picture is a copy like any other, so an abandoned edit clears it
+  // too — which matters more here, because that one was paid for.
   const imported = useRef<{ kind: MediaKind; fileName: string }[]>([]);
+
+  // The row whose picture is being generated, if any. One at a time: the
+  // request takes seconds and the free allowance is worth spending on purpose.
+  const [generating, setGenerating] = useState<string | null>(null);
 
   const info = describeRows(rows, BASE_LABELS);
 
@@ -135,8 +149,10 @@ export default function CardEditorScreen() {
         : [...current, added];
     });
 
-    // An empty media field is useless, so the picker opens straight away.
-    if (isMediaKind(kind)) void attachMedia(key, kind);
+    // An empty media field is useless, so the picker opens straight away — but
+    // a generated one has nothing to pick: it waits for the user to say which
+    // of the card's two texts the picture should come from.
+    if (isMediaKind(kind) && !isGeneratedKind(kind)) void attachMedia(key, kind);
   };
 
   const patchRow = (key: string, value: string) =>
@@ -178,6 +194,55 @@ export default function CardEditorScreen() {
         [{ text: 'OK' }],
         { cancelable: true }
       );
+    }
+  };
+
+  /**
+   * Makes the picture for one field out of one of the card's own texts.
+   *
+   * The text is read from the **form**, not from the database: the card may
+   * never have been saved, and the word just typed is the whole point. What
+   * gets stored in the field is that same text — it is the field's label, its
+   * search material, and the record of what the picture was made from. The
+   * decoration around it (`buildPrompt`) is the same for every card and would
+   * only be noise in the database.
+   *
+   * Pressing this again on a field that already has a picture replaces it. The
+   * old file is cleared by the save, through the same rule that clears a
+   * replaced attachment — see `save`.
+   */
+  const generatePicture = async (key: string, kind: MediaKind, source: 'front' | 'back') => {
+    const term = source === 'front' ? front : back;
+
+    setGenerating(key);
+
+    try {
+      const base64 = await generateImage(term);
+      const fileName = await saveGeneratedImage(kind, base64);
+
+      imported.current = [...imported.current, { kind, fileName }];
+
+      setRows((current) =>
+        current.map((row) =>
+          row.kind === 'extra' && row.key === key
+            ? { ...row, value: term.trim(), mediaPath: fileName }
+            : row
+        )
+      );
+    } catch (error) {
+      // Thrown from a handler, where the error boundary cannot reach it, so
+      // every failure has to end up in a sentence here — on a phone this alert
+      // is the only diagnosis there is.
+      const message =
+        error instanceof MediaTooLargeError
+          ? `Obraz ma ${formatBytes(error.size)}, a limit to ${formatBytes(MEDIA_LIMITS[kind])}.`
+          : error instanceof AiImageError
+            ? error.message
+            : 'Coś poszło nie tak.';
+
+      Alert.alert('Nie zrobiono obrazu', message, [{ text: 'OK' }], { cancelable: true });
+    } finally {
+      setGenerating(null);
     }
   };
 
@@ -322,6 +387,70 @@ export default function CardEditorScreen() {
     }
 
     if (row.kind === 'boundary') return null;
+
+    if (isGeneratedKind(row.field)) {
+      const kind = row.field;
+      const busy = generating === row.key;
+
+      return (
+        <>
+          <ThemedText type="smallBold" themeColor="textSecondary">
+            {`${rowInfo.label} — ${MEDIA_NOUNS[kind]}`}
+          </ThemedText>
+          {row.mediaPath ? (
+            <MediaView kind={kind} fileName={row.mediaPath} label={row.value} />
+          ) : null}
+          <View style={styles.rowActions}>
+            {/* Which of the card's two texts the picture comes from is the whole
+                choice here, so it is the button rather than a setting. Pressing
+                one again replaces the picture. */}
+            <Pressable
+              onPress={() => void generatePicture(row.key, kind, 'front')}
+              disabled={busy || front.trim().length === 0}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: busy || front.trim().length === 0 }}
+              accessibilityLabel={`Zrób obraz z pytania: ${rowInfo.label}`}>
+              <ThemedText
+                type="small"
+                style={{ color: theme.accent, opacity: front.trim() ? 1 : 0.4 }}>
+                {row.mediaPath ? 'Znowu z pytania' : 'Z pytania'}
+              </ThemedText>
+            </Pressable>
+            <Pressable
+              onPress={() => void generatePicture(row.key, kind, 'back')}
+              disabled={busy || back.trim().length === 0}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: busy || back.trim().length === 0 }}
+              accessibilityLabel={`Zrób obraz z odpowiedzi: ${rowInfo.label}`}>
+              <ThemedText
+                type="small"
+                style={{ color: theme.accent, opacity: back.trim() ? 1 : 0.4 }}>
+                {row.mediaPath ? 'Znowu z odpowiedzi' : 'Z odpowiedzi'}
+              </ThemedText>
+            </Pressable>
+            <Pressable
+              onPress={() => removeRow(row.key)}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel={`Usuń ${rowInfo.label}`}>
+              <ThemedText type="small" style={{ color: theme.danger }}>
+                Usuń pole
+              </ThemedText>
+            </Pressable>
+          </View>
+          {busy ? (
+            <View style={styles.generating}>
+              <ActivityIndicator />
+              <ThemedText type="small" themeColor="textSecondary">
+                Robię obraz…
+              </ThemedText>
+            </View>
+          ) : null}
+        </>
+      );
+    }
 
     if (isMediaKind(row.field)) {
       const kind = row.field;
@@ -505,6 +634,11 @@ export default function CardEditorScreen() {
 }
 
 const styles = StyleSheet.create({
+  generating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
   tags: {
     flexDirection: 'row',
     flexWrap: 'wrap',
