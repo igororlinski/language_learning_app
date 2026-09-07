@@ -66,7 +66,15 @@ group('Odczyt listy z powrotem');
 
 // Question dragged below the boundary: it is on the back now.
 const moved: Row[] = [
-  { key: 'blank-0', kind: 'extra', id: null, field: 'text', value: 'obrazek', mediaPath: null },
+  {
+    key: 'blank-0',
+    kind: 'extra',
+    id: null,
+    field: 'text',
+    value: 'obrazek',
+    mediaPath: null,
+    mnemonic: null,
+  },
   { key: BOUNDARY, kind: 'boundary' },
   { key: 'base-back', kind: 'base', base: 'back' },
   { key: 'base-front', kind: 'base', base: 'front' },
@@ -83,7 +91,15 @@ check('odpowiedz zostaje na tyle, nad nim', [read.placement.backSide, read.place
   0,
 ]);
 check('pole dodatkowe zostaje z przodu', read.fields, [
-  { id: null, side: 'front', position: 0, kind: 'text', value: 'obrazek', mediaPath: null },
+  {
+    id: null,
+    side: 'front',
+    position: 0,
+    kind: 'text',
+    value: 'obrazek',
+    mediaPath: null,
+    mnemonic: null,
+  },
 ]);
 
 // What goes out has to come back in the same shape.

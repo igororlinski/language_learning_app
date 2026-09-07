@@ -44,6 +44,7 @@ check('kazdy rodzaj ma swoj katalog', MEDIA_DIRECTORIES, {
   image: 'card-images',
   video: 'card-videos',
   'ai-image': 'card-ai-images',
+  mnemonic: 'card-mnemonics',
 });
 
 // Its own directory, not the one picked pictures live in: deleting a card walks

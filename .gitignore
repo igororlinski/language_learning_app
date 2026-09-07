@@ -16,6 +16,9 @@ expo-env.d.ts
 *.key
 *.mobileprovision
 
+# Cloudflare Worker: local bundles and state from `wrangler dev`
+.wrangler/
+
 # Metro
 .metro-health-check*
 

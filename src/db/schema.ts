@@ -37,7 +37,7 @@ export const FIELD_SIDES = ['front', 'back'] as const;
  * `npm run db:generate` says "nothing to migrate". What it does need is an entry
  * in every record in `src/lib/media.ts`; `tests/media.test.ts` enforces that.
  */
-export const FIELD_KINDS = ['text', 'audio', 'image', 'video', 'ai-image'] as const;
+export const FIELD_KINDS = ['text', 'audio', 'image', 'video', 'ai-image', 'mnemonic'] as const;
 export type FieldSide = (typeof FIELD_SIDES)[number];
 export type FieldKind = (typeof FIELD_KINDS)[number];
 
@@ -176,6 +176,16 @@ export const cardFields = sqliteTable(
      * cost a migration that copies every row for no gain.
      */
     mediaPath: text('audio_path'),
+    /**
+     * A `mnemonic` field only: the sound-alike keyword and the English scene,
+     * as JSON. The sentence the learner reads is not here — it is `value`,
+     * like every other field's label and search material. What this holds is
+     * what "another picture, same association" needs and nothing else reads.
+     *
+     * Null for every other kind, and null for a mnemonic whose association is
+     * unreadable — see `src/lib/mnemonic.ts` for what that costs.
+     */
+    mnemonic: text('mnemonic'),
   },
   (table) => [index('card_fields_card_id_idx').on(table.cardId)]
 );

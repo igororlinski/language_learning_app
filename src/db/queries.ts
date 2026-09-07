@@ -340,6 +340,7 @@ export function newCardFields(deckId: number): CardFieldInput[] {
     kind: slot.kind,
     value: '',
     mediaPath: null,
+    mnemonic: null,
   }));
 }
 
@@ -885,6 +886,13 @@ export type CardFieldInput = {
   kind: FieldKind;
   value: string;
   mediaPath: string | null;
+  /**
+   * A `mnemonic` field only: its keyword and English scene, as the JSON the
+   * column holds. Carried through as raw text rather than parsed, exactly
+   * like `mediaPath` is carried as a file name — `src/lib/mnemonic.ts` reads
+   * it in the one place that needs its parts.
+   */
+  mnemonic?: string | null;
 };
 
 /**
@@ -911,6 +919,7 @@ function writeCardFields(tx: Tx, cardId: number, fields: CardFieldInput[]) {
       kind: field.kind,
       value: field.value.trim(),
       mediaPath: field.mediaPath,
+      mnemonic: field.mnemonic ?? null,
     };
 
     if (field.id === null) {
@@ -1068,6 +1077,10 @@ export function copyCards(
               isMediaKind(field.kind) && field.mediaPath
                 ? copyMedia(field.kind, field.mediaPath)
                 : null,
+            // The association travels with the copy. It cost a model call to
+            // invent, and a copy that kept the picture but forgot how to
+            // redraw it would be worse than one that kept neither.
+            mnemonic: field.mnemonic,
           })
           .run();
       }

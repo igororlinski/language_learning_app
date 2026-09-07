@@ -59,6 +59,7 @@ import { filterCards } from '@/lib/search';
 import { DEFAULT_SCHEDULING, schedulingKey } from '@/lib/fsrs-options';
 import { optimizeWeights } from '@/lib/fsrs-optimizer';
 import { languageSlug } from '@/lib/languages';
+import { parseMnemonicColumn } from '@/lib/mnemonic';
 import { filterByTags } from '@/lib/tags';
 import {
   countQueueStates,
@@ -87,6 +88,7 @@ import migration0011 from '../drizzle/0011_violet_giant_man.sql';
 import migration0012 from '../drizzle/0012_cool_swordsman.sql';
 import migration0013 from '../drizzle/0013_messy_nova.sql';
 import migration0014 from '../drizzle/0014_cultured_sphinx.sql';
+import migration0015 from '../drizzle/0015_adorable_cable.sql';
 
 for (const migration of [
   migration0000,
@@ -104,6 +106,7 @@ for (const migration of [
   migration0012,
   migration0013,
   migration0014,
+  migration0015,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -463,7 +466,7 @@ check('talia pamieta swoj domyslny uklad', newCardLayout(oddDeck.id), {
 });
 
 check('puste pole trafia na wolna strone', newCardFields(oddDeck.id), [
-  { id: null, side: 'front', position: 0, kind: 'text', value: '', mediaPath: null },
+  { id: null, side: 'front', position: 0, kind: 'text', value: '', mediaPath: null, mnemonic: null },
 ]);
 
 // A card made from that template reads exactly as the deck arranged it.
@@ -1324,3 +1327,82 @@ check('i ten z drugiej strony', knownTimes('polski'), 1);
 check('a sklejona pisownia to ta pierwsza', known.includes('Polski'), true);
 check('nie ta pozniejsza', known.includes('polski'), false);
 check('talia bez jezykow nic nie dokłada', known.includes(''), false);
+
+group('Pole ze skojarzeniem');
+
+/**
+ * The association is three pieces kept in two places: the sentence is the
+ * field's `value`, like every other field's label, and the keyword plus the
+ * English scene live in the `mnemonic` column. That split is the thing worth a
+ * test — a save that dropped the column would leave a field which still shows
+ * its picture and its sentence but can never be redrawn, and nothing on screen
+ * would say so.
+ */
+const mnemoDeck = createDeck({
+  name: 'Portugalski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  languages: { front: ['polski'], back: ['portugalski'] },
+});
+
+const association = '{"keyword":"komar","prompt":"a mosquito eating a sandwich"}';
+
+const mnemoCard = createCard(mnemoDeck.id, 'jeść', 'comer', now, [
+  {
+    id: null,
+    side: 'back',
+    position: 1,
+    kind: 'mnemonic',
+    value: 'Komar je kanapkę.',
+    mediaPath: 'komar.jpg',
+    mnemonic: association,
+  },
+]);
+
+const mnemoField = getCardFields(mnemoCard.id)[0];
+
+check('zdanie zapisuje sie jako value pola', mnemoField.value, 'Komar je kanapkę.');
+check('obraz jako plik', mnemoField.mediaPath, 'komar.jpg');
+check('slowo-klucz w swojej kolumnie', parseMnemonicColumn(mnemoField.mnemonic)?.keyword, 'komar');
+check(
+  'razem ze scena do ponownego narysowania',
+  parseMnemonicColumn(mnemoField.mnemonic)?.prompt,
+  'a mosquito eating a sandwich'
+);
+
+// Unlike every other media field, whose text is a file name kept off the card,
+// a mnemonic's sentence is the association itself — so it has to reach the
+// review screen.
+check('zdanie dociera na kartę', getCardLines(mnemoCard.id)?.back, [
+  { text: 'comer', base: true, media: null },
+  { text: 'Komar je kanapkę.', base: false, media: { kind: 'mnemonic', fileName: 'komar.jpg' } },
+]);
+
+// An association whose picture failed is still worth reading, which is why it
+// is the one media kind that survives without a file.
+saveCardFields(mnemoCard.id, [
+  {
+    id: mnemoField.id,
+    side: 'back',
+    position: 1,
+    kind: 'mnemonic',
+    value: 'Komar je kanapkę.',
+    mediaPath: null,
+    mnemonic: association,
+  },
+]);
+
+check('samo zdanie bez obrazu tez sie pokazuje', getCardLines(mnemoCard.id)?.back, [
+  { text: 'comer', base: true, media: null },
+  { text: 'Komar je kanapkę.', base: false, media: null },
+]);
+
+// The association cost a model call to invent; a copy that kept the picture but
+// forgot how to redraw it would be worse than one that kept neither.
+const mnemoCopy = copyCards([mnemoCard.id], mnemoDeck.id, fakeCopier, now)[0];
+
+check(
+  'kopia zabiera skojarzenie ze soba',
+  parseMnemonicColumn(getCardFields(mnemoCopy)[0].mnemonic)?.keyword,
+  'komar'
+);

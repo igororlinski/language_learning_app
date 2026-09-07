@@ -18,6 +18,7 @@ const field = (key: string, value: string, mediaPath: string | null = null): Row
   kind: 'extra',
   id: null,
   field: 'text',
+  mnemonic: null,
   value,
   mediaPath,
 });

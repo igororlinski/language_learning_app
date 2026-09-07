@@ -284,6 +284,7 @@ export default function DeckEditorScreen() {
       kind: 'extra',
       id: null,
       field: kind,
+      mnemonic: null,
       value: '',
       mediaPath: null,
     };

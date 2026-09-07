@@ -101,9 +101,17 @@ export type CardLine = { text: string; base: boolean; media: LineMedia | null };
  */
 export function sideLines(pieces: LayoutPiece[], side: FieldSide): CardLine[] {
   return piecesOnSide(pieces, side)
-    .filter((piece) =>
-      isMediaKind(piece.kind) ? Boolean(piece.mediaPath) : piece.value.trim().length > 0
-    )
+    .filter((piece) => {
+      // A mnemonic is the one media field whose text stands on its own: the
+      // sentence *is* the association, and an association whose picture failed
+      // is still worth reading. Every other media field is its file and nothing
+      // else, so without the file there is nothing to show.
+      if (piece.kind === 'mnemonic') {
+        return Boolean(piece.mediaPath) || piece.value.trim().length > 0;
+      }
+
+      return isMediaKind(piece.kind) ? Boolean(piece.mediaPath) : piece.value.trim().length > 0;
+    })
     .map((piece) => ({
       text: piece.value,
       base: piece.base !== null,

@@ -3,6 +3,7 @@ import { Modal, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/button';
+import { OptionPicker, type PickerOption } from '@/components/option-picker';
 import { SegmentedControl, type Segment } from '@/components/segmented-control';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
@@ -14,13 +15,30 @@ const SIDES: Segment<FieldSide>[] = [
   { value: 'back', label: 'Tył' },
 ];
 
-const KINDS: Segment<FieldKind>[] = [
+/**
+ * A list rather than a row of segments.
+ *
+ * Five kinds already had to be squeezed — the generated picture was labelled
+ * just "AI" to fit across a phone — and the sixth ends that. A stacked picker
+ * costs one line per kind and gives back the room to name each one properly,
+ * and to say what the two generated kinds actually do, which is the one thing
+ * here nobody can guess from a word.
+ */
+const KINDS: PickerOption<FieldKind>[] = [
   { value: 'text', label: 'Tekst' },
   { value: 'audio', label: 'Dźwięk' },
   { value: 'image', label: 'Obraz' },
   { value: 'video', label: 'Wideo' },
-  // Shortened to fit five segments across a phone; the spoken name stays whole.
-  { value: 'ai-image', label: 'AI', accessibilityLabel: 'Obraz AI' },
+  {
+    value: 'ai-image',
+    label: 'Obraz AI',
+    hint: 'Rysowany z pytania albo z odpowiedzi.',
+  },
+  {
+    value: 'mnemonic',
+    label: 'Skojarzenie',
+    hint: 'Słowo o podobnym brzmieniu do odpowiedzi i obrazek, który łączy je ze znaczeniem.',
+  },
 ];
 
 export type AddFieldSheetProps = {
@@ -34,7 +52,8 @@ export type AddFieldSheetProps = {
  * what it holds. The kind is decided here and never again — a field is a text
  * box or a slot for one kind of file for its whole life, so the editors never
  * have to make sense of a half-converted one. That includes how it gets filled:
- * "Obraz" takes a file off the phone, "AI" makes one out of the card's words.
+ * "Obraz" takes a file off the phone, "Obraz AI" makes one out of one of the
+ * card's texts, and "Skojarzenie" makes one out of both at once.
  */
 export function AddFieldSheet({ visible, onClose, onAdd }: AddFieldSheetProps) {
   const theme = useTheme();
@@ -82,17 +101,12 @@ export function AddFieldSheet({ visible, onClose, onAdd }: AddFieldSheetProps) {
             />
           </View>
 
-          <View style={styles.choice}>
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              Rodzaj pola
-            </ThemedText>
-            <SegmentedControl
-              value={kind}
-              options={KINDS}
-              onChange={setKind}
-              accessibilityLabel="Rodzaj nowego pola"
-            />
-          </View>
+          <OptionPicker
+            label="Rodzaj pola"
+            value={kind}
+            options={KINDS}
+            onChange={setKind}
+          />
 
           <Button title="Dodaj pole" onPress={add} />
           <Button title="Anuluj" variant="ghost" onPress={onClose} />

@@ -26,12 +26,22 @@ export function CardFaces({ frontLines, backLines, revealed, compact = false }: 
 
   const renderLine = (prefix: string, item: CardLine, index: number) => {
     if (item.media) {
+      const view = <MediaView kind={item.media.kind} fileName={item.media.fileName} />;
+
+      // Every other media field keeps its label off the card — the field is the
+      // sound or the picture, not the name of a file. A mnemonic is the
+      // exception, and not a small one: its text is the association itself, the
+      // half that does the remembering. A picture of a mosquito eating means
+      // nothing without "Komar je" underneath it.
+      if (item.media.kind !== 'mnemonic' || !item.text.trim()) {
+        return <View key={`${prefix}-${index}`}>{view}</View>;
+      }
+
       return (
-        <MediaView
-          key={`${prefix}-${index}`}
-          kind={item.media.kind}
-          fileName={item.media.fileName}
-        />
+        <View key={`${prefix}-${index}`} style={styles.mnemonic}>
+          {view}
+          <ThemedText style={compact ? styles.valueCompact : styles.value}>{item.text}</ThemedText>
+        </View>
       );
     }
 
@@ -103,6 +113,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     textAlign: 'center',
+  },
+  /** Picture and sentence read as one thing, so they sit closer than two lines. */
+  mnemonic: {
+    gap: Spacing.two,
+    alignSelf: 'stretch',
   },
   divider: {
     borderTopWidth: StyleSheet.hairlineWidth,

@@ -20,6 +20,7 @@ import {
   createCard,
   deleteCard,
   getCard,
+  deckLanguages,
   getCardFields,
   getCardTagNames,
   newCardFields,
@@ -45,7 +46,10 @@ import {
   pickMedia,
   saveGeneratedImage,
 } from '@/lib/media-files';
-import { AiImageError, generateImage } from '@/lib/ai-image';
+import { AiError } from '@/lib/ai-worker';
+import { generateImage, generatePicture as pictureFromScene } from '@/lib/ai-image';
+import { requestMnemonic } from '@/lib/ai-mnemonic';
+import { buildScenePrompt, mnemonicJson, parseMnemonicColumn } from '@/lib/mnemonic';
 import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
 import { draftSignature } from '@/lib/card-draft';
@@ -121,7 +125,15 @@ export default function CardEditorScreen() {
 
   // The row whose picture is being generated, if any. One at a time: the
   // request takes seconds and the free allowance is worth spending on purpose.
-  const [generating, setGenerating] = useState<string | null>(null);
+  const [generating, setGenerating] = useState<{ key: string; label: string } | null>(null);
+
+  /**
+   * What this deck says its questions and answers are written in. Read once:
+   * it is what makes a sound-alike possible at all — the keyword has to be a
+   * word in the language the learner already speaks, and no model can tell
+   * which that is by looking at two words.
+   */
+  const languages = useMemo(() => deckLanguages(deckId), [deckId]);
 
   const info = describeRows(rows, BASE_LABELS);
 
@@ -138,7 +150,15 @@ export default function CardEditorScreen() {
   const addField = ({ side, kind }: { side: FieldSide; kind: FieldKind }) => {
     nextKey.current += 1;
     const key = `new-${nextKey.current}`;
-    const added: Row = { key, kind: 'extra', id: null, field: kind, value: '', mediaPath: null };
+    const added: Row = {
+      key,
+      kind: 'extra',
+      id: null,
+      field: kind,
+      value: '',
+      mediaPath: null,
+      mnemonic: null,
+    };
 
     setRows((current) => {
       // A front field goes just above the boundary, a back one to the very end
@@ -214,7 +234,7 @@ export default function CardEditorScreen() {
   const generatePicture = async (key: string, kind: MediaKind, source: 'front' | 'back') => {
     const term = source === 'front' ? front : back;
 
-    setGenerating(key);
+    setGenerating({ key, label: 'Robię obraz…' });
 
     try {
       const base64 = await generateImage(term);
@@ -236,11 +256,89 @@ export default function CardEditorScreen() {
       const message =
         error instanceof MediaTooLargeError
           ? `Obraz ma ${formatBytes(error.size)}, a limit to ${formatBytes(MEDIA_LIMITS[kind])}.`
-          : error instanceof AiImageError
+          : error instanceof AiError
             ? error.message
             : 'Coś poszło nie tak.';
 
       Alert.alert('Nie zrobiono obrazu', message, [{ text: 'OK' }], { cancelable: true });
+    } finally {
+      setGenerating(null);
+    }
+  };
+
+  /**
+   * The keyword method, end to end.
+   *
+   * The answer is the word being learned and the question is what it means,
+   * so a language model is asked for a word in the **question's** language
+   * that *sounds* like the answer, plus a scene putting that thing together
+   * with the meaning. Portuguese `comer` sounds like Polish `komar`; a
+   * mosquito eating is the picture, and "Komar je" is the sentence that
+   * survives in the learner's head.
+   *
+   * Both texts come from the **form**, not the database: the card may never
+   * have been saved, and the words just typed are the whole point.
+   *
+   * `mode` is the difference between the two reroll buttons. "picture" keeps
+   * the association and draws it again — the model call is the expensive,
+   * slow half, and a good association with a poor drawing is worth redrawing
+   * rather than throwing away. "all" starts over.
+   */
+  const makeMnemonic = async (key: string, mode: 'all' | 'picture') => {
+    const kind = 'mnemonic' as const;
+    const row = rows.find((item) => item.kind === 'extra' && item.key === key);
+    const stored = row?.kind === 'extra' ? parseMnemonicColumn(row.mnemonic) : null;
+
+    try {
+      // Redrawing needs the English scene the model wrote. Without it there
+      // is nothing to redraw, so the whole association is made again — which
+      // is also what a field restored from an unreadable row falls back to.
+      const association =
+        mode === 'picture' && stored
+          ? { ...stored, sentence: row?.kind === 'extra' ? row.value : '' }
+          : await (async () => {
+              setGenerating({ key, label: 'Szukam skojarzenia…' });
+
+              return requestMnemonic({
+                term: back,
+                termLanguages: languages.back,
+                meaning: front,
+                meaningLanguages: languages.front,
+              });
+            })();
+
+      setGenerating({ key, label: 'Rysuję skojarzenie…' });
+
+      const base64 = await pictureFromScene(buildScenePrompt(association.prompt));
+      const fileName = await saveGeneratedImage(kind, base64);
+
+      imported.current = [...imported.current, { kind, fileName }];
+
+      setRows((current) =>
+        current.map((item) =>
+          item.kind === 'extra' && item.key === key
+            ? {
+                ...item,
+                // The sentence is the field's value, like every other
+                // field's label and search material — it is what the learner
+                // reads, on the card and in the list.
+                value: association.sentence,
+                mediaPath: fileName,
+                mnemonic: mnemonicJson(association),
+              }
+            : item
+        )
+      );
+    } catch (error) {
+      // Thrown from a handler, where the error boundary cannot reach it.
+      const message =
+        error instanceof MediaTooLargeError
+          ? `Obraz ma ${formatBytes(error.size)}, a limit to ${formatBytes(MEDIA_LIMITS[kind])}.`
+          : error instanceof AiError
+            ? error.message
+            : 'Coś poszło nie tak.';
+
+      Alert.alert('Nie zrobiono skojarzenia', message, [{ text: 'OK' }], { cancelable: true });
     } finally {
       setGenerating(null);
     }
@@ -388,9 +486,81 @@ export default function CardEditorScreen() {
 
     if (row.kind === 'boundary') return null;
 
+    if (row.field === 'mnemonic') {
+      const busy = generating?.key === row.key;
+      const ready = front.trim().length > 0 && back.trim().length > 0;
+      const made = Boolean(row.value.trim() || row.mediaPath);
+      const redrawable = parseMnemonicColumn(row.mnemonic) !== null;
+
+      return (
+        <>
+          <ThemedText type="smallBold" themeColor="textSecondary">
+            {`${rowInfo.label} — ${MEDIA_NOUNS.mnemonic}`}
+          </ThemedText>
+
+          {row.mediaPath ? <MediaView kind="mnemonic" fileName={row.mediaPath} /> : null}
+
+          {/* The sentence is the association. It shows here as it will show
+              on the card, because judging it is the whole point of the two
+              reroll buttons underneath. */}
+          {row.value.trim() ? <ThemedText>{row.value}</ThemedText> : null}
+
+          <View style={styles.rowActions}>
+            <Pressable
+              onPress={() => void makeMnemonic(row.key, 'all')}
+              disabled={busy || !ready}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: busy || !ready }}
+              accessibilityLabel={`${made ? 'Inne skojarzenie' : 'Zrób skojarzenie'}: ${rowInfo.label}`}>
+              <ThemedText type="small" style={{ color: theme.accent, opacity: ready ? 1 : 0.4 }}>
+                {made ? 'Inne skojarzenie' : 'Zrób skojarzenie'}
+              </ThemedText>
+            </Pressable>
+
+            {/* Only once there is an association to keep. Redrawing skips the
+                model call, so a good idea badly drawn costs one picture to
+                fix instead of being replaced by a different idea. */}
+            {redrawable ? (
+              <Pressable
+                onPress={() => void makeMnemonic(row.key, 'picture')}
+                disabled={busy}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: busy }}
+                accessibilityLabel={`Inny obraz do tego skojarzenia: ${rowInfo.label}`}>
+                <ThemedText type="small" style={{ color: theme.accent }}>
+                  Inny obraz
+                </ThemedText>
+              </Pressable>
+            ) : null}
+
+            <Pressable
+              onPress={() => removeRow(row.key)}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel={`Usuń ${rowInfo.label}`}>
+              <ThemedText type="small" style={{ color: theme.danger }}>
+                Usuń pole
+              </ThemedText>
+            </Pressable>
+          </View>
+
+          {busy && generating ? (
+            <View style={styles.generating}>
+              <ActivityIndicator />
+              <ThemedText type="small" themeColor="textSecondary">
+                {generating.label}
+              </ThemedText>
+            </View>
+          ) : null}
+        </>
+      );
+    }
+
     if (isGeneratedKind(row.field)) {
       const kind = row.field;
-      const busy = generating === row.key;
+      const busy = generating?.key === row.key;
 
       return (
         <>
@@ -444,7 +614,7 @@ export default function CardEditorScreen() {
             <View style={styles.generating}>
               <ActivityIndicator />
               <ThemedText type="small" themeColor="textSecondary">
-                Robię obraz…
+                {generating.label}
               </ThemedText>
             </View>
           ) : null}
