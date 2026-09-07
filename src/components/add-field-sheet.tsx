@@ -88,11 +88,16 @@ export type AddFieldSheetProps = {
  * "Obraz" takes a file off the phone, "Skojarzenie" writes its own text and
  * draws its own picture out of the card's two texts at once.
  *
- * Picking the association asks one more question on the spot, because it is
- * the question that decides what the field will cost: a picture is three
- * drawings to choose from and the sentence alone is free. Asked here rather
- * than left to the gear in the field, so that the answer exists before the
- * first press of "Zrób skojarzenie" rather than after it.
+ * Picking the association asks two more questions, on a second step of the
+ * same sheet: what it is made of, and how much of it the card carries. They
+ * come after "Dodaj pole" rather than under the list of kinds because they are
+ * not part of choosing a kind — they are the first two decisions about a field
+ * that already exists, and a sheet that grows by four rows the moment one of
+ * six options is touched is a sheet nobody can predict the size of.
+ *
+ * The step swaps the sheet's contents rather than opening a second Modal:
+ * replacing one Modal with another in the same frame drops the animation on
+ * Android, which is the same reason `ActionSheet` grew its `keepOpen`.
  */
 export function AddFieldSheet({ visible, onClose, onAdd, askMode = true }: AddFieldSheetProps) {
   const theme = useTheme();
@@ -103,8 +108,22 @@ export function AddFieldSheet({ visible, onClose, onAdd, askMode = true }: AddFi
   const [mode, setMode] = useState<'picture' | 'text'>('picture');
   const [text, setText] = useState<'sentence' | 'word'>('sentence');
 
-  const add = () => {
+  /** Which half of the sheet is showing: the field, or the association's own two questions. */
+  const [asking, setAsking] = useState(false);
+
+  const close = () => {
+    setAsking(false);
     onClose();
+  };
+
+  const add = () => {
+    // The association is the one kind with anything left to decide.
+    if (askMode && kind === 'mnemonic' && !asking) {
+      setAsking(true);
+      return;
+    }
+
+    close();
     onAdd({ side, kind, withPicture: mode === 'picture', asWord: text === 'word' });
   };
 
@@ -114,8 +133,8 @@ export function AddFieldSheet({ visible, onClose, onAdd, askMode = true }: AddFi
       transparent
       animationType="fade"
       statusBarTranslucent
-      onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
+      onRequestClose={close}>
+      <Pressable style={styles.backdrop} onPress={close}>
         {/* Swallows taps so they do not reach the backdrop behind the sheet. */}
         <Pressable
           onPress={() => {}}
@@ -128,23 +147,9 @@ export function AddFieldSheet({ visible, onClose, onAdd, askMode = true }: AddFi
           ]}>
           <View style={[styles.grabber, { backgroundColor: theme.border }]} />
 
-          <ThemedText style={styles.title}>Nowe pole</ThemedText>
+          <ThemedText style={styles.title}>{asking ? 'Skojarzenie' : 'Nowe pole'}</ThemedText>
 
-          <View style={styles.choice}>
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              Strona karty
-            </ThemedText>
-            <SegmentedControl
-              value={side}
-              options={SIDES}
-              onChange={setSide}
-              accessibilityLabel="Strona nowego pola"
-            />
-          </View>
-
-          <OptionPicker label="Rodzaj pola" value={kind} options={KINDS} onChange={setKind} />
-
-          {askMode && kind === 'mnemonic' ? (
+          {asking ? (
             <>
               <OptionPicker
                 label="Co ma powstać"
@@ -158,11 +163,30 @@ export function AddFieldSheet({ visible, onClose, onAdd, askMode = true }: AddFi
                 options={MNEMONIC_TEXTS}
                 onChange={setText}
               />
-            </>
-          ) : null}
 
-          <Button title="Dodaj pole" onPress={add} />
-          <Button title="Anuluj" variant="ghost" onPress={onClose} />
+              <Button title="Dodaj pole" onPress={add} />
+              <Button title="Wstecz" variant="ghost" onPress={() => setAsking(false)} />
+            </>
+          ) : (
+            <>
+              <View style={styles.choice}>
+                <ThemedText type="smallBold" themeColor="textSecondary">
+                  Strona karty
+                </ThemedText>
+                <SegmentedControl
+                  value={side}
+                  options={SIDES}
+                  onChange={setSide}
+                  accessibilityLabel="Strona nowego pola"
+                />
+              </View>
+
+              <OptionPicker label="Rodzaj pola" value={kind} options={KINDS} onChange={setKind} />
+
+              <Button title={askMode && kind === 'mnemonic' ? 'Dalej' : 'Dodaj pole'} onPress={add} />
+              <Button title="Anuluj" variant="ghost" onPress={close} />
+            </>
+          )}
         </Pressable>
       </Pressable>
     </Modal>

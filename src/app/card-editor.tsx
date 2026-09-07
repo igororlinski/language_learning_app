@@ -779,6 +779,12 @@ export default function CardEditorScreen() {
       const ready = front.trim().length > 0 && back.trim().length > 0;
       const made = Boolean(row.value.trim() || row.mediaPath);
 
+      // A run is under way whether the model is working or the user is picking
+      // from what it sent. The row sits behind the choice sheet the whole time,
+      // and an invitation to start over showing through it — for the very run
+      // being decided — reads as if nothing had happened yet.
+      const running = busy || choosing?.key === row.key;
+
       return (
         <>
           <ThemedText type="smallBold" themeColor="textSecondary">
@@ -836,9 +842,10 @@ export default function CardEditorScreen() {
               <ThemedText style={[styles.gearGlyph, { color: theme.accent }]}>⚙</ThemedText>
             </Pressable>
 
-            {/* Only until there is one. Afterwards making another is one of
-                the options, not the thing the field is for. */}
-            {made ? null : (
+            {/* Only until there is one, and never during a run. Afterwards
+                making another is one of the options, not the thing the field
+                is for. */}
+            {made || running ? null : (
               <Pressable
                 onPress={() => void proposeMnemonic(row.key)}
                 disabled={busy || !ready}
