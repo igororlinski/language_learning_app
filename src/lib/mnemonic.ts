@@ -46,28 +46,16 @@ const clean = (value: unknown, max: number): string =>
   typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').slice(0, max) : '';
 
 /**
- * The first complete JSON object in the text, or null when there is none.
- *
- * Cutting from the first brace to the last one looks equivalent and is not. A
- * model asked for one object sometimes answers with several, back to back,
- * until it runs out of tokens — seen 2026-09-07, ten of them for a single word,
- * the best answer of the batch among them. The wide cut hands `JSON.parse` that
- * whole pile, it throws, and a usable first answer is thrown away with the
- * rest. Counting braces keeps the first answer and ignores whatever follows,
- * while still forgiving a code fence or a sentence of throat-clearing in front.
+ * Where the object that starts at `from` closes, or -1 when it never does.
  *
  * Braces inside strings are skipped, so a sentence is free to contain one.
  */
-const firstObject = (raw: string): string | null => {
-  const start = raw.indexOf('{');
-
-  if (start < 0) return null;
-
+const closingBrace = (raw: string, from: number): number => {
   let depth = 0;
   let inString = false;
   let escaped = false;
 
-  for (let at = start; at < raw.length; at += 1) {
+  for (let at = from; at < raw.length; at += 1) {
     const character = raw[at];
 
     if (escaped) {
@@ -82,33 +70,47 @@ const firstObject = (raw: string): string | null => {
     } else if (character === '}') {
       depth -= 1;
 
-      if (depth === 0) return raw.slice(start, at + 1);
+      if (depth === 0) return at;
     }
   }
 
-  return null;
+  return -1;
 };
 
 /**
- * The association out of whatever the language model actually said.
+ * Every complete JSON object in the text, in order, up to `wanted`.
  *
- * Deliberately forgiving about the wrapping and strict about the contents. A
- * model told to answer with JSON will sooner or later answer with JSON inside a
- * code fence, with a sentence of throat-clearing in front of it, or with ten
- * objects where one was asked for — so the first complete object is cut out and
- * the rest ignored. What is not forgiven is a missing piece: a field without a
- * keyword or without a scene cannot be shown or drawn, and must fail here
- * rather than reach a screen as `undefined`.
+ * Counting braces rather than cutting from the first brace to the last is what
+ * makes this work on everything a model actually sends: a bare array of three,
+ * three objects back to back, any of it wrapped in a code fence or trailed by a
+ * sentence of commentary. The array's own brackets need no special handling —
+ * the objects inside are found either way.
  *
- * Unknown fields are ignored on purpose. The prompt asks the model to write out
- * how the foreign word sounds before it picks a keyword, and that working-out
- * arrives as an extra field which nothing here needs to know about.
+ * An object that never closes ends the scan: the model ran out of tokens
+ * mid-answer, and everything after that point is a guess.
  */
-export function parseMnemonicText(raw: string): Mnemonic | null {
-  const source = firstObject(raw);
+const objectsIn = (raw: string, wanted: number): string[] => {
+  const found: string[] = [];
+  let at = 0;
 
-  if (!source) return null;
+  while (found.length < wanted) {
+    const start = raw.indexOf('{', at);
 
+    if (start < 0) break;
+
+    const end = closingBrace(raw, start);
+
+    if (end < 0) break;
+
+    found.push(raw.slice(start, end + 1));
+    at = end + 1;
+  }
+
+  return found;
+};
+
+/** One association out of one JSON object, or null when a piece is missing. */
+const oneFrom = (source: string): Mnemonic | null => {
   let parsed: unknown;
 
   try {
@@ -132,6 +134,32 @@ export function parseMnemonicText(raw: string): Mnemonic | null {
   if (!mnemonic.keyword || !mnemonic.sentence || !mnemonic.prompt) return null;
 
   return mnemonic;
+};
+
+/**
+ * The associations out of whatever the language model actually said.
+ *
+ * Deliberately forgiving about the wrapping and strict about the contents. The
+ * model is asked for three so that the user picks rather than takes what they
+ * are given — but fewer is not a failure worth throwing away: two good options
+ * beat an error message, and one is what the whole feature used to be.
+ *
+ * Unknown fields are ignored on purpose. The prompt asks the model to write out
+ * how the foreign word sounds before it picks a keyword, and that working-out
+ * arrives as a field nothing here needs.
+ */
+export function parseMnemonicList(raw: string, wanted = 3): Mnemonic[] {
+  // Scanned wider than asked for: a malformed object in the middle should cost
+  // its own slot, not the ones after it.
+  return objectsIn(raw, wanted + 3)
+    .map(oneFrom)
+    .filter((mnemonic): mnemonic is Mnemonic => mnemonic !== null)
+    .slice(0, wanted);
+}
+
+/** The single best association, for callers that want one. */
+export function parseMnemonicText(raw: string): Mnemonic | null {
+  return parseMnemonicList(raw, 1)[0] ?? null;
 }
 
 /**

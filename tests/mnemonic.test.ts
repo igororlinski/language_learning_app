@@ -5,11 +5,12 @@
  * rewritten by a redeploy. What is pinned down here is everything that has to
  * hold no matter which model is behind it or how it decides to wrap its JSON.
  */
-import { requestMnemonic } from '@/lib/ai-mnemonic';
+import { requestMnemonics } from '@/lib/ai-mnemonic';
 import {
   buildScenePrompt,
   mnemonicJson,
   parseMnemonicColumn,
+  parseMnemonicList,
   parseMnemonicText,
 } from '@/lib/mnemonic';
 
@@ -71,6 +72,42 @@ check(
   'Komar je { kanapkę.'
 );
 
+group('Trzy propozycje do wyboru');
+
+const three =
+  '[' +
+  '{"keyword":"komar","sentence":"Komar je kanapkę.","prompt":"a mosquito eating"},' +
+  '{"keyword":"komin","sentence":"Komin je węgiel.","prompt":"a chimney"},' +
+  '{"keyword":"komoda","sentence":"Komoda je talerze.","prompt":"a chest of drawers"}' +
+  ']';
+
+check('tablica trzech daje trzy', parseMnemonicList(three).length, 3);
+check('w kolejności modelu', parseMnemonicList(three)[0]?.keyword, 'komar');
+check('do ostatniej', parseMnemonicList(three)[2]?.keyword, 'komoda');
+
+// The fallback path has no schema holding it to an array, so three objects
+// back to back have to read the same as three inside brackets.
+const looseThree = [good, second, '{"keyword":"kosa","sentence":"Kosa tnie ser.","prompt":"a scythe"}'].join('\n');
+
+check('trzy obiekty bez tablicy tez', parseMnemonicList(looseThree).length, 3);
+check('i w tej samej kolejności', parseMnemonicList(looseThree)[1]?.keyword, 'koza');
+
+// Fewer than three is not a failure worth throwing away: two good options
+// still beat an error message.
+check('dwa to nadal odpowiedź', parseMnemonicList(`${good}\n${second}`).length, 2);
+check('jeden też', parseMnemonicList(good).length, 1);
+check('zero, gdy nie ma czego czytać', parseMnemonicList('nie wiem').length, 0);
+
+// A broken object in the middle costs its own slot, not the ones after it.
+check(
+  'zepsuty w środku nie zabiera reszty',
+  parseMnemonicList(`${good}\n{"keyword":"bez zdania"}\n${second}`).length,
+  2
+);
+
+check('więcej niż proszono nie wraca', parseMnemonicList(Array(9).fill(second).join('\n')).length, 3);
+check('a limit da się zawęzić', parseMnemonicList(three, 2).length, 2);
+
 /** What `parseMnemonicText` gives back when the answer is not usable. */
 const refused = (label: string, raw: string) => check(label, parseMnemonicText(raw), null);
 
@@ -122,7 +159,7 @@ group('Zadanie o skojarzenie');
 const asked = await withStub(
   { status: 200, body: { success: true, result: { text: good } } },
   () =>
-    requestMnemonic(
+    requestMnemonics(
       {
         term: 'comer',
         termLanguages: ['portugalski'],
@@ -130,7 +167,7 @@ const asked = await withStub(
         meaningLanguages: ['polski'],
       },
       'https://w.example.dev'
-    ).then((mnemonic) => mnemonic.keyword)
+    ).then((mnemonics) => mnemonics[0]?.keyword)
 );
 
 check('idzie na wlasna sciezke', asked.sent?.url, 'https://w.example.dev/mnemonic');
@@ -159,7 +196,7 @@ async function refusalOf(call: () => Promise<unknown>) {
 check(
   'bez slowa nie pyta',
   await refusalOf(() =>
-    requestMnemonic(
+    requestMnemonics(
       { term: '  ', termLanguages: [], meaning: 'jeść', meaningLanguages: [] },
       'https://w.example.dev'
     )
@@ -169,7 +206,7 @@ check(
 check(
   'bez znaczenia tez nie',
   await refusalOf(() =>
-    requestMnemonic(
+    requestMnemonics(
       { term: 'comer', termLanguages: [], meaning: '   ', meaningLanguages: [] },
       'https://w.example.dev'
     )
@@ -183,7 +220,7 @@ check(
   'odpowiedz nie bedaca skojarzeniem to blad',
   (
     await withStub({ status: 200, body: { success: true, result: { text: 'nie umiem' } } }, () =>
-      requestMnemonic(
+      requestMnemonics(
         { term: 'comer', termLanguages: [], meaning: 'jeść', meaningLanguages: [] },
         'https://w.example.dev'
       )

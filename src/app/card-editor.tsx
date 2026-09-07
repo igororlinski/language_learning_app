@@ -5,7 +5,9 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, TextInput, View } from
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
+import { ActionSheet } from '@/components/action-sheet';
 import { AddFieldSheet } from '@/components/add-field-sheet';
+import { ChoiceSheet } from '@/components/choice-sheet';
 import { NameSheet } from '@/components/name-sheet';
 import { CardFaces } from '@/components/card-faces';
 import { MediaView } from '@/components/media-view';
@@ -48,8 +50,13 @@ import {
 } from '@/lib/media-files';
 import { AiError } from '@/lib/ai-worker';
 import { generateImage, generatePicture as pictureFromScene } from '@/lib/ai-image';
-import { requestMnemonic } from '@/lib/ai-mnemonic';
-import { buildScenePrompt, mnemonicJson, parseMnemonicColumn } from '@/lib/mnemonic';
+import { requestMnemonics } from '@/lib/ai-mnemonic';
+import {
+  buildScenePrompt,
+  mnemonicJson,
+  parseMnemonicColumn,
+  type Mnemonic,
+} from '@/lib/mnemonic';
 import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
 import { draftSignature } from '@/lib/card-draft';
@@ -61,6 +68,17 @@ import {
   type Row,
   type RowInfo,
 } from '@/lib/field-rows';
+
+/**
+ * What the choice sheet is showing, when it is showing anything.
+ *
+ * The two steps are one flow but not one state: between them the files do
+ * not exist yet, and after them three of them do and two have to go. Keeping
+ * them apart is what makes "dismiss" mean the same thing in both places.
+ */
+type Choosing =
+  | { step: 'association'; key: string; options: Mnemonic[] }
+  | { step: 'picture'; key: string; association: Mnemonic; files: string[] };
 
 const BASE_LABELS: Record<BaseKind, string> = {
   front: 'Pytanie',
@@ -126,6 +144,23 @@ export default function CardEditorScreen() {
   // The row whose picture is being generated, if any. One at a time: the
   // request takes seconds and the free allowance is worth spending on purpose.
   const [generating, setGenerating] = useState<{ key: string; label: string } | null>(null);
+
+  const [choosing, setChoosing] = useState<Choosing | null>(null);
+
+  /**
+   * Which mnemonic fields draw a picture, by row key. Absent means yes: the
+   * picture is what most people come here for, and the field that only holds
+   * a sentence is the deliberate exception. It lives in the screen rather
+   * than in the row because it decides how the next association is *made*,
+   * not what the field currently holds — a field with a picture already in
+   * it says so by having one.
+   */
+  const [pictureMode, setPictureMode] = useState<Record<string, boolean>>({});
+
+  /** The row whose options sheet is open. */
+  const [optionsFor, setOptionsFor] = useState<string | null>(null);
+
+  const withPicture = (key: string) => pictureMode[key] ?? true;
 
   /**
    * What this deck says its questions and answers are written in. Read once:
@@ -279,69 +314,143 @@ export default function CardEditorScreen() {
    * Both texts come from the **form**, not the database: the card may never
    * have been saved, and the words just typed are the whole point.
    *
-   * `mode` is the difference between the two reroll buttons. "picture" keeps
-   * the association and draws it again — the model call is the expensive,
-   * slow half, and a good association with a poor drawing is worth redrawing
-   * rather than throwing away. "all" starts over.
+   * It runs as a choice, not as a result. The model is asked for three
+   * associations and the user takes one; if the field is set to carry a
+   * picture, that one is then drawn three times and the user takes one of
+   * those too. Two rounds of picking rather than one because they fail
+   * differently: a weak association is a different problem from a good
+   * association drawn badly, and merging them into a single "try again" is
+   * what made the old two reroll buttons necessary in the first place.
    */
-  const makeMnemonic = async (key: string, mode: 'all' | 'picture') => {
-    const kind = 'mnemonic' as const;
-    const row = rows.find((item) => item.kind === 'extra' && item.key === key);
-    const stored = row?.kind === 'extra' ? parseMnemonicColumn(row.mnemonic) : null;
-
+  const proposeMnemonic = async (key: string) => {
     try {
-      // Redrawing needs the English scene the model wrote. Without it there
-      // is nothing to redraw, so the whole association is made again — which
-      // is also what a field restored from an unreadable row falls back to.
-      const association =
-        mode === 'picture' && stored
-          ? { ...stored, sentence: row?.kind === 'extra' ? row.value : '' }
-          : await (async () => {
-              setGenerating({ key, label: 'Szukam skojarzenia…' });
+      setGenerating({ key, label: 'Szukam skojarzeń…' });
 
-              return requestMnemonic({
-                term: back,
-                termLanguages: languages.back,
-                meaning: front,
-                meaningLanguages: languages.front,
-              });
-            })();
+      const options = await requestMnemonics({
+        term: back,
+        termLanguages: languages.back,
+        meaning: front,
+        meaningLanguages: languages.front,
+      });
 
-      setGenerating({ key, label: 'Rysuję skojarzenie…' });
-
-      const base64 = await pictureFromScene(buildScenePrompt(association.prompt));
-      const fileName = await saveGeneratedImage(kind, base64);
-
-      imported.current = [...imported.current, { kind, fileName }];
-
-      setRows((current) =>
-        current.map((item) =>
-          item.kind === 'extra' && item.key === key
-            ? {
-                ...item,
-                // The sentence is the field's value, like every other
-                // field's label and search material — it is what the learner
-                // reads, on the card and in the list.
-                value: association.sentence,
-                mediaPath: fileName,
-                mnemonic: mnemonicJson(association),
-              }
-            : item
-        )
-      );
+      setChoosing({ step: 'association', key, options });
     } catch (error) {
-      // Thrown from a handler, where the error boundary cannot reach it.
-      const message =
-        error instanceof MediaTooLargeError
-          ? `Obraz ma ${formatBytes(error.size)}, a limit to ${formatBytes(MEDIA_LIMITS[kind])}.`
-          : error instanceof AiError
-            ? error.message
-            : 'Coś poszło nie tak.';
-
-      Alert.alert('Nie zrobiono skojarzenia', message, [{ text: 'OK' }], { cancelable: true });
+      failedMnemonic(error);
     } finally {
       setGenerating(null);
     }
+  };
+
+  /**
+   * Three drawings of one association, saved and ready to be compared.
+   *
+   * They are drawn in parallel because they are independent and the wait is
+   * otherwise three times as long. All three land on disk before any is
+   * chosen — the two that lose are deleted the moment one wins, and deleted
+   * just the same when the sheet is dismissed, so a discarded round leaves
+   * nothing behind.
+   */
+  const drawMnemonic = async (key: string, association: Mnemonic) => {
+    const kind = 'mnemonic' as const;
+
+    try {
+      setGenerating({ key, label: 'Rysuję trzy obrazy…' });
+
+      const drawn = await Promise.all(
+        [0, 1, 2].map(async () => {
+          const base64 = await pictureFromScene(buildScenePrompt(association.prompt));
+          return saveGeneratedImage(kind, base64);
+        })
+      );
+
+      imported.current = [...imported.current, ...drawn.map((fileName) => ({ kind, fileName }))];
+
+      setChoosing({ step: 'picture', key, association, files: drawn });
+    } catch (error) {
+      failedMnemonic(error);
+    } finally {
+      setGenerating(null);
+    }
+  };
+
+  /** Writes a finished association into its row. */
+  const applyMnemonic = (key: string, association: Mnemonic, fileName: string | null) => {
+    setRows((current) =>
+      current.map((item) =>
+        item.kind === 'extra' && item.key === key
+          ? {
+              ...item,
+              // The sentence is the field's value, like every other field's
+              // label and search material — it is what the learner reads, on
+              // the card and in the list.
+              value: association.sentence,
+              mediaPath: fileName,
+              mnemonic: mnemonicJson(association),
+            }
+          : item
+      )
+    );
+  };
+
+  /** Throws away drawings nobody picked, on disk and in the undo list. */
+  const discardDrawings = (files: string[]) => {
+    if (files.length === 0) return;
+
+    deleteMedia(files.map((fileName) => ({ kind: 'mnemonic' as const, fileName })));
+    imported.current = imported.current.filter((entry) => !files.includes(entry.fileName));
+  };
+
+  const pickAssociation = (index: number) => {
+    if (choosing?.step !== 'association') return;
+
+    const { key, options } = choosing;
+    const association = options[index];
+
+    if (!association) return;
+
+    setChoosing(null);
+
+    // A field set to "same associations only" is finished here: the sentence
+    // is the whole field, and `mnemonic` is the one kind that shows without a
+    // file precisely because its text is worth reading on its own.
+    if (withPicture(key)) void drawMnemonic(key, association);
+    else applyMnemonic(key, association, null);
+  };
+
+  const pickDrawing = (index: number) => {
+    if (choosing?.step !== 'picture') return;
+
+    const { key, association, files } = choosing;
+    const kept = files[index];
+
+    if (!kept) return;
+
+    setChoosing(null);
+    discardDrawings(files.filter((fileName) => fileName !== kept));
+    applyMnemonic(key, association, kept);
+  };
+
+  /**
+   * Dismissing leaves the field exactly as it was.
+   *
+   * Keeping the association without its picture would be a third outcome
+   * nobody asked for, and one the user cannot tell from a failed drawing.
+   */
+  const cancelChoosing = () => {
+    if (choosing?.step === 'picture') discardDrawings(choosing.files);
+    setChoosing(null);
+  };
+
+  /** Thrown from a handler, where the error boundary cannot reach it. */
+  const failedMnemonic = (error: unknown) => {
+    const message =
+      error instanceof MediaTooLargeError
+        ? `Obraz ma ${formatBytes(error.size)}, a limit to ${formatBytes(MEDIA_LIMITS.mnemonic)}.`
+        : error instanceof AiError
+          ? error.message
+          : 'Coś poszło nie tak.';
+
+    Alert.alert('Nie zrobiono skojarzenia', message, [{ text: 'OK' }], { cancelable: true });
   };
 
   /**
@@ -506,8 +615,22 @@ export default function CardEditorScreen() {
           {row.value.trim() ? <ThemedText>{row.value}</ThemedText> : null}
 
           <View style={styles.rowActions}>
+            {/* Set before generating, because it decides how many steps the
+                generating takes — and what it costs. */}
             <Pressable
-              onPress={() => void makeMnemonic(row.key, 'all')}
+              onPress={() => setOptionsFor(row.key)}
+              disabled={busy}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: busy }}
+              accessibilityLabel={`Opcje skojarzenia: ${rowInfo.label}`}>
+              <ThemedText type="small" style={{ color: theme.textSecondary }}>
+                ⚙
+              </ThemedText>
+            </Pressable>
+
+            <Pressable
+              onPress={() => void proposeMnemonic(row.key)}
               disabled={busy || !ready}
               hitSlop={12}
               accessibilityRole="button"
@@ -523,14 +646,18 @@ export default function CardEditorScreen() {
                 fix instead of being replaced by a different idea. */}
             {redrawable ? (
               <Pressable
-                onPress={() => void makeMnemonic(row.key, 'picture')}
+                onPress={() => {
+                  const stored = parseMnemonicColumn(row.mnemonic);
+
+                  if (stored) void drawMnemonic(row.key, { ...stored, sentence: row.value });
+                }}
                 disabled={busy}
                 hitSlop={12}
                 accessibilityRole="button"
                 accessibilityState={{ disabled: busy }}
-                accessibilityLabel={`Inny obraz do tego skojarzenia: ${rowInfo.label}`}>
+                accessibilityLabel={`Inne obrazy do tego skojarzenia: ${rowInfo.label}`}>
                 <ThemedText type="small" style={{ color: theme.accent }}>
-                  Inny obraz
+                  Inne obrazy
                 </ThemedText>
               </Pressable>
             ) : null}
@@ -804,6 +931,51 @@ export default function CardEditorScreen() {
       />
 
       <AddFieldSheet visible={adding} onClose={() => setAdding(false)} onAdd={addField} />
+
+      <ActionSheet
+        visible={optionsFor !== null}
+        title="Co ma powstać"
+        actions={[
+          {
+            label: 'Skojarzenie z obrazem',
+            onPress: () => {
+              if (optionsFor) setPictureMode((current) => ({ ...current, [optionsFor]: true }));
+            },
+          },
+          {
+            label: 'Samo skojarzenie',
+            onPress: () => {
+              if (optionsFor) setPictureMode((current) => ({ ...current, [optionsFor]: false }));
+            },
+          },
+        ]}
+        onClose={() => setOptionsFor(null)}
+      />
+
+      <ChoiceSheet
+        visible={choosing !== null}
+        title={choosing?.step === 'picture' ? 'Wybierz obraz' : 'Wybierz skojarzenie'}
+        // The sentence is what the three drawings have in common, so it is
+        // shown once above them rather than repeated under each.
+        subtitle={choosing?.step === 'picture' ? choosing.association.sentence : undefined}
+        choices={
+          choosing?.step === 'association'
+            ? choosing.options.map((option, index) => ({
+                key: String(index),
+                label: option.sentence,
+              }))
+            : choosing?.step === 'picture'
+              ? choosing.files.map((fileName, index) => ({ key: String(index), fileName }))
+              : []
+        }
+        onPick={(key) => {
+          const index = Number(key);
+
+          if (choosing?.step === 'association') pickAssociation(index);
+          else pickDrawing(index);
+        }}
+        onCancel={cancelChoosing}
+      />
     </KeyboardAvoidingView>
   );
 }

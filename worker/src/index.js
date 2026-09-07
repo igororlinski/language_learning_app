@@ -63,17 +63,27 @@ const TEXT_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 /**
- * Not the newest Flash, and that is the finding rather than an oversight.
+ * The models to try, best first, and why it is a list rather than a name.
  *
- * Measured against this key on 2026-09-07: `gemini-3.8-flash`, `3.7` and
- * `3.6` share a free-tier allowance of **20 requests a day** — enough to
- * evaluate, not enough to use. `gemini-3.5-flash` has real headroom and
- * answered all ten test pairs without inventing a single word, including the
- * two that llama never solved in any run: `ventana` → `wentylator` and
- * `livro` → `lewar`. Flash-Lite was tried too and sits barely above llama, so
- * the full Flash is where the quality is.
+ * Every model on the free tier has its own daily allowance, and they are not
+ * alike: measured against this key on 2026-09-07, the Flash models allow
+ * **20 requests a day** and `flash-lite` allows **500**. Twenty is enough to
+ * evaluate a prompt and not enough to use the feature, so the good model is
+ * spent first and the roomy one carries the rest of the day.
+ *
+ * The ordering is a quality ordering, so running out degrades gradually
+ * instead of falling off a cliff — and `flash-lite` is far more usable here
+ * than its single answers suggested, because the user picks one of three:
+ * nine of ten test pairs had a good option among its three, where judging it
+ * on one answer had put it barely above llama.
+ *
+ * Anything left over falls through to Workers AI, which has no daily limit
+ * at all — it is simply worse.
  */
-const GEMINI_MODEL = 'gemini-3.5-flash';
+const GEMINI_MODELS = [
+  'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
+];
 
 /**
  * Room for the object and for whatever thinking happens on the way to it.
@@ -83,7 +93,7 @@ const GEMINI_MODEL = 'gemini-3.5-flash';
  * models on Workers AI (gpt-oss, qwen3.8, gemma-4) came back with nothing at
  * all in the bake-off, burning their neurons to say it.
  */
-const GEMINI_MAX_TOKENS = 1024;
+const GEMINI_MAX_TOKENS = 2048;
 
 /**
  * The answer's shape, enforced by Gemini instead of hoped for.
@@ -99,15 +109,20 @@ const GEMINI_MAX_TOKENS = 1024;
  * out before it commits to a keyword rather than pattern-matching on spelling.
  */
 const MNEMONIC_SCHEMA = {
-  type: 'object',
-  properties: {
-    sounds: { type: 'string' },
-    keyword: { type: 'string' },
-    sentence: { type: 'string' },
-    prompt: { type: 'string' },
+  type: 'array',
+  minItems: 3,
+  maxItems: 3,
+  items: {
+    type: 'object',
+    properties: {
+      sounds: { type: 'string' },
+      keyword: { type: 'string' },
+      sentence: { type: 'string' },
+      prompt: { type: 'string' },
+    },
+    required: ['sounds', 'keyword', 'sentence', 'prompt'],
+    propertyOrdering: ['sounds', 'keyword', 'sentence', 'prompt'],
   },
-  required: ['sounds', 'keyword', 'sentence', 'prompt'],
-  propertyOrdering: ['sounds', 'keyword', 'sentence', 'prompt'],
 };
 
 /** Cloudflare's own cap on the image prompt; the app trims to this too. */
@@ -120,7 +135,7 @@ const MAX_TERM = 200;
 const MAX_STEPS = 8;
 
 /** Room for the JSON object and nothing else. */
-const MAX_TOKENS = 300;
+const MAX_TOKENS = 900;
 
 /**
  * High on purpose. "Inne skojarzenie" has to actually produce another one, and
@@ -269,8 +284,12 @@ function mnemonicPrompt({ term, termLanguages, meaning, meaningLanguages }) {
     'six words. Do not chase rhyme or alliteration — a correct ordinary sentence',
     'is worth more than a clever broken one.',
     '',
-    'Answer with a single JSON object and nothing else:',
-    '{"sounds":"…","keyword":"…","sentence":"…","prompt":"…"}',
+    'Answer with a JSON array of exactly THREE such objects and nothing else.',
+    'The three must rest on THREE DIFFERENT sound-alike words — three angles on',
+    'the same foreign word, not one idea reworded. Put the one you believe in',
+    'most first.',
+    '',
+    '[{"sounds":"…","keyword":"…","sentence":"…","prompt":"…"}, …]',
     '',
     'sounds   — the FOREIGN word written out as it sounds, in NATIVE spelling.',
     'keyword  — the NATIVE sound-alike word, by itself.',
@@ -283,43 +302,78 @@ function mnemonicPrompt({ term, termLanguages, meaning, meaningLanguages }) {
     'Do not explain. Do not add fields. Do not use markdown.',
   ].join('\n');
 
-  const example = (foreign, foreignLang, native, nativeLang, answer) =>
+  const example = (foreign, foreignLang, native, nativeLang, answers) =>
     [
       { role: 'user', content: `FOREIGN (${foreignLang}): ${foreign}\nNATIVE (${nativeLang}): ${native}` },
-      { role: 'assistant', content: JSON.stringify(answer) },
+      { role: 'assistant', content: JSON.stringify(answers) },
     ];
 
+  // Three examples, three options each. The count is the lesson: an example
+  // answering with one object teaches answering with one object, and the whole
+  // point of asking three times over is that the user picks. They also carry
+  // what the rules only assert — `kadet` is a fragment match, `garnek` a loose
+  // one, and every sentence is plain correct grammar rather than word-play.
   const turns = [
-    ...example('comer', 'Portuguese', 'jeść', 'Polish', {
-      sounds: 'komer',
-      keyword: 'komar',
-      sentence: 'Komar je kanapkę.',
-      prompt: 'a giant mosquito eating a sandwich, simple illustration',
-    }),
-    ...example('Buch', 'German', 'książka', 'Polish', {
-      sounds: 'buch',
-      keyword: 'buk',
-      sentence: 'Buk czyta książkę.',
-      prompt: 'a beech tree holding an open book, simple illustration',
-    }),
-    ...example('key', 'English', 'klucz', 'Polish', {
-      sounds: 'ki',
-      keyword: 'kij',
-      sentence: 'Kij przekręca klucz.',
-      prompt: 'a wooden stick turning a key in a lock, simple illustration',
-    }),
-    ...example('cadeira', 'Portuguese', 'krzesło', 'Polish', {
-      sounds: 'kadejra',
-      keyword: 'kadet',
-      sentence: 'Kadet siedzi na krześle.',
-      prompt: 'a young military cadet sitting on a wooden chair, simple illustration',
-    }),
-    ...example('gato', 'Spanish', 'kot', 'Polish', {
-      sounds: 'gato',
-      keyword: 'gacie',
-      sentence: 'Kot siedzi na gaciach.',
-      prompt: 'a cat sitting on a pair of underpants, simple illustration',
-    }),
+    ...example('comer', 'Portuguese', 'jeść', 'Polish', [
+      {
+        sounds: 'komer',
+        keyword: 'komar',
+        sentence: 'Komar je kanapkę.',
+        prompt: 'a giant mosquito eating a sandwich, simple illustration',
+      },
+      {
+        sounds: 'komer',
+        keyword: 'komin',
+        sentence: 'Komin je węgiel.',
+        prompt: 'a brick chimney swallowing lumps of coal, simple illustration',
+      },
+      {
+        sounds: 'komer',
+        keyword: 'komoda',
+        sentence: 'Komoda je talerze.',
+        prompt: 'a wooden chest of drawers biting into a stack of plates, simple illustration',
+      },
+    ]),
+    ...example('cadeira', 'Portuguese', 'krzesło', 'Polish', [
+      {
+        sounds: 'kadejra',
+        keyword: 'kadet',
+        sentence: 'Kadet siedzi na krześle.',
+        prompt: 'a young military cadet sitting on a wooden chair, simple illustration',
+      },
+      {
+        sounds: 'kadejra',
+        keyword: 'kadzidło',
+        sentence: 'Kadzidło dymi na krześle.',
+        prompt: 'a smoking incense stick standing on a wooden chair, simple illustration',
+      },
+      {
+        sounds: 'kadejra',
+        keyword: 'kadź',
+        sentence: 'Kadź stoi na krześle.',
+        prompt: 'a large wooden vat balanced on a chair, simple illustration',
+      },
+    ]),
+    ...example('gato', 'Spanish', 'kot', 'Polish', [
+      {
+        sounds: 'gato',
+        keyword: 'gacie',
+        sentence: 'Kot siedzi na gaciach.',
+        prompt: 'a cat sitting on a pair of underpants, simple illustration',
+      },
+      {
+        sounds: 'gato',
+        keyword: 'garnek',
+        sentence: 'Kot śpi w garnku.',
+        prompt: 'a cat curled up asleep inside a metal cooking pot, simple illustration',
+      },
+      {
+        sounds: 'gato',
+        keyword: 'gad',
+        sentence: 'Gad goni kota.',
+        prompt: 'a large lizard chasing a cat across a floor, simple illustration',
+      },
+    ]),
     {
       role: 'user',
       content:
@@ -357,13 +411,34 @@ const forGemini = ({ system, turns }) => ({
  * Nothing here throws and nothing here is fatal: every outcome comes back as
  * something the caller can fall back from.
  */
+/**
+ * One association from the first model that will answer.
+ *
+ * Any failure moves to the next model, not just an exhausted allowance: a
+ * refused key or a bad request fails the same way on all of them and costs
+ * one extra round trip to find out, while a model that is merely out of
+ * quota is the case this exists for.
+ */
 async function geminiMnemonic(env, prompt) {
+  let last = { error: 'no model tried' };
+
+  for (const model of GEMINI_MODELS) {
+    last = await geminiAsk(env, prompt, model);
+
+    if (last.text) return { ...last, model };
+  }
+
+  return last;
+}
+
+/** One try, at one model. */
+async function geminiAsk(env, prompt, model) {
   const { systemInstruction, contents } = forGemini(prompt);
 
   let response;
 
   try {
-    response = await fetch(`${GEMINI_URL}/${GEMINI_MODEL}:generateContent`, {
+    response = await fetch(`${GEMINI_URL}/${model}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_KEY },
       body: JSON.stringify({
@@ -388,7 +463,7 @@ async function geminiMnemonic(env, prompt) {
   // code and a sentence. Workers AI does neither, which is why the binding's
   // exhausted allowance is still guessed at from its message (`looksLikeLimit`).
   if (!response.ok) {
-    return { error: `HTTP ${response.status} — ${answer?.error?.message ?? 'no explanation given'}` };
+    return { error: `${model}: HTTP ${response.status} — ${answer?.error?.message ?? 'no explanation given'}` };
   }
 
   const text = (answer?.candidates?.[0]?.content?.parts ?? [])
@@ -466,7 +541,7 @@ async function handleMnemonic(request, env) {
   if (env.GEMINI_KEY) {
     const attempt = await geminiMnemonic(env, prompt);
 
-    if (attempt.text) return ok({ text: attempt.text, source: GEMINI_MODEL });
+    if (attempt.text) return ok({ text: attempt.text, source: attempt.model });
 
     console.log(`Gemini unavailable, falling back to Workers AI: ${attempt.error}`);
   }

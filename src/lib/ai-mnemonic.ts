@@ -1,5 +1,5 @@
 import { AiError, postToWorker } from '@/lib/ai-worker';
-import { parseMnemonicText, type Mnemonic } from '@/lib/mnemonic';
+import { parseMnemonicList, type Mnemonic } from '@/lib/mnemonic';
 
 /**
  * Asking the Worker for one keyword-method association.
@@ -23,10 +23,18 @@ export type MnemonicRequest = {
   meaningLanguages: string[];
 };
 
-export async function requestMnemonic(
+/**
+ * Three associations, best first — or fewer, when the model managed fewer.
+ *
+ * Three rather than one because the choice is the feature: the model is at
+ * its most useful when it is allowed to miss twice, and picking between three
+ * sound-alikes costs one call, one wait and no extra neurons — they arrive in
+ * a single answer, not three.
+ */
+export async function requestMnemonics(
   request: MnemonicRequest,
   workerUrl?: string
-): Promise<Mnemonic> {
+): Promise<Mnemonic[]> {
   // Both halves are the input. A sound-alike needs a word to sound like, and a
   // scene needs a meaning to be about — so this is refused before the network,
   // with the same failure an empty picture prompt gets.
@@ -44,11 +52,13 @@ export async function requestMnemonic(
   );
 
   const text = typeof result.text === 'string' ? result.text : '';
-  const mnemonic = parseMnemonicText(text);
+  const mnemonics = parseMnemonicList(text);
 
   // The model answered, but not with an association. Its own words go into the
   // message: on a phone this alert is the only place to see what it said.
-  if (!mnemonic) throw new AiError('malformed', text.trim().slice(0, 120) || undefined);
+  if (mnemonics.length === 0) {
+    throw new AiError('malformed', text.trim().slice(0, 120) || undefined);
+  }
 
-  return mnemonic;
+  return mnemonics;
 }
