@@ -17,6 +17,7 @@ import m0012 from './0012_cool_swordsman.sql';
 import m0013 from './0013_messy_nova.sql';
 import m0014 from './0014_cultured_sphinx.sql';
 import m0015 from './0015_adorable_cable.sql';
+import m0016 from './0016_spotty_titanium_man.sql';
 
   export default {
     journal,
@@ -36,7 +37,8 @@ m0011,
 m0012,
 m0013,
 m0014,
-m0015
+m0015,
+m0016
     }
   }
   

@@ -26,6 +26,9 @@ export type Row =
       mediaPath: string | null;
       /** A `mnemonic` field only: its keyword and English scene, as stored JSON. */
       mnemonic: string | null;
+      /** Kept on the card, not shown to the learner. */
+      hideValue: boolean;
+      hideMedia: boolean;
     };
 
 /** Where the two mandatory fields sit. */
@@ -45,6 +48,8 @@ export type RowField = {
   value: string;
   mediaPath: string | null;
   mnemonic?: string | null;
+  hideValue?: boolean;
+  hideMedia?: boolean;
 };
 
 /** What a row means once the list order is read top to bottom. */
@@ -86,6 +91,8 @@ export function buildRows(placement: RowPlacement, fields: RowField[]): Row[] {
       value: field.value,
       mediaPath: field.mediaPath,
       mnemonic: field.mnemonic ?? null,
+      hideValue: field.hideValue ?? false,
+      hideMedia: field.hideMedia ?? false,
       side: field.side,
       position: field.position,
     })),
@@ -166,6 +173,8 @@ export function toPlacement(rows: Row[]): { fields: RowField[]; placement: RowPl
       value: row.value,
       mediaPath: row.mediaPath,
       mnemonic: row.mnemonic,
+      hideValue: row.hideValue,
+      hideMedia: row.hideMedia,
     });
   }
 

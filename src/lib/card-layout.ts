@@ -25,6 +25,9 @@ export type LayoutPiece = {
   kind: FieldKind;
   value: string;
   mediaPath: string | null;
+  /** Kept on the card but not shown to the learner. */
+  hideValue: boolean;
+  hideMedia: boolean;
 };
 
 /** The columns that place a card's two mandatory fields. */
@@ -45,6 +48,8 @@ export function cardPieces<
     value: string;
     kind?: FieldKind;
     mediaPath?: string | null;
+    hideValue?: boolean;
+    hideMedia?: boolean;
   },
 >(card: CardPlacement, extras: T[]): LayoutPiece[] {
   const base = (kind: BaseKind, side: FieldSide, position: number, value: string): LayoutPiece => ({
@@ -54,6 +59,8 @@ export function cardPieces<
     kind: 'text',
     value,
     mediaPath: null,
+    hideValue: false,
+    hideMedia: false,
   });
 
   return [
@@ -66,6 +73,8 @@ export function cardPieces<
       kind: field.kind ?? 'text',
       value: field.value,
       mediaPath: field.mediaPath ?? null,
+      hideValue: field.hideValue ?? false,
+      hideMedia: field.hideMedia ?? false,
     })),
   ];
 }
@@ -100,24 +109,27 @@ export type CardLine = { text: string; base: boolean; media: LineMedia | null };
  * purpose.
  */
 export function sideLines(pieces: LayoutPiece[], side: FieldSide): CardLine[] {
+  // Hidden halves are resolved first, so everything after this point cannot
+  // tell "hidden" from "never filled in" — which is the point. A piece left
+  // with nothing to show then falls out through the same filter as an empty
+  // one, and a whole field disappears when both of its halves are hidden.
   return piecesOnSide(pieces, side)
-    .filter((piece) => {
+    .map((piece) => ({
+      piece,
+      text: piece.hideValue ? '' : piece.value,
+      media:
+        !piece.hideMedia && isMediaKind(piece.kind) && piece.mediaPath
+          ? { kind: piece.kind as MediaKind, fileName: piece.mediaPath }
+          : null,
+    }))
+    .filter(({ piece, text, media }) => {
       // A mnemonic is the one media field whose text stands on its own: the
       // sentence *is* the association, and an association whose picture failed
       // is still worth reading. Every other media field is its file and nothing
       // else, so without the file there is nothing to show.
-      if (piece.kind === 'mnemonic') {
-        return Boolean(piece.mediaPath) || piece.value.trim().length > 0;
-      }
+      if (piece.kind === 'mnemonic') return Boolean(media) || text.trim().length > 0;
 
-      return isMediaKind(piece.kind) ? Boolean(piece.mediaPath) : piece.value.trim().length > 0;
+      return isMediaKind(piece.kind) ? Boolean(media) : text.trim().length > 0;
     })
-    .map((piece) => ({
-      text: piece.value,
-      base: piece.base !== null,
-      media:
-        isMediaKind(piece.kind) && piece.mediaPath
-          ? { kind: piece.kind, fileName: piece.mediaPath }
-          : null,
-    }));
+    .map(({ piece, text, media }) => ({ text, base: piece.base !== null, media }));
 }

@@ -136,19 +136,35 @@ check('scena NIE prosi o jeden obiekt', scene.includes('Single subject'), false)
 
 group('Kolumna ze skojarzeniem');
 
+const whole = { keyword: 'komar', prompt: 'a mosquito eating', sentence: 'Komar je kanapkę.' };
+
+check('zapis i odczyt wracaja tym samym', parseMnemonicColumn(mnemonicJson(whole))?.keyword, 'komar');
+check('razem ze scena', parseMnemonicColumn(mnemonicJson(whole))?.prompt, 'a mosquito eating');
+
+// The sentence is kept here as well as in `value` so that a field can be
+// switched between showing it and showing the word alone without asking the
+// model for a second association.
 check(
-  'zapis i odczyt wracaja tym samym',
-  parseMnemonicColumn(mnemonicJson({ keyword: 'komar', prompt: 'a mosquito eating' }))?.keyword,
+  'i ze zdaniem, zeby dalo sie wrocic',
+  parseMnemonicColumn(mnemonicJson(whole))?.sentence,
+  'Komar je kanapkę.'
+);
+
+// Rows written before a field could show the word alone have no sentence, and
+// still redraw.
+check(
+  'stary wiersz bez zdania nadal sie czyta',
+  parseMnemonicColumn('{"keyword":"komar","prompt":"a mosquito"}')?.keyword,
   'komar'
 );
 check(
-  'razem ze scena',
-  parseMnemonicColumn(mnemonicJson({ keyword: 'komar', prompt: 'a mosquito eating' }))?.prompt,
-  'a mosquito eating'
+  'a zdanie jest wtedy puste',
+  parseMnemonicColumn('{"keyword":"komar","prompt":"a mosquito"}')?.sentence,
+  ''
 );
 
 check('brak skojarzenia to null w kolumnie', mnemonicJson(null), null);
-check('polowa skojarzenia tez', mnemonicJson({ keyword: 'komar', prompt: '  ' }), null);
+check('polowa skojarzenia tez', mnemonicJson({ ...whole, prompt: '  ' }), null);
 
 // A row written by some future version must not be able to break the editor.
 check('smieci w kolumnie czytaja sie jako brak', parseMnemonicColumn('{{{'), null);

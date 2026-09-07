@@ -16,13 +16,20 @@ const SIDES: Segment<FieldSide>[] = [
 ];
 
 /**
- * A list rather than a row of segments.
+ * A list rather than a row of segments: the labels are Polish phrases, and a
+ * row of chips would truncate them on a phone.
  *
- * Five kinds already had to be squeezed — the generated picture was labelled
- * just "AI" to fit across a phone — and the sixth ends that. A stacked picker
- * costs one line per kind and gives back the room to name each one properly,
- * and to say what the two generated kinds actually do, which is the one thing
- * here nobody can guess from a word.
+ * **"Obraz AI" was removed here on 2026-09-07.** It drew a picture from one of
+ * the card's texts, which "Skojarzenie" does as part of doing something much
+ * more useful — and once the association could be made without a picture at
+ * all, the two were the same field with different amounts of help. The kind
+ * still exists in the schema and fields already made with it still work; it is
+ * simply not offered any more.
+ *
+ * The association sits apart and wears the warm background the card's own
+ * question and answer wear. It is not one more container for a file: it is the
+ * one field that invents its own contents, and the reason this app has a
+ * language model at all.
  */
 const KINDS: PickerOption<FieldKind>[] = [
   { value: 'text', label: 'Tekst' },
@@ -30,21 +37,47 @@ const KINDS: PickerOption<FieldKind>[] = [
   { value: 'image', label: 'Obraz' },
   { value: 'video', label: 'Wideo' },
   {
-    value: 'ai-image',
-    label: 'Obraz AI',
-    hint: 'Rysowany z pytania albo z odpowiedzi.',
-  },
-  {
     value: 'mnemonic',
     label: 'Skojarzenie',
     hint: 'Słowo o podobnym brzmieniu do odpowiedzi i obrazek, który łączy je ze znaczeniem.',
+    highlight: true,
   },
+];
+
+/** What an association is made of — asked as soon as the kind is chosen. */
+const MNEMONIC_MODES: PickerOption<'picture' | 'text'>[] = [
+  { value: 'picture', label: 'Obraz i skojarzenie' },
+  { value: 'text', label: 'Samo skojarzenie' },
+];
+
+/**
+ * How much of the association the card carries.
+ *
+ * The model invents both halves at once — the sound-alike word and a sentence
+ * putting it together with the meaning — so this costs nothing either way and
+ * is switchable later. The sentence explains the link; the word alone is what
+ * some people would rather see once they already know the link.
+ */
+const MNEMONIC_TEXTS: PickerOption<'sentence' | 'word'>[] = [
+  { value: 'sentence', label: 'Całe zdanie' },
+  { value: 'word', label: 'Sam wyraz' },
 ];
 
 export type AddFieldSheetProps = {
   visible: boolean;
   onClose: () => void;
-  onAdd: (choice: { side: FieldSide; kind: FieldKind }) => void;
+  onAdd: (choice: {
+    side: FieldSide;
+    kind: FieldKind;
+    withPicture: boolean;
+    asWord: boolean;
+  }) => void;
+  /**
+   * Whether picking the association also asks what it should be made of. The
+   * deck editor arranges empty slots for future cards and generates nothing,
+   * so there the question would have no answer worth keeping.
+   */
+  askMode?: boolean;
 };
 
 /**
@@ -52,19 +85,27 @@ export type AddFieldSheetProps = {
  * what it holds. The kind is decided here and never again — a field is a text
  * box or a slot for one kind of file for its whole life, so the editors never
  * have to make sense of a half-converted one. That includes how it gets filled:
- * "Obraz" takes a file off the phone, "Obraz AI" makes one out of one of the
- * card's texts, and "Skojarzenie" makes one out of both at once.
+ * "Obraz" takes a file off the phone, "Skojarzenie" writes its own text and
+ * draws its own picture out of the card's two texts at once.
+ *
+ * Picking the association asks one more question on the spot, because it is
+ * the question that decides what the field will cost: a picture is three
+ * drawings to choose from and the sentence alone is free. Asked here rather
+ * than left to the gear in the field, so that the answer exists before the
+ * first press of "Zrób skojarzenie" rather than after it.
  */
-export function AddFieldSheet({ visible, onClose, onAdd }: AddFieldSheetProps) {
+export function AddFieldSheet({ visible, onClose, onAdd, askMode = true }: AddFieldSheetProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
 
   const [side, setSide] = useState<FieldSide>('front');
   const [kind, setKind] = useState<FieldKind>('text');
+  const [mode, setMode] = useState<'picture' | 'text'>('picture');
+  const [text, setText] = useState<'sentence' | 'word'>('sentence');
 
   const add = () => {
     onClose();
-    onAdd({ side, kind });
+    onAdd({ side, kind, withPicture: mode === 'picture', asWord: text === 'word' });
   };
 
   return (
@@ -101,12 +142,24 @@ export function AddFieldSheet({ visible, onClose, onAdd }: AddFieldSheetProps) {
             />
           </View>
 
-          <OptionPicker
-            label="Rodzaj pola"
-            value={kind}
-            options={KINDS}
-            onChange={setKind}
-          />
+          <OptionPicker label="Rodzaj pola" value={kind} options={KINDS} onChange={setKind} />
+
+          {askMode && kind === 'mnemonic' ? (
+            <>
+              <OptionPicker
+                label="Co ma powstać"
+                value={mode}
+                options={MNEMONIC_MODES}
+                onChange={setMode}
+              />
+              <OptionPicker
+                label="Skojarzenie jako"
+                value={text}
+                options={MNEMONIC_TEXTS}
+                onChange={setText}
+              />
+            </>
+          ) : null}
 
           <Button title="Dodaj pole" onPress={add} />
           <Button title="Anuluj" variant="ghost" onPress={onClose} />

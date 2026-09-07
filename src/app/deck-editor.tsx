@@ -287,6 +287,8 @@ export default function DeckEditorScreen() {
       mnemonic: null,
       value: '',
       mediaPath: null,
+      hideValue: false,
+      hideMedia: false,
     };
 
     setRows((current) => {
@@ -627,7 +629,12 @@ export default function DeckEditorScreen() {
         onClose={() => setLanguageSheet(null)}
       />
 
-      <AddFieldSheet visible={adding} onClose={() => setAdding(false)} onAdd={addField} />
+      <AddFieldSheet
+        visible={adding}
+        askMode={false}
+        onClose={() => setAdding(false)}
+        onAdd={addField}
+      />
 
       <View style={[styles.footer, { borderColor: theme.border }]}>
         <Button title="Zapisz" onPress={save} disabled={!canSave} />

@@ -186,6 +186,23 @@ export const cardFields = sqliteTable(
      * unreadable — see `src/lib/mnemonic.ts` for what that costs.
      */
     mnemonic: text('mnemonic'),
+    /**
+     * Kept on the card, hidden from the learner.
+     *
+     * Two halves rather than one flag because an association is two things
+     * that fail apart: the picture can be wrong while the sentence is right,
+     * and the sentence can give the answer away while the picture is exactly
+     * the hint you wanted. Hiding is not deleting — the row keeps its content,
+     * the editor keeps showing it, and turning it back on costs one tap. That
+     * is the difference from removing the picture, which is gone for good and
+     * cost neurons to make.
+     *
+     * `sideLines` is the one place that reads them, so anything drawing a
+     * card for the learner — review, the preview screen, the editor's own
+     * preview — obeys them without knowing they exist.
+     */
+    hideValue: integer('hide_value', { mode: 'boolean' }).notNull().default(false),
+    hideMedia: integer('hide_media', { mode: 'boolean' }).notNull().default(false),
   },
   (table) => [index('card_fields_card_id_idx').on(table.cardId)]
 );

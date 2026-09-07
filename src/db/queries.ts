@@ -893,6 +893,9 @@ export type CardFieldInput = {
    * it in the one place that needs its parts.
    */
   mnemonic?: string | null;
+  /** Kept on the card, not shown to the learner — see `sideLines`. */
+  hideValue?: boolean;
+  hideMedia?: boolean;
 };
 
 /**
@@ -920,6 +923,8 @@ function writeCardFields(tx: Tx, cardId: number, fields: CardFieldInput[]) {
       value: field.value.trim(),
       mediaPath: field.mediaPath,
       mnemonic: field.mnemonic ?? null,
+      hideValue: field.hideValue ?? false,
+      hideMedia: field.hideMedia ?? false,
     };
 
     if (field.id === null) {
@@ -1081,6 +1086,8 @@ export function copyCards(
             // invent, and a copy that kept the picture but forgot how to
             // redraw it would be worse than one that kept neither.
             mnemonic: field.mnemonic,
+            hideValue: field.hideValue,
+            hideMedia: field.hideMedia,
           })
           .run();
       }

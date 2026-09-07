@@ -74,6 +74,8 @@ const moved: Row[] = [
     value: 'obrazek',
     mediaPath: null,
     mnemonic: null,
+    hideValue: false,
+    hideMedia: false,
   },
   { key: BOUNDARY, kind: 'boundary' },
   { key: 'base-back', kind: 'base', base: 'back' },
@@ -99,6 +101,8 @@ check('pole dodatkowe zostaje z przodu', read.fields, [
     value: 'obrazek',
     mediaPath: null,
     mnemonic: null,
+    hideValue: false,
+    hideMedia: false,
   },
 ]);
 

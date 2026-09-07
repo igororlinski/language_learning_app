@@ -5,7 +5,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, TextInput, View } from
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
-import { ActionSheet } from '@/components/action-sheet';
+import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { AddFieldSheet } from '@/components/add-field-sheet';
 import { ChoiceSheet } from '@/components/choice-sheet';
 import { NameSheet } from '@/components/name-sheet';
@@ -157,10 +157,35 @@ export default function CardEditorScreen() {
    */
   const [pictureMode, setPictureMode] = useState<Record<string, boolean>>({});
 
-  /** The row whose options sheet is open. */
-  const [optionsFor, setOptionsFor] = useState<string | null>(null);
+  /**
+   * What the open options sheet offers, or null when it is closed.
+   *
+   * Built when the gear is pressed rather than on every render: the entries
+   * close over the generating flow, which touches the list of files imported
+   * this session, and that is a ref — reading it while rendering is exactly
+   * what React tells you not to do.
+   */
+  const [options, setOptions] = useState<SheetAction[] | null>(null);
 
   const withPicture = (key: string) => pictureMode[key] ?? true;
+
+  /**
+   * Which mnemonic fields show the sound-alike word alone rather than the whole
+   * sentence, by row key. Set when the field is made and switchable afterwards.
+   *
+   * A field already holding something answers for itself: what it shows *is*
+   * the setting, so a card opened from the database needs no remembered state
+   * to know which way round it is.
+   */
+  const [wordModes, setWordModes] = useState<Record<string, boolean>>({});
+
+  const showsWord = (key: string, row?: Row): boolean => {
+    if (key in wordModes) return wordModes[key];
+
+    const stored = row?.kind === 'extra' ? parseMnemonicColumn(row.mnemonic) : null;
+
+    return Boolean(stored?.sentence) && row?.kind === 'extra' && row.value.trim() === stored?.keyword;
+  };
 
   /**
    * What this deck says its questions and answers are written in. Read once:
@@ -182,7 +207,17 @@ export default function CardEditorScreen() {
     return { front: sideLines(pieces, 'front'), back: sideLines(pieces, 'back') };
   }, [rows, front, back]);
 
-  const addField = ({ side, kind }: { side: FieldSide; kind: FieldKind }) => {
+  const addField = ({
+    side,
+    kind,
+    withPicture: wantsPicture,
+    asWord,
+  }: {
+    side: FieldSide;
+    kind: FieldKind;
+    withPicture: boolean;
+    asWord: boolean;
+  }) => {
     nextKey.current += 1;
     const key = `new-${nextKey.current}`;
     const added: Row = {
@@ -193,6 +228,8 @@ export default function CardEditorScreen() {
       value: '',
       mediaPath: null,
       mnemonic: null,
+      hideValue: false,
+      hideMedia: false,
     };
 
     setRows((current) => {
@@ -203,6 +240,21 @@ export default function CardEditorScreen() {
         ? [...current.slice(0, boundary), added, ...current.slice(boundary)]
         : [...current, added];
     });
+
+    if (kind === 'mnemonic') {
+      // Answered in the sheet that made the field, so the run starting below
+      // already knows whether it is drawing anything. The gear in the field
+      // changes it afterwards.
+      setPictureMode((current) => ({ ...current, [key]: wantsPicture }));
+      setWordModes((current) => ({ ...current, [key]: asWord }));
+
+      // Straight into picking, for the same reason the file picker opens by
+      // itself: an empty field is not a result, and the choice the user came
+      // for is one step further on. It needs both texts to work from, so a
+      // field added before the card has any waits for its button instead —
+      // which is exactly when that button is disabled anyway.
+      if (front.trim() && back.trim()) void proposeMnemonic(key);
+    }
 
     // An empty media field is useless, so the picker opens straight away — but
     // a generated one has nothing to pick: it waits for the user to say which
@@ -375,21 +427,54 @@ export default function CardEditorScreen() {
 
   /** Writes a finished association into its row. */
   const applyMnemonic = (key: string, association: Mnemonic, fileName: string | null) => {
+    const word = showsWord(key);
+
     setRows((current) =>
       current.map((item) =>
         item.kind === 'extra' && item.key === key
           ? {
               ...item,
-              // The sentence is the field's value, like every other field's
-              // label and search material — it is what the learner reads, on
-              // the card and in the list.
-              value: association.sentence,
+              // Whichever half the learner asked for is the field's value, like
+              // every other field's label and search material — it is what they
+              // read, on the card and in the list. The other half is not lost:
+              // the whole association goes into the column below.
+              value: word ? association.keyword : association.sentence,
               mediaPath: fileName,
               mnemonic: mnemonicJson(association),
             }
           : item
       )
     );
+  };
+
+  /** Turns one of a field's two halves on or off for the learner. */
+  const toggleHidden = (key: string, half: 'value' | 'media') => {
+    setRows((current) =>
+      current.map((item) =>
+        item.kind === 'extra' && item.key === key
+          ? half === 'value'
+            ? { ...item, hideValue: !item.hideValue }
+            : { ...item, hideMedia: !item.hideMedia }
+          : item
+      )
+    );
+  };
+
+  /**
+   * Throws the picture away for good, unlike hiding it.
+   *
+   * The scene it was drawn from stays in the row, so "Inne obrazy" can still
+   * put one back — what is gone is this particular file, which is the part
+   * that cost neurons and the part taking up room on the phone.
+   */
+  const removePicture = (key: string, fileName: string) => {
+    discardDrawings([fileName]);
+    setRows((current) =>
+      current.map((item) =>
+        item.kind === 'extra' && item.key === key ? { ...item, mediaPath: null } : item
+      )
+    );
+    setPictureMode((current) => ({ ...current, [key]: false }));
   };
 
   /** Throws away drawings nobody picked, on disk and in the undo list. */
@@ -439,6 +524,100 @@ export default function CardEditorScreen() {
   const cancelChoosing = () => {
     if (choosing?.step === 'picture') discardDrawings(choosing.files);
     setChoosing(null);
+  };
+
+  /**
+   * Everything a mnemonic field can be told to do.
+   *
+   * Gathered behind the gear rather than standing in the row: making another
+   * association and drawing it again are things you reach for occasionally,
+   * and as permanent links beside the sentence they competed with the
+   * sentence for attention — which is the one thing there worth reading.
+   *
+   * The mode appears as the state it would move to, so the entry names an
+   * outcome rather than describing the current setting.
+   */
+  const mnemonicOptions = (key: string): SheetAction[] => {
+    const row = rows.find((item) => item.kind === 'extra' && item.key === key);
+
+    if (row?.kind !== 'extra') return [];
+
+    const ready = front.trim().length > 0 && back.trim().length > 0;
+    const stored = parseMnemonicColumn(row.mnemonic);
+    const made = Boolean(row.value.trim() || row.mediaPath);
+
+    return [
+      {
+        label: made ? 'Inne skojarzenie' : 'Zrób skojarzenie',
+        onPress: () => {
+          // A card opened from the database has no remembered setting, so what
+          // the field shows right now becomes the setting before anything is
+          // asked for. Without this, replacing an association on a field that
+          // shows the word alone would quietly hand back a sentence.
+          setWordModes((current) => ({ ...current, [key]: showsWord(key, row) }));
+          void proposeMnemonic(key);
+        },
+        disabled: !ready,
+        hint: ready ? undefined : 'Najpierw wpisz pytanie i odpowiedź.',
+      },
+      // Redrawing skips the model call, so a good idea badly drawn costs
+      // three pictures to fix instead of being replaced by another idea. It is
+      // offered without a picture too — that is how a field made as text alone
+      // gains one.
+      ...(stored
+        ? [
+            {
+              label: row.mediaPath ? 'Inne obrazy' : 'Dorysuj obraz',
+              onPress: () => void drawMnemonic(key, { ...stored, sentence: row.value }),
+            },
+          ]
+        : []),
+      // Hiding and removing are different answers to different problems, so
+      // they are different entries: one is reversible and keeps the row's
+      // content, the other frees the file and cannot be undone.
+      // Both halves were invented in the same breath and both are kept, so
+      // changing your mind costs a re-read rather than another association.
+      ...(stored?.sentence && row.value.trim()
+        ? [
+            {
+              label: showsWord(key, row) ? 'Pokaż całe zdanie' : 'Pokaż sam wyraz',
+              onPress: () => {
+                const word = !showsWord(key, row);
+
+                setWordModes((current) => ({ ...current, [key]: word }));
+                setRows((current) =>
+                  current.map((item) =>
+                    item.kind === 'extra' && item.key === key
+                      ? { ...item, value: word ? stored.keyword : stored.sentence }
+                      : item
+                  )
+                );
+              },
+            },
+          ]
+        : []),
+      ...(row.value.trim()
+        ? [
+            {
+              label: row.hideValue ? 'Pokaż skojarzenie przy nauce' : 'Schowaj skojarzenie',
+              onPress: () => toggleHidden(key, 'value'),
+            },
+          ]
+        : []),
+      ...(row.mediaPath
+        ? [
+            {
+              label: row.hideMedia ? 'Pokaż obraz przy nauce' : 'Schowaj obraz',
+              onPress: () => toggleHidden(key, 'media'),
+            },
+            {
+              label: 'Usuń obraz',
+              onPress: () => removePicture(key, row.mediaPath as string),
+              destructive: true,
+            },
+          ]
+        : []),
+    ];
   };
 
   /** Thrown from a handler, where the error boundary cannot reach it. */
@@ -599,7 +778,6 @@ export default function CardEditorScreen() {
       const busy = generating?.key === row.key;
       const ready = front.trim().length > 0 && back.trim().length > 0;
       const made = Boolean(row.value.trim() || row.mediaPath);
-      const redrawable = parseMnemonicColumn(row.mnemonic) !== null;
 
       return (
         <>
@@ -607,60 +785,72 @@ export default function CardEditorScreen() {
             {`${rowInfo.label} — ${MEDIA_NOUNS.mnemonic}`}
           </ThemedText>
 
-          {row.mediaPath ? <MediaView kind="mnemonic" fileName={row.mediaPath} /> : null}
+          {/* Hidden halves stay visible here and say so. The editor is where
+              you decide what a card shows, so it has to show what the card is
+              made of — dimmed and labelled, rather than gone, which would be
+              indistinguishable from having deleted it. */}
+          {row.mediaPath ? (
+            <View style={row.hideMedia ? styles.hidden : null}>
+              <MediaView kind="mnemonic" fileName={row.mediaPath} />
+            </View>
+          ) : null}
+
+          {row.mediaPath && row.hideMedia ? (
+            <ThemedText type="small" themeColor="textSecondary">
+              Obraz schowany przy nauce
+            </ThemedText>
+          ) : null}
 
           {/* The sentence is the association. It shows here as it will show
-              on the card, because judging it is the whole point of the two
-              reroll buttons underneath. */}
-          {row.value.trim() ? <ThemedText>{row.value}</ThemedText> : null}
+              on the card, because judging it is the whole point. */}
+          {row.value.trim() ? (
+            <ThemedText style={row.hideValue ? styles.hidden : null}>{row.value}</ThemedText>
+          ) : null}
+
+          {row.value.trim() && row.hideValue ? (
+            <ThemedText type="small" themeColor="textSecondary">
+              Skojarzenie schowane przy nauce
+            </ThemedText>
+          ) : null}
 
           <View style={styles.rowActions}>
-            {/* Set before generating, because it decides how many steps the
-                generating takes — and what it costs. */}
+            {/* Everything this field can be told to do, behind one control.
+                Making it again and drawing it again are rare next to reading
+                what came out, and as two standing links they read like part
+                of the association itself. */}
             <Pressable
-              onPress={() => setOptionsFor(row.key)}
+              onPress={() => setOptions(mnemonicOptions(row.key))}
               disabled={busy}
               hitSlop={12}
               accessibilityRole="button"
               accessibilityState={{ disabled: busy }}
-              accessibilityLabel={`Opcje skojarzenia: ${rowInfo.label}`}>
-              <ThemedText type="small" style={{ color: theme.textSecondary }}>
-                ⚙
-              </ThemedText>
+              accessibilityLabel={`Opcje skojarzenia: ${rowInfo.label}`}
+              style={({ pressed }) => [
+                styles.gear,
+                {
+                  borderColor: theme.border,
+                  backgroundColor: pressed ? theme.backgroundSelected : theme.backgroundElement,
+                  opacity: busy ? 0.4 : 1,
+                },
+              ]}>
+              <ThemedText style={[styles.gearGlyph, { color: theme.accent }]}>⚙</ThemedText>
             </Pressable>
 
-            <Pressable
-              onPress={() => void proposeMnemonic(row.key)}
-              disabled={busy || !ready}
-              hitSlop={12}
-              accessibilityRole="button"
-              accessibilityState={{ disabled: busy || !ready }}
-              accessibilityLabel={`${made ? 'Inne skojarzenie' : 'Zrób skojarzenie'}: ${rowInfo.label}`}>
-              <ThemedText type="small" style={{ color: theme.accent, opacity: ready ? 1 : 0.4 }}>
-                {made ? 'Inne skojarzenie' : 'Zrób skojarzenie'}
-              </ThemedText>
-            </Pressable>
-
-            {/* Only once there is an association to keep. Redrawing skips the
-                model call, so a good idea badly drawn costs one picture to
-                fix instead of being replaced by a different idea. */}
-            {redrawable ? (
+            {/* Only until there is one. Afterwards making another is one of
+                the options, not the thing the field is for. */}
+            {made ? null : (
               <Pressable
-                onPress={() => {
-                  const stored = parseMnemonicColumn(row.mnemonic);
-
-                  if (stored) void drawMnemonic(row.key, { ...stored, sentence: row.value });
-                }}
-                disabled={busy}
+                onPress={() => void proposeMnemonic(row.key)}
+                disabled={busy || !ready}
                 hitSlop={12}
                 accessibilityRole="button"
-                accessibilityState={{ disabled: busy }}
-                accessibilityLabel={`Inne obrazy do tego skojarzenia: ${rowInfo.label}`}>
-                <ThemedText type="small" style={{ color: theme.accent }}>
-                  Inne obrazy
+                accessibilityState={{ disabled: busy || !ready }}
+                accessibilityLabel={`Zrób skojarzenie: ${rowInfo.label}`}>
+                <ThemedText type="small" style={{ color: theme.accent, opacity: ready ? 1 : 0.4 }}>
+                  Zrób skojarzenie
                 </ThemedText>
               </Pressable>
-            ) : null}
+            )}
 
             <Pressable
               onPress={() => removeRow(row.key)}
@@ -933,23 +1123,10 @@ export default function CardEditorScreen() {
       <AddFieldSheet visible={adding} onClose={() => setAdding(false)} onAdd={addField} />
 
       <ActionSheet
-        visible={optionsFor !== null}
-        title="Co ma powstać"
-        actions={[
-          {
-            label: 'Skojarzenie z obrazem',
-            onPress: () => {
-              if (optionsFor) setPictureMode((current) => ({ ...current, [optionsFor]: true }));
-            },
-          },
-          {
-            label: 'Samo skojarzenie',
-            onPress: () => {
-              if (optionsFor) setPictureMode((current) => ({ ...current, [optionsFor]: false }));
-            },
-          },
-        ]}
-        onClose={() => setOptionsFor(null)}
+        visible={options !== null}
+        title="Skojarzenie"
+        actions={options ?? []}
+        onClose={() => setOptions(null)}
       />
 
       <ChoiceSheet
@@ -962,7 +1139,9 @@ export default function CardEditorScreen() {
           choosing?.step === 'association'
             ? choosing.options.map((option, index) => ({
                 key: String(index),
-                label: option.sentence,
+                // What the field will hold, so the choice is between the three
+                // things you are choosing between and not their explanations.
+                label: showsWord(choosing.key) ? option.keyword : option.sentence,
               }))
             : choosing?.step === 'picture'
               ? choosing.files.map((fileName, index) => ({ key: String(index), fileName }))
@@ -1046,6 +1225,27 @@ const styles = StyleSheet.create({
   addGlyph: {
     fontSize: 26,
     lineHeight: 30,
+  },
+  /** Dimmed rather than removed: still part of the card, just not shown. */
+  hidden: {
+    opacity: 0.35,
+  },
+  /**
+   * A control, not a decoration. As a small grey glyph it read as a label and
+   * went unseen — and it is now the only way to reach half of what the field
+   * can do.
+   */
+  gear: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gearGlyph: {
+    fontSize: 17,
+    lineHeight: 21,
   },
   footer: {
     padding: Spacing.three,

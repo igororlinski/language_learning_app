@@ -89,6 +89,7 @@ import migration0012 from '../drizzle/0012_cool_swordsman.sql';
 import migration0013 from '../drizzle/0013_messy_nova.sql';
 import migration0014 from '../drizzle/0014_cultured_sphinx.sql';
 import migration0015 from '../drizzle/0015_adorable_cable.sql';
+import migration0016 from '../drizzle/0016_spotty_titanium_man.sql';
 
 for (const migration of [
   migration0000,
@@ -107,6 +108,7 @@ for (const migration of [
   migration0013,
   migration0014,
   migration0015,
+  migration0016,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -1406,3 +1408,61 @@ check(
   parseMnemonicColumn(getCardFields(mnemoCopy)[0].mnemonic)?.keyword,
   'komar'
 );
+
+group('Chowanie polowek pola przed uczacym sie');
+
+/**
+ * Hiding is data, not a screen's mood: it has to survive the save and reach
+ * the review screen, or the editor would promise something the card does not
+ * do. This is the same failure the FSRS weights had — written by the screen,
+ * silently dropped on the way to the table — so it is checked the same way:
+ * what the editor saved is read back out of the database.
+ */
+const hiddenCard = createCard(mnemoDeck.id, 'okno', 'janela', now, [
+  {
+    id: null,
+    side: 'back',
+    position: 1,
+    kind: 'mnemonic',
+    value: 'Żaluzja zasłania okno.',
+    mediaPath: 'zaluzja.jpg',
+    mnemonic: '{"keyword":"żaluzja","prompt":"window blinds"}',
+    hideValue: true,
+  },
+]);
+
+const hiddenField = getCardFields(hiddenCard.id)[0];
+
+check('schowanie wraca z bazy', hiddenField.hideValue, true);
+check('a druga polowka zostaje widoczna', hiddenField.hideMedia, false);
+check('tresc nie znika przy chowaniu', hiddenField.value, 'Żaluzja zasłania okno.');
+
+// The sentence is hidden, so the card shows the picture alone.
+check('karta pokazuje sam obraz', getCardLines(hiddenCard.id)?.back, [
+  { text: 'janela', base: true, media: null },
+  { text: '', base: false, media: { kind: 'mnemonic', fileName: 'zaluzja.jpg' } },
+]);
+
+// Turning it back on is a save like any other, and the line returns.
+saveCardFields(hiddenCard.id, [
+  {
+    id: hiddenField.id,
+    side: 'back',
+    position: 1,
+    kind: 'mnemonic',
+    value: 'Żaluzja zasłania okno.',
+    mediaPath: 'zaluzja.jpg',
+    mnemonic: '{"keyword":"żaluzja","prompt":"window blinds"}',
+    hideValue: false,
+    hideMedia: true,
+  },
+]);
+
+check('przywrocone zdanie wraca na karte', getCardLines(hiddenCard.id)?.back?.[1]?.text, 'Żaluzja zasłania okno.');
+check('a schowany obraz z niej znika', getCardLines(hiddenCard.id)?.back?.[1]?.media, null);
+
+// A copy inherits what the original was showing, like everything else about it.
+const hiddenCopy = copyCards([hiddenCard.id], mnemoDeck.id, fakeCopier, now)[0];
+
+check('kopia dziedziczy schowanie', getCardFields(hiddenCopy)[0].hideMedia, true);
+check('i to, co widoczne', getCardFields(hiddenCopy)[0].hideValue, false);

@@ -17,6 +17,8 @@ const field = (key: string, value: string, mediaPath: string | null = null): Row
   key,
   kind: 'extra',
   id: null,
+  hideValue: false,
+  hideMedia: false,
   field: 'text',
   mnemonic: null,
   value,

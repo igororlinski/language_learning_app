@@ -39,8 +39,19 @@ export type Mnemonic = {
   prompt: string;
 };
 
-/** What the `mnemonic` column keeps: the sentence is `value`, so it is not here. */
-export type StoredMnemonic = Pick<Mnemonic, 'keyword' | 'prompt'>;
+/**
+ * What the `mnemonic` column keeps: the whole association, all three parts.
+ *
+ * The sentence is in here **as well as** in `value`, and the duplication is
+ * the point. A field shows either the sentence or the sound-alike word alone,
+ * whichever the learner asked for, and `value` holds whichever that is. Keeping
+ * the full association beside it makes switching between the two a re-read
+ * instead of another call to the model — the two texts were invented together
+ * and throwing one away to save a few bytes would mean buying it twice.
+ *
+ * Rows written before this carry no sentence, which is why it may be empty.
+ */
+export type StoredMnemonic = Pick<Mnemonic, 'keyword' | 'prompt'> & { sentence: string };
 
 const clean = (value: unknown, max: number): string =>
   typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').slice(0, max) : '';
@@ -188,10 +199,11 @@ export function mnemonicJson(mnemonic: StoredMnemonic | null): string | null {
 
   const keyword = clean(mnemonic.keyword, MAX_KEYWORD);
   const prompt = clean(mnemonic.prompt, MAX_SCENE);
+  const sentence = clean(mnemonic.sentence, MAX_SENTENCE);
 
   if (!keyword || !prompt) return null;
 
-  return JSON.stringify({ keyword, prompt });
+  return JSON.stringify({ keyword, prompt, sentence });
 }
 
 /**
@@ -219,5 +231,9 @@ export function parseMnemonicColumn(json: string | null | undefined): StoredMnem
   const keyword = clean(object.keyword, MAX_KEYWORD);
   const prompt = clean(object.prompt, MAX_SCENE);
 
-  return keyword && prompt ? { keyword, prompt } : null;
+  // The sentence is not required: rows written before a field could show the
+  // word alone kept it only in `value`, and such a field still redraws.
+  const sentence = clean(object.sentence, MAX_SENTENCE);
+
+  return keyword && prompt ? { keyword, prompt, sentence } : null;
 }

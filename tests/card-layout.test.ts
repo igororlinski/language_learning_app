@@ -123,3 +123,61 @@ const nothingAtAll = cardPieces({ ...plainCard(), back: '   ' }, []);
 
 check('tyl bez niczego nie ma ani jednej linii', sideLines(nothingAtAll, 'back'), []);
 check('ale pole nadal jest czescia ukladu', piecesOnSide(nothingAtAll, 'back').length, 1);
+
+group('Schowane polowki pola');
+
+/** A mnemonic field: a sentence to read and a picture to look at. */
+const association = (overrides: { hideValue?: boolean; hideMedia?: boolean } = {}) =>
+  cardPieces(plainCard(), [
+    {
+      side: 'back' as const,
+      position: 1,
+      value: 'Komar je kanapkę.',
+      kind: 'mnemonic' as const,
+      mediaPath: 'komar.jpg',
+      ...overrides,
+    },
+  ]);
+
+const backLine = (pieces: ReturnType<typeof cardPieces>) => sideLines(pieces, 'back')[1];
+
+check('domyslnie widac i zdanie, i obraz', [
+  backLine(association())?.text,
+  backLine(association())?.media?.fileName,
+], ['Komar je kanapkę.', 'komar.jpg']);
+
+// Hiding is not deleting: the piece keeps its content and stays in the layout,
+// it simply stops reaching the learner.
+check(
+  'schowane zdanie znika z karty',
+  backLine(association({ hideValue: true }))?.text,
+  ''
+);
+check(
+  'ale obraz zostaje',
+  backLine(association({ hideValue: true }))?.media?.fileName,
+  'komar.jpg'
+);
+check(
+  'schowany obraz znika z karty',
+  backLine(association({ hideMedia: true }))?.media,
+  null
+);
+check(
+  'a zdanie zostaje',
+  backLine(association({ hideMedia: true }))?.text,
+  'Komar je kanapkę.'
+);
+
+// Both halves hidden leaves nothing to show, so the field falls out through the
+// same filter an empty one does.
+check(
+  'schowane obie polowki to pole bez linii',
+  sideLines(association({ hideValue: true, hideMedia: true }), 'back').length,
+  1
+);
+check(
+  'ale pole nadal jest czescia ukladu',
+  piecesOnSide(association({ hideValue: true, hideMedia: true }), 'back').length,
+  2
+);
