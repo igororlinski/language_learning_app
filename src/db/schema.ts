@@ -44,9 +44,21 @@ export const FIELD_KINDS = [
   'video',
   'ai-image',
   'mnemonic',
-  // Reads a word out loud on the phone itself (`expo-speech`), so it holds no
-  // file at all — the first kind that is neither text on the card nor an
-  // attachment. See `src/lib/speech.ts` for what it reads and in which voice.
+  /**
+   * **Retired on 2026-09-09, a day after it was added.** A field whose whole
+   * content was a loudspeaker button reading the card's answer aloud.
+   *
+   * Reading a word out loud turned out not to be a field at all: it is
+   * something a piece of text *does*. Any text on a card can now be spoken by
+   * setting a language on it (`card_fields.speech`, `cards.front_speech`,
+   * `cards.back_speech`), which puts the button under the words it reads
+   * rather than on a line of its own — and lets the question be read in one
+   * language and the answer in another, which one field per card never could.
+   *
+   * Kept here, and everywhere else that handles it, so fields made in that one
+   * day still work. It is simply not offered in the "+" sheet any more, which
+   * is the retirement `ai-image` got.
+   */
   'speech',
 ] as const;
 export type FieldSide = (typeof FIELD_SIDES)[number];
@@ -180,6 +192,23 @@ export const cards = sqliteTable(
     frontPosition: integer('front_position').notNull().default(0),
     backSide: text('back_side', { enum: FIELD_SIDES }).notNull().default('back'),
     backPosition: integer('back_position').notNull().default(0),
+    /**
+     * Whether each mandatory field is read out loud, and in which language: a
+     * BCP-47 code from `src/lib/languages.ts`, or null for a field that stays
+     * silent. One column carries both facts because there is no third state —
+     * a voice with no language is not something a phone can be asked for.
+     *
+     * The **code** is stored rather than a "yes, use the deck's" marker, and
+     * that is what makes the two sides independent: a card can ask its question
+     * in Polish and say its answer in Portuguese. It also means a line knows
+     * its own voice, so nothing that draws a card has to go and read the deck.
+     *
+     * The price is that changing the deck's languages leaves existing cards
+     * reading what they were set to. Deliberate: what a card says out loud is
+     * part of the card, not a view of a deck setting that can move under it.
+     */
+    frontSpeech: text('front_speech'),
+    backSpeech: text('back_speech'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -246,6 +275,16 @@ export const cardFields = sqliteTable(
      */
     hideValue: integer('hide_value', { mode: 'boolean' }).notNull().default(false),
     hideMedia: integer('hide_media', { mode: 'boolean' }).notNull().default(false),
+    /**
+     * Read this field's text out loud, in this language — the same rule and the
+     * same shape as `cards.front_speech`: a BCP-47 code, or null for silence.
+     *
+     * Only a field whose `value` is words means anything here, so the editor
+     * offers it for `text` and `mnemonic` and nowhere else: an audio field's
+     * `value` is a file name, and having the phone read „img_2043.jpg" aloud
+     * is not a feature. `sideLines` holds to the same rule on the way out.
+     */
+    speech: text('speech'),
   },
   (table) => [index('card_fields_card_id_idx').on(table.cardId)]
 );

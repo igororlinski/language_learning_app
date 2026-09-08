@@ -74,6 +74,7 @@ const moved: Row[] = [
     value: 'obrazek',
     mediaPath: null,
     mnemonic: null,
+    speech: null,
     hideValue: false,
     hideMedia: false,
   },
@@ -103,6 +104,7 @@ check('pole dodatkowe zostaje z przodu', read.fields, [
     mnemonic: null,
     hideValue: false,
     hideMedia: false,
+    speech: null,
   },
 ]);
 

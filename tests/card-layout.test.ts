@@ -182,13 +182,75 @@ check(
   2
 );
 
-group('Pole wymowy');
+group('Czytanie na glos');
 
 /**
- * A speech field carries no file and shows no text — it is a button. What it
- * says is its own text, or the card's answer, and the answer may well be laid
- * out on the other face, which is why this is resolved here rather than in the
- * screen that draws one side.
+ * Speaking is a property of a text, not a field of its own: a piece that has
+ * been given a language keeps its words **and** gains something to say. The
+ * screen then puts the loudspeaker under those very words, which is the only
+ * thing that says which of several buttons belongs to which line.
+ */
+const spoken = cardPieces({ ...plainCard(), frontSpeech: 'en-US', backSpeech: 'pt-PT' }, [
+  { side: 'front', position: 1, value: 'a janela', kind: 'text' as const, speech: 'pt-PT' },
+  { side: 'front', position: 2, value: 'cichy', kind: 'text' as const },
+]);
+
+const spokenFront = sideLines(spoken, 'front');
+
+check('pytanie czyta swoim jezykiem', spokenFront[0]?.speak, {
+  text: 'to break',
+  language: 'en-US',
+});
+check('i nadal pokazuje swoj tekst', spokenFront[0]?.text, 'to break');
+check('pole dodatkowe czyta swoim', spokenFront[1]?.speak, {
+  text: 'a janela',
+  language: 'pt-PT',
+});
+check('pole bez jezyka milczy', spokenFront[2]?.speak, null);
+
+// The two sides are independent, which one deck-wide voice could never do.
+check('odpowiedz czyta innym jezykiem niz pytanie', sideLines(spoken, 'back')[0]?.speak, {
+  text: 'lamac',
+  language: 'pt-PT',
+});
+
+// Hiding the text hides it from the loudspeaker too, or hiding would not hide.
+const hiddenSpoken = cardPieces(plainCard(), [
+  {
+    side: 'back',
+    position: 1,
+    value: 'Komar je kanapke.',
+    kind: 'mnemonic' as const,
+    mediaPath: 'komar.jpg',
+    speech: 'pl',
+    hideValue: true,
+  },
+]);
+
+check('schowany tekst nie daje sie przeczytac', sideLines(hiddenSpoken, 'back')[1]?.speak, null);
+check('ale obraz zostaje', Boolean(sideLines(hiddenSpoken, 'back')[1]?.media), true);
+
+// An attachment's `value` is a file name; no phone should read one aloud.
+const namedFile = cardPieces(plainCard(), [
+  {
+    side: 'front',
+    position: 1,
+    value: 'img_2043.jpg',
+    kind: 'image' as const,
+    mediaPath: 'stored.jpg',
+    speech: 'pl',
+  },
+]);
+
+check('nazwa pliku nie jest czytana', sideLines(namedFile, 'front')[1]?.speak, null);
+
+group('Wycofane pole wymowy');
+
+/**
+ * The retired `speech` kind: a field that was nothing but a button. It carries
+ * no language of its own — the deck's answer voice is filled in by whoever
+ * draws it — and what it says is its own text, or the card's answer, which may
+ * well be laid out on the other face.
  */
 const speechCard = cardPieces(plainCard(), [
   { side: 'front', position: 1, value: '', kind: 'speech' as const },
@@ -197,7 +259,7 @@ const speechCard = cardPieces(plainCard(), [
 const speechLine = sideLines(speechCard, 'front')[1];
 
 check('pole wymowy zostaje na karcie', Boolean(speechLine), true);
-check('czyta odpowiedz z drugiej strony', speechLine?.speak, 'lamac');
+check('czyta odpowiedz z drugiej strony', speechLine?.speak, { text: 'lamac', language: null });
 check('i nie pokazuje zadnego tekstu', speechLine?.text, '');
 check('zwykla linia nie ma czego czytac', sideLines(speechCard, 'front')[0]?.speak, null);
 
@@ -206,7 +268,10 @@ const spelled = cardPieces(plainCard(), [
   { side: 'front', position: 1, value: 'lamacz', kind: 'speech' as const },
 ]);
 
-check('wpisany tekst wygrywa z odpowiedzia', sideLines(spelled, 'front')[1]?.speak, 'lamacz');
+check('wpisany tekst wygrywa z odpowiedzia', sideLines(spelled, 'front')[1]?.speak, {
+  text: 'lamacz',
+  language: null,
+});
 
 // A button that reads silence is worse than no button.
 const mute = cardPieces(

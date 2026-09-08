@@ -90,6 +90,7 @@ import migration0014 from '../drizzle/0014_cultured_sphinx.sql';
 import migration0015 from '../drizzle/0015_adorable_cable.sql';
 import migration0016 from '../drizzle/0016_spotty_titanium_man.sql';
 import migration0017 from '../drizzle/0017_adorable_morph.sql';
+import migration0018 from '../drizzle/0018_naive_violations.sql';
 
 for (const migration of [
   migration0000,
@@ -110,6 +111,7 @@ for (const migration of [
   migration0015,
   migration0016,
   migration0017,
+  migration0018,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -469,7 +471,17 @@ check('talia pamieta swoj domyslny uklad', newCardLayout(oddDeck.id), {
 });
 
 check('puste pole trafia na wolna strone', newCardFields(oddDeck.id), [
-  { id: null, side: 'front', position: 0, kind: 'text', value: '', mediaPath: null, mnemonic: null },
+  {
+    id: null,
+    side: 'front',
+    position: 0,
+    kind: 'text',
+    value: '',
+    mediaPath: null,
+    mnemonic: null,
+    // A slot holds no words yet, so there is nothing for a voice to read.
+    speech: null,
+  },
 ]);
 
 // A card made from that template reads exactly as the deck arranged it.
@@ -1494,3 +1506,64 @@ const hiddenCopy = copyCards([hiddenCard.id], mnemoDeck.id, fakeCopier, now)[0];
 
 check('kopia dziedziczy schowanie', getCardFields(hiddenCopy)[0].hideMedia, true);
 check('i to, co widoczne', getCardFields(hiddenCopy)[0].hideValue, false);
+
+group('Czytanie na glos wraca z bazy');
+
+/**
+ * Speaking is a column, not a screen's mood, and it is three columns rather
+ * than one: the two mandatory fields carry their own on `cards`, every extra
+ * field on its own row. Checked the same way the FSRS weights are — written by
+ * the editor, read back out of the table — because that is exactly the bug the
+ * weights had, and drizzle drops a key that is not a column without a word.
+ */
+const spokenCard = createCard(
+  mnemoDeck.id,
+  'okno',
+  'a janela',
+  now,
+  [
+    { id: null, side: 'back', position: 1, kind: 'text', value: 'A janela esta aberta.', mediaPath: null, speech: 'pt-PT' },
+    { id: null, side: 'back', position: 2, kind: 'text', value: 'rodzaj zenski', mediaPath: null },
+  ],
+  { frontSide: 'front', frontPosition: 0, backSide: 'back', backPosition: 0 },
+  { frontSpeech: 'pl', backSpeech: 'pt-PT' }
+);
+
+const spokenRow = getCard(spokenCard.id)!;
+
+check('pytanie pamieta swoj jezyk', spokenRow.frontSpeech, 'pl');
+// The two sides are independent, which is the whole reason the language sits on
+// the card rather than being read back off the deck.
+check('odpowiedz pamieta swoj, inny', spokenRow.backSpeech, 'pt-PT');
+check('pole dodatkowe tez', getCardFields(spokenCard.id)[0].speech, 'pt-PT');
+check('a pole bez glosu milczy', getCardFields(spokenCard.id)[1].speech, null);
+
+// What the card says out loud is what the review screen will offer, in the
+// order the layout put it.
+check('karta czyta kazda linie jej wlasnym glosem', getCardLines(spokenCard.id)?.back, [
+  { text: 'a janela', base: true, media: null, speak: { text: 'a janela', language: 'pt-PT' } },
+  {
+    text: 'A janela esta aberta.',
+    base: false,
+    media: null,
+    speak: { text: 'A janela esta aberta.', language: 'pt-PT' },
+  },
+  { text: 'rodzaj zenski', base: false, media: null, speak: null },
+]);
+
+// Switching a voice off is a save like any other.
+updateCard(spokenCard.id, {
+  front: 'okno',
+  back: 'a janela',
+  speech: { frontSpeech: null, backSpeech: 'pt-BR' },
+});
+
+check('wylaczony glos znika', getCard(spokenCard.id)?.frontSpeech, null);
+check('a zmieniony sie zmienia', getCard(spokenCard.id)?.backSpeech, 'pt-BR');
+
+// Reading aloud costs nothing and needs no file, so it travels with a copy
+// exactly as the layout does.
+const spokenCopy = copyCards([spokenCard.id], mnemoDeck.id, fakeCopier, now)[0];
+
+check('kopia czyta tak samo', getCard(spokenCopy)?.backSpeech, 'pt-BR');
+check('razem z polami', getCardFields(spokenCopy)[0].speech, 'pt-PT');

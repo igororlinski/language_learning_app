@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
@@ -13,6 +14,7 @@ import { CardFaces } from '@/components/card-faces';
 import { MediaView } from '@/components/media-view';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
+import { SpeakerIcon } from '@/components/icons';
 import { ThemedText } from '@/components/themed-text';
 import { TextField } from '@/components/text-field';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
@@ -62,7 +64,14 @@ import {
   type Mnemonic,
 } from '@/lib/mnemonic';
 import { languageByEnglish, languageEnglish, languageLabel } from '@/lib/languages';
-import { matchVoice, speechText, speechVoice } from '@/lib/speech';
+import {
+  matchVoice,
+  soleCandidate,
+  speechCandidates,
+  speechText,
+  speechVoice,
+  type SpeechScope,
+} from '@/lib/speech';
 import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
 import { draftSignature } from '@/lib/card-draft';
@@ -150,6 +159,18 @@ export default function CardEditorScreen() {
 
   const [front, setFront] = useState(existing?.front ?? '');
   const [back, setBack] = useState(existing?.back ?? '');
+
+  /**
+   * Which language each mandatory field is read out loud in, or null for one
+   * that stays silent.
+   *
+   * Screen state rather than part of the row model, for the same reason the two
+   * texts above are: a row carries where a mandatory field sits, never what it
+   * holds. `card_fields` keeps its own on the row, because an extra field is a
+   * row all the way down.
+   */
+  const [frontSpeech, setFrontSpeech] = useState<string | null>(existing?.frontSpeech ?? null);
+  const [backSpeech, setBackSpeech] = useState<string | null>(existing?.backSpeech ?? null);
   const [rows, setRows] = useState<Row[]>(initialRows);
   const [savedCount, setSavedCount] = useState(0);
 
@@ -217,14 +238,19 @@ export default function CardEditorScreen() {
   const qualityOf = (key: string): PictureQuality => drawQuality[key] ?? deckQuality;
 
   /**
-   * What the open options sheet offers, or null when it is closed.
+   * What the open options sheet offers and what it calls itself, or null when it
+   * is closed.
    *
    * Built when the gear is pressed rather than on every render: the entries
    * close over the generating flow, which touches the list of files imported
    * this session, and that is a ref — reading it while rendering is exactly
    * what React tells you not to do.
+   *
+   * The heading travels with the entries because the same sheet is now opened
+   * by every text field on the card, not just an association — and one that
+   * says „Skojarzenie" over the question's options would simply be wrong.
    */
-  const [options, setOptions] = useState<SheetAction[] | null>(null);
+  const [options, setOptions] = useState<{ title: string; actions: SheetAction[] } | null>(null);
 
   const withPicture = (key: string) => pictureMode[key] ?? true;
 
@@ -269,6 +295,97 @@ export default function CardEditorScreen() {
   const voices = useVoices();
   const voiceMatch = useMemo(() => matchVoice(voice, voices), [voice, voices]);
 
+  /** Says a piece of the card out loud, exactly as the card itself will. */
+  const readOut = (text: string, language: string | null) => {
+    // Stopping first makes a second tap mean "say it again" rather than "queue
+    // it up", which is what anybody drilling a word wants.
+    Speech.stop();
+    Speech.speak(speechText(text, ''), language ? { language } : undefined);
+  };
+
+  /**
+   * What is wrong with a voice, in one line, or nothing when it is fine.
+   *
+   * Said here and not on the card: this is where a field is given a voice, and
+   * a field that will come out silent — or in a Brazilian accent where the deck
+   * asked for a European one — is worth knowing about before it is saved onto
+   * fifty cards. The review screen stays quiet; it has nobody to teach.
+   */
+  const voiceProblem = (code: string): string | null => {
+    const match = matchVoice(code, voices);
+
+    if (match.status === 'missing') {
+      return `Telefon nie ma głosu dla ${languageLabel(code)}. Doinstaluj go w ustawieniach Androida (Zamiana tekstu na mowę).`;
+    }
+
+    if (match.status === 'variant') {
+      return `Telefon ma tylko ${languageLabel(match.tag ?? '')} — przeczyta, ale innym akcentem.`;
+    }
+
+    return null;
+  };
+
+  /**
+   * Giving a piece of text a voice, or taking it away — the entries every text
+   * field's gear carries.
+   *
+   * The whole shape of it is decided by **how many languages the deck declares
+   * for this particular text**. One, and switching it on is one tap: the answer
+   * in a deck that learns Portuguese is Portuguese, and asking would be asking
+   * somebody to confirm the only option. Several — a question in a deck whose
+   * learner reads two languages, or an extra field, which could be either side
+   * — and the tap opens the list instead. None, and the entry stays on the list
+   * greyed out with the reason, rather than vanishing and teaching the user
+   * that cards cannot be read aloud at all.
+   *
+   * The list reuses this same sheet (`keepOpen`) rather than opening a second
+   * Modal: swapping one for another in the same frame drops the animation on
+   * Android.
+   */
+  const speechActions = (
+    scope: SpeechScope,
+    current: string | null,
+    set: (code: string | null) => void
+  ): SheetAction[] => {
+    const candidates = speechCandidates(scope, languages);
+    const only = soleCandidate(candidates);
+
+    const openList = () =>
+      setOptions({
+        title: 'Język czytania',
+        actions: candidates.map((code) => ({
+          label: languageLabel(code),
+          onPress: () => set(code),
+        })),
+      });
+
+    if (!current) {
+      return [
+        {
+          label: 'Czytaj na głos',
+          disabled: candidates.length === 0,
+          hint:
+            candidates.length === 0
+              ? 'Talia nie mówi, w jakich językach są jej karty.'
+              : undefined,
+          keepOpen: !only,
+          onPress: () => (only ? set(only) : openList()),
+        },
+      ];
+    }
+
+    return [
+      // Offered whenever there is anything else to move to — which includes the
+      // deck having since been changed to declare one language that is not the
+      // one this field speaks. Without that, the only way back would be turning
+      // the voice off and on again.
+      ...(candidates.some((code) => code !== current)
+        ? [{ label: 'Czytaj w innym języku', keepOpen: true, onPress: openList }]
+        : []),
+      { label: 'Nie czytaj na głos', onPress: () => set(null) },
+    ];
+  };
+
   /**
    * The language a proposal leaned on, when it is not the first one the deck
    * lists — and an empty string when it is, because naming the obvious is
@@ -292,10 +409,10 @@ export default function CardEditorScreen() {
   // leaves out and the order dragging produced.
   const preview = useMemo(() => {
     const { fields, placement } = toPlacement(rows);
-    const pieces = cardPieces({ front, back, ...placement }, fields);
+    const pieces = cardPieces({ front, back, frontSpeech, backSpeech, ...placement }, fields);
 
     return { front: sideLines(pieces, 'front'), back: sideLines(pieces, 'back') };
-  }, [rows, front, back]);
+  }, [rows, front, back, frontSpeech, backSpeech]);
 
   const addField = ({
     side,
@@ -322,6 +439,7 @@ export default function CardEditorScreen() {
       mnemonic: null,
       hideValue: false,
       hideMedia: false,
+      speech: null,
     };
 
     // A field whose content arrives from somewhere else stays on probation
@@ -366,6 +484,12 @@ export default function CardEditorScreen() {
   const patchRow = (key: string, value: string) =>
     setRows((current) =>
       current.map((row) => (row.kind === 'extra' && row.key === key ? { ...row, value } : row))
+    );
+
+  /** Gives one extra field a voice, or takes it away. */
+  const setRowSpeech = (key: string, speech: string | null) =>
+    setRows((current) =>
+      current.map((row) => (row.kind === 'extra' && row.key === key ? { ...row, speech } : row))
     );
 
   const removeRow = (key: string) =>
@@ -982,6 +1106,11 @@ export default function CardEditorScreen() {
             },
           ]
         : []),
+      // An association is written in one of the learner's own languages, so it
+      // asks the same question the card's question does. Worth having: hearing
+      // „Komar je kanapkę" said aloud is how you find out the phone will mangle
+      // it before fifty cards carry the same mistake.
+      ...speechActions('mnemonic', row.speech, (code) => setRowSpeech(key, code)),
     ];
   };
 
@@ -991,8 +1120,8 @@ export default function CardEditorScreen() {
    * by each `onChange` would also fire for typing a letter and deleting it.
    */
   const signature = useMemo(
-    () => draftSignature(front, back, rows, cardTags),
-    [back, cardTags, front, rows]
+    () => draftSignature(front, back, rows, cardTags, { front: frontSpeech, back: backSpeech }),
+    [back, backSpeech, cardTags, front, frontSpeech, rows]
   );
 
   const saved = useRef(signature);
@@ -1047,7 +1176,13 @@ export default function CardEditorScreen() {
       // at have to be cleared by hand — the ones it dropped and the ones
       // imported here and then replaced.
       const before = cardMediaFiles(cardId);
-      updateCard(cardId, { front, back, fields, layout: placement });
+      updateCard(cardId, {
+        front,
+        back,
+        fields,
+        layout: placement,
+        speech: { frontSpeech, backSpeech },
+      });
       setCardTagNames(cardId, cardTags);
 
       deleteMedia(
@@ -1065,7 +1200,10 @@ export default function CardEditorScreen() {
 
     // Fast entry: saving a new card clears the form and keeps the editor open so
     // a whole batch can be typed in one go. Leaving is the header back arrow.
-    const card = createCard(deckId, front, back, new Date(), fields, placement);
+    const card = createCard(deckId, front, back, new Date(), fields, placement, {
+      frontSpeech,
+      backSpeech,
+    });
     setCardTagNames(card.id, cardTags);
 
     setFront('');
@@ -1076,10 +1214,17 @@ export default function CardEditorScreen() {
     const nextRows = buildRows(newCardLayout(deckId), newCardFields(deckId));
     setRows(nextRows);
 
+    // Reading the answer aloud stays on for the next card, exactly as the tags
+    // do and for the same reason: it is a decision about the batch being typed,
+    // not content of the card just saved. Turning it off is one tap.
+    //
     // The form the next card starts from is what "saved" means from here on —
-    // it is empty, but the tags kept for the batch would otherwise read as an
+    // it is empty, but what was kept for the batch would otherwise read as an
     // unsaved edit the moment the back arrow was touched.
-    saved.current = draftSignature('', '', nextRows, cardTags);
+    saved.current = draftSignature('', '', nextRows, cardTags, {
+      front: frontSpeech,
+      back: backSpeech,
+    });
 
     setSavedCount((count) => count + 1);
     questionInput.current?.focus();
@@ -1105,6 +1250,88 @@ export default function CardEditorScreen() {
     ], { cancelable: true });
   };
 
+  /**
+   * The strip under a text field: hear it, open its options, and whatever else
+   * that particular row can do.
+   *
+   * Every text on the card gets the same one — the question, the answer, an
+   * extra field, an association — because reading aloud is a thing a text
+   * *does*, not a kind of field. The loudspeaker appears only once the field
+   * has a voice, and it names the language: that is the one place where which
+   * language this is has to be visible, and it is a label on a control rather
+   * than a sentence explaining a setting.
+   */
+  const textActions = (
+    label: string,
+    scope: SpeechScope,
+    text: string,
+    speech: string | null,
+    setSpeech: (code: string | null) => void,
+    extra?: ReactNode
+  ) => {
+    const problem = speech ? voiceProblem(speech) : null;
+
+    return (
+      <>
+        <View style={styles.rowActions}>
+          {speech ? (
+            <Pressable
+              onPress={() => readOut(text, speech)}
+              disabled={!text.trim()}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !text.trim() }}
+              accessibilityLabel={`Posłuchaj: ${label}`}
+              style={[styles.speakLink, { opacity: text.trim() ? 1 : 0.4 }]}>
+              <SpeakerIcon size={13} color={theme.accent} />
+              <ThemedText type="small" style={{ color: theme.accent }}>
+                {languageLabel(speech)}
+              </ThemedText>
+            </Pressable>
+          ) : null}
+
+          <Pressable
+            onPress={() =>
+              setOptions({ title: label, actions: speechActions(scope, speech, setSpeech) })
+            }
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel={`Opcje pola: ${label}`}
+            style={({ pressed }) => [
+              styles.gear,
+              {
+                borderColor: theme.border,
+                backgroundColor: pressed ? theme.backgroundSelected : theme.backgroundElement,
+              },
+            ]}>
+            <ThemedText style={[styles.gearGlyph, { color: theme.accent }]}>⚙</ThemedText>
+          </Pressable>
+
+          {extra}
+        </View>
+
+        {problem ? (
+          <ThemedText type="small" themeColor="textSecondary">
+            {problem}
+          </ThemedText>
+        ) : null}
+      </>
+    );
+  };
+
+  /** The one thing an extra field can do that a mandatory one cannot. */
+  const removeAction = (label: string, key: string) => (
+    <Pressable
+      onPress={() => removeRow(key)}
+      hitSlop={12}
+      accessibilityRole="button"
+      accessibilityLabel={`Usuń ${label}`}>
+      <ThemedText type="small" style={{ color: theme.danger }}>
+        Usuń pole
+      </ThemedText>
+    </Pressable>
+  );
+
   const renderRow = (row: Row, rowInfo: RowInfo) => {
     if (row.kind === 'base') {
       const isQuestion = row.base === 'front';
@@ -1121,6 +1348,17 @@ export default function CardEditorScreen() {
             style={styles.input}
             multiline
           />
+          {/* The question and the answer are different questions about
+              language, and the deck answers them differently: the answer is the
+              one word being learned, the question is whichever of the learner's
+              own languages this deck is written in. */}
+          {textActions(
+            rowInfo.label,
+            isQuestion ? 'question' : 'answer',
+            isQuestion ? front : back,
+            isQuestion ? frontSpeech : backSpeech,
+            isQuestion ? setFrontSpeech : setBackSpeech
+          )}
         </>
       );
     }
@@ -1137,6 +1375,7 @@ export default function CardEditorScreen() {
       // and an invitation to start over showing through it — for the very run
       // being decided — reads as if nothing had happened yet.
       const running = busy || choosing?.key === row.key;
+      const problem = row.speech ? voiceProblem(row.speech) : null;
 
       return (
         <>
@@ -1173,12 +1412,32 @@ export default function CardEditorScreen() {
           ) : null}
 
           <View style={styles.rowActions}>
+            {/* The same loudspeaker every other spoken text carries, in the
+                same place, saying which language it will use. */}
+            {row.speech ? (
+              <Pressable
+                onPress={() => readOut(row.value, row.speech)}
+                disabled={!row.value.trim()}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !row.value.trim() }}
+                accessibilityLabel={`Posłuchaj: ${rowInfo.label}`}
+                style={[styles.speakLink, { opacity: row.value.trim() ? 1 : 0.4 }]}>
+                <SpeakerIcon size={13} color={theme.accent} />
+                <ThemedText type="small" style={{ color: theme.accent }}>
+                  {languageLabel(row.speech)}
+                </ThemedText>
+              </Pressable>
+            ) : null}
+
             {/* Everything this field can be told to do, behind one control.
                 Making it again and drawing it again are rare next to reading
                 what came out, and as two standing links they read like part
                 of the association itself. */}
             <Pressable
-              onPress={() => setOptions(mnemonicOptions(row.key))}
+              onPress={() =>
+                setOptions({ title: MEDIA_NOUNS.mnemonic, actions: mnemonicOptions(row.key) })
+              }
               disabled={busy}
               hitSlop={12}
               accessibilityRole="button"
@@ -1222,6 +1481,12 @@ export default function CardEditorScreen() {
               </ThemedText>
             </Pressable>
           </View>
+
+          {problem ? (
+            <ThemedText type="small" themeColor="textSecondary">
+              {problem}
+            </ThemedText>
+          ) : null}
 
           {busy && generating ? (
             <View style={styles.generating}>
@@ -1413,17 +1678,17 @@ export default function CardEditorScreen() {
           style={styles.input}
           multiline
         />
-        <View style={styles.rowActions}>
-          <Pressable
-            onPress={() => removeRow(row.key)}
-            hitSlop={12}
-            accessibilityRole="button"
-            accessibilityLabel={`Usuń ${rowInfo.label}`}>
-            <ThemedText type="small" style={{ color: theme.danger }}>
-              Usuń pole
-            </ThemedText>
-          </Pressable>
-        </View>
+        {/* An extra field is the one text the deck says nothing about: it is as
+            likely to be an example in the language being learned as a note in
+            the learner's own, so both sides' languages are on offer. */}
+        {textActions(
+          rowInfo.label,
+          'free',
+          row.value,
+          row.speech,
+          (code) => setRowSpeech(row.key, code),
+          removeAction(rowInfo.label, row.key)
+        )}
       </>
     );
   };
@@ -1560,8 +1825,8 @@ export default function CardEditorScreen() {
 
       <ActionSheet
         visible={options !== null}
-        title="Skojarzenie"
-        actions={options ?? []}
+        title={options?.title ?? ''}
+        actions={options?.actions ?? []}
         onClose={() => setOptions(null)}
       />
 
@@ -1663,7 +1928,14 @@ const styles = StyleSheet.create({
   rowActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
+    alignItems: 'center',
     gap: Spacing.three,
+  },
+  /** The icon and the language it will read in, as one link. */
+  speakLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
   },
   /** The strip under the three candidates: history arrows, then the verb. */
   regenerate: {

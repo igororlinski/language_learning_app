@@ -13,10 +13,16 @@ const base = (side: 'front' | 'back'): Row => ({
   base: side,
 });
 
-const field = (key: string, value: string, mediaPath: string | null = null): Row => ({
+const field = (
+  key: string,
+  value: string,
+  mediaPath: string | null = null,
+  speech: string | null = null
+): Row => ({
   key,
   kind: 'extra',
   id: null,
+  speech,
   hideValue: false,
   hideMedia: false,
   field: 'text',
@@ -83,4 +89,34 @@ check(
   'klucz wiersza nie jest zmiana',
   sign('to be', 'byc', withField),
   sign('to be', 'byc', sameContentOtherKey)
+);
+
+group('Glos tez jest zmiana');
+
+// Switching a voice on writes a column, so leaving without saving loses it —
+// which is precisely what the warning exists to prevent.
+check(
+  'wlaczenie czytania pytania to zmiana',
+  sign('to be', 'byc') ===
+    draftSignature('to be', 'byc', rows, [], { front: 'en-US', back: null }),
+  false
+);
+check(
+  'inny jezyk to inna zmiana',
+  draftSignature('to be', 'byc', rows, [], { front: 'en-US', back: null }) ===
+    draftSignature('to be', 'byc', rows, [], { front: 'en-GB', back: null }),
+  false
+);
+
+const spokenField = [
+  base('front'),
+  field('a', 'wymowa', null, 'pl'),
+  { key: BOUNDARY, kind: 'boundary' } as Row,
+  base('back'),
+];
+
+check(
+  'wlaczenie czytania pola tez',
+  sign('to be', 'byc', withField) === sign('to be', 'byc', spokenField),
+  false
 );

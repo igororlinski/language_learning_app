@@ -29,6 +29,8 @@ export type Row =
       /** Kept on the card, not shown to the learner. */
       hideValue: boolean;
       hideMedia: boolean;
+      /** Read out loud in this language, or null for a field that stays silent. */
+      speech: string | null;
     };
 
 /** Where the two mandatory fields sit. */
@@ -50,6 +52,7 @@ export type RowField = {
   mnemonic?: string | null;
   hideValue?: boolean;
   hideMedia?: boolean;
+  speech?: string | null;
 };
 
 /** What a row means once the list order is read top to bottom. */
@@ -93,6 +96,7 @@ export function buildRows(placement: RowPlacement, fields: RowField[]): Row[] {
       mnemonic: field.mnemonic ?? null,
       hideValue: field.hideValue ?? false,
       hideMedia: field.hideMedia ?? false,
+      speech: field.speech ?? null,
       side: field.side,
       position: field.position,
     })),
@@ -175,6 +179,7 @@ export function toPlacement(rows: Row[]): { fields: RowField[]; placement: RowPl
       mnemonic: row.mnemonic,
       hideValue: row.hideValue,
       hideMedia: row.hideMedia,
+      speech: row.speech,
     });
   }
 

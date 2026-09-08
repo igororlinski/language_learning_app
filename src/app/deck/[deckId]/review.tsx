@@ -42,7 +42,11 @@ export default function ReviewScreen() {
   const { deckId: deckIdParam } = useLocalSearchParams<{ deckId: string }>();
   const deckId = Number(deckIdParam);
 
-  /** Which voice a speech field reads in — see `src/lib/speech.ts`. */
+  /**
+   * The fallback voice for a **retired `speech` field** — the one kind that
+   * carries no language of its own. Every text spoken since says which language
+   * it is in, so this reaches nothing made after 2026-09-09.
+   */
   const voice = useMemo(() => speechVoice(deckLanguages(deckId)), [deckId]);
 
   const queue = useReviewStore((s) => s.queue);

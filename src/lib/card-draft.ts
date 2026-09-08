@@ -17,7 +17,13 @@ export function draftSignature(
   front: string,
   back: string,
   rows: Row[],
-  tags: string[]
+  tags: string[],
+  /**
+   * Whether the two mandatory fields are read out loud, and in which language.
+   * They live outside the rows for the same reason their text does: a row
+   * carries where a mandatory field sits, never what it holds.
+   */
+  speech: { front: string | null; back: string | null } = { front: null, back: null }
 ): string {
   const { fields, placement } = toPlacement(rows);
 
@@ -26,12 +32,16 @@ export function draftSignature(
     front: front.trim(),
     back: back.trim(),
     placement,
+    speech,
     fields: fields.map((field) => [
       field.side,
       field.position,
       field.kind,
       field.value.trim(),
       field.mediaPath,
+      // Switching a field's voice on writes a column, so leaving without
+      // saving loses it — which is exactly what the warning is for.
+      field.speech ?? null,
     ]),
     tags,
   });

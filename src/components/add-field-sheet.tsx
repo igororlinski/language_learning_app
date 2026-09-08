@@ -26,6 +26,12 @@ const SIDES: Segment<FieldSide>[] = [
  * still exists in the schema and fields already made with it still work; it is
  * simply not offered any more.
  *
+ * **"Wymowa" went the same way on 2026-09-09**, a day after it arrived. Reading
+ * a word out loud is not a field: it is something a text on the card *does*.
+ * Any text field — the question and the answer included — is now given a voice
+ * from its own gear, which puts the loudspeaker under the words it reads
+ * instead of on a line that says nothing about what it belongs to.
+ *
  * The association sits apart and wears the warm background the card's own
  * question and answer wear. It is not one more container for a file: it is the
  * one field that invents its own contents, and the reason this app has a
@@ -36,11 +42,6 @@ const KINDS: PickerOption<FieldKind>[] = [
   { value: 'audio', label: 'Dźwięk' },
   { value: 'image', label: 'Obraz' },
   { value: 'video', label: 'Wideo' },
-  {
-    value: 'speech',
-    label: 'Wymowa',
-    hint: 'Telefon czyta odpowiedź na głos, w języku talii. Bez internetu.',
-  },
   {
     value: 'mnemonic',
     label: 'Skojarzenie',

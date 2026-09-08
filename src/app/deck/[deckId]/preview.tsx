@@ -33,7 +33,10 @@ export default function PreviewScreen() {
 
   const { deckId: deckIdParam, ids } = useLocalSearchParams<{ deckId: string; ids: string }>();
 
-  /** Which voice a speech field reads in — the same one the session uses. */
+  /**
+   * The fallback voice for a **retired `speech` field**, the same one the
+   * session uses. Everything else on a card says which language it speaks.
+   */
   const voice = useMemo(() => speechVoice(deckLanguages(Number(deckIdParam))), [deckIdParam]);
 
   // Read once. A card edited or deleted elsewhere while this screen is open

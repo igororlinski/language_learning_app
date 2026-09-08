@@ -306,6 +306,10 @@ export default function DeckEditorScreen() {
       mnemonic: null,
       value: '',
       mediaPath: null,
+      // A deck slot holds no text yet, so there is nothing to read out loud.
+      // Which language a field speaks in is settled on the card, once it has
+      // words — see `src/lib/speech.ts`.
+      speech: null,
       hideValue: false,
       hideMedia: false,
     };

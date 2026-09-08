@@ -78,6 +78,18 @@ const DEFAULT_CARD_LAYOUT: CardLayout = {
   backPosition: 0,
 };
 
+/**
+ * Whether the two mandatory fields are read out loud, and in which language.
+ *
+ * Kept apart from `CardLayout` because that type does double duty as the shape
+ * of a **deck's** default layout, and a deck has nothing to say about this: it
+ * arranges empty fields for future cards, and there is no text there yet to be
+ * read.
+ */
+export type CardSpeech = { frontSpeech: string | null; backSpeech: string | null };
+
+const NO_SPEECH: CardSpeech = { frontSpeech: null, backSpeech: null };
+
 /** Comma-separated bind params for a `state in (...)` test. */
 function stateList(states: State[]) {
   return sql.join(
@@ -288,6 +300,8 @@ export function cardsLines(
       frontPosition: cards.frontPosition,
       backSide: cards.backSide,
       backPosition: cards.backPosition,
+      frontSpeech: cards.frontSpeech,
+      backSpeech: cards.backSpeech,
     })
     .from(cards)
     .where(inArray(cards.id, cardIds))
@@ -343,6 +357,9 @@ export function newCardFields(deckId: number): CardFieldInput[] {
     value: '',
     mediaPath: null,
     mnemonic: null,
+    // A slot holds no text yet, so there is nothing for a voice to read. Which
+    // language it will be read in is settled on the card, once there are words.
+    speech: null,
   }));
 }
 
@@ -571,6 +588,8 @@ export function loadDueCards(
       frontPosition: cards.frontPosition,
       backSide: cards.backSide,
       backPosition: cards.backPosition,
+      frontSpeech: cards.frontSpeech,
+      backSpeech: cards.backSpeech,
       createdAt: cards.createdAt,
       due: fsrsState.due,
       stability: fsrsState.stability,
@@ -907,6 +926,8 @@ export type CardFieldInput = {
   /** Kept on the card, not shown to the learner — see `sideLines`. */
   hideValue?: boolean;
   hideMedia?: boolean;
+  /** Read out loud in this language, or null for a field that stays silent. */
+  speech?: string | null;
 };
 
 /**
@@ -936,6 +957,7 @@ function writeCardFields(tx: Tx, cardId: number, fields: CardFieldInput[]) {
       mnemonic: field.mnemonic ?? null,
       hideValue: field.hideValue ?? false,
       hideMedia: field.hideMedia ?? false,
+      speech: field.speech ?? null,
     };
 
     if (field.id === null) {
@@ -960,7 +982,8 @@ export function createCard(
   back: string,
   now = new Date(),
   fields: CardFieldInput[] = [],
-  layout: CardLayout = DEFAULT_CARD_LAYOUT
+  layout: CardLayout = DEFAULT_CARD_LAYOUT,
+  speech: CardSpeech = NO_SPEECH
 ) {
   return db.transaction((tx) => {
     const card = tx
@@ -971,6 +994,7 @@ export function createCard(
         back: back.trim(),
         createdAt: now,
         ...layout,
+        ...speech,
       })
       .returning()
       .get();
@@ -987,7 +1011,13 @@ export function createCard(
 
 export function updateCard(
   cardId: number,
-  patch: { front: string; back: string; fields?: CardFieldInput[]; layout?: CardLayout }
+  patch: {
+    front: string;
+    back: string;
+    fields?: CardFieldInput[];
+    layout?: CardLayout;
+    speech?: CardSpeech;
+  }
 ) {
   return db.transaction((tx) => {
     tx.update(cards)
@@ -995,6 +1025,7 @@ export function updateCard(
         front: patch.front.trim(),
         back: patch.back.trim(),
         ...(patch.layout ?? {}),
+        ...(patch.speech ?? {}),
       })
       .where(eq(cards.id, cardId))
       .run();
@@ -1072,6 +1103,10 @@ export function copyCards(
           frontPosition: source.frontPosition,
           backSide: source.backSide,
           backPosition: source.backPosition,
+          // Reading aloud costs nothing and needs no file, so it travels with
+          // the copy exactly as the layout does.
+          frontSpeech: source.frontSpeech,
+          backSpeech: source.backSpeech,
           createdAt: now,
         })
         .returning()
@@ -1099,6 +1134,7 @@ export function copyCards(
             mnemonic: field.mnemonic,
             hideValue: field.hideValue,
             hideMedia: field.hideMedia,
+            speech: field.speech,
           })
           .run();
       }
