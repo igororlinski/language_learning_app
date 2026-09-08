@@ -166,6 +166,22 @@ const MNEMONIC_SCHEMA = {
   items: {
     type: 'object',
     properties: {
+      // How many syllables the FOREIGN word has. Nothing reads it.
+      //
+      // Added on 2026-09-09 to bind the four-syllable threshold the way
+      // `sounds` binds the spelling-out step: make the model commit to a number
+      // it would then have to contradict.
+      //
+      // **On its own it bound nothing**, and that measurement is worth keeping:
+      // flash-lite counted `janela` 3, `queso` 2, `zapato` 3, `malentendido` 5
+      // — every one correct — and split the short ones into pairs regardless.
+      // Counting was never the problem, so no amount of making it count harder
+      // was ever going to be the fix.
+      //
+      // What made the threshold hold was **cutting the pair block to half its
+      // length** in the same deploy. The two go together and the field stays:
+      // a rule that says "obey the number you just wrote" needs the number.
+      syllables: { type: 'integer' },
       sounds: { type: 'string' },
       keyword: { type: 'string' },
       // Which of the learner's languages the keyword leans on. Demanded rather
@@ -184,8 +200,15 @@ const MNEMONIC_SCHEMA = {
       sentence: { type: 'string' },
       prompt: { type: 'string' },
     },
-    required: ['sounds', 'keyword', 'keywordLanguages', 'sentence', 'prompt'],
-    propertyOrdering: ['sounds', 'keyword', 'keywordLanguages', 'sentence', 'prompt'],
+    required: ['syllables', 'sounds', 'keyword', 'keywordLanguages', 'sentence', 'prompt'],
+    propertyOrdering: [
+      'syllables',
+      'sounds',
+      'keyword',
+      'keywordLanguages',
+      'sentence',
+      'prompt',
+    ],
   },
 };
 
@@ -400,31 +423,17 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
     'A rough sound match is fine and expected. A real word that sounds roughly',
     'right is always better than an invented word that sounds exactly right.',
     '',
-    'When no single word in any KNOWN language sounds close enough, use TWO',
-    'short words side by side: the first carries the opening sounds, the second',
-    'carries the rest. Long FOREIGN words are where this happens — few languages',
-    'hold a single word that echoes four syllables.',
-    'Choose each half SEPARATELY, and walk the KNOWN list again for each one.',
-    'Language 1 being able to supply both halves does NOT mean it should: if',
-    'language 2 has a much closer word for the second half, take it from there.',
-    'A learner who reads two languages hears both, so half of one and half of',
-    'the other is a real match to them, not a trick — and a mixed pair that',
-    'sounds right beats a same-language pair that sounds forced.',
-    'Every rule above applies to EACH of the two words: both real, both spelled',
-    'as a dictionary spells them, both concrete — and the two together must make',
-    'one scene you could draw.',
-    'A pair is where invented words creep in, so guard it: cutting the FOREIGN',
-    'word in half and re-spelling the halves is NOT a pair of sound-alikes. Both',
-    'words must have existed before you saw the FOREIGN word.',
-    'One word always beats a pair when they sound equally close: one word is',
-    'easier to hold in the head. Never use more than two.',
-    'Do not split a SHORT foreign word. If any KNOWN language has a single word',
-    'that is a decent match, ALL THREE options should be single words — a pair',
-    'is for the long word that nothing echoes whole, and nothing else.',
-    'When your three options are pairs, change BOTH halves every time. Three',
-    'pairs ending in the same word — "malina tent", "małpa tent", "mewa tent" —',
-    'are one idea with three prefixes, and leave the learner nothing to choose',
-    'between. Find a different second half, even a slightly worse one.',
+    'A PAIR of two short words side by side is the rare exception, not a tool.',
+    'Use one ONLY when the FOREIGN word has four or more syllables — you have',
+    'just counted them — AND no single word in any KNOWN language comes close.',
+    'Under four syllables: one word, always, however good a pair looks.',
+    'In a pair the first word carries the opening sounds and the second the',
+    'rest. Choose each half separately, walking the KNOWN list again for each:',
+    'language 1 being able to supply both is no reason for it to. Every rule',
+    'above binds each half, and the two together must make one scene.',
+    'Cutting the FOREIGN word in half and re-spelling the halves is NOT a pair.',
+    'Both words must have existed before you saw the FOREIGN word.',
+    'If all three options are pairs, change BOTH halves each time.',
     '',
     'Then write ONE short sentence containing the sound-alike (BOTH words, when',
     'it is a pair) AND the MEANING — in the language the sound-alike came from:',
@@ -434,10 +443,13 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
     '  language, with the MEANING translated into it as well. Never mix two',
     '  languages in one sentence. The learner declared they read this language,',
     '  so a whole sentence in it is easier than a broken one in another;',
-    '- a PAIR whose two words come from TWO DIFFERENT KNOWN languages: write NO',
-    '  sentence. Send sentence as an empty string "". No language owns such a',
-    '  pair, and picking one of them only produces a sentence that is broken in',
-    '  it. There the two words and the picture ARE the association.',
+    '- a PAIR whose two words come from ONE language: a sentence in that',
+    '  language, exactly as above. Being a pair changes nothing here;',
+    '- a PAIR whose two words come from TWO DIFFERENT KNOWN languages, and ONLY',
+    '  that case: write NO sentence. Send sentence as an empty string "". No',
+    '  language owns such a pair, and picking one of them only produces a',
+    '  sentence that is broken in it. There the two words and the picture ARE',
+    '  the association.',
     '',
     'A pair from ONE language reads best with its two words next to each other,',
     'in the order they carry the sound. Plain, grammatically correct, present',
@@ -455,6 +467,8 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
     '',
     '[{"sounds":"…","keyword":"…","keywordLanguages":["…"],"sentence":"…","prompt":"…"}, …]',
     '',
+    'syllables — how many syllables the FOREIGN word has. Count them before you',
+    '           choose anything; it decides whether a pair is allowed at all.',
     'sounds   — the FOREIGN word written out as it sounds, spelled the way',
     '           KNOWN language 1 spells things.',
     'keyword  — the sound-alike word by itself, or the two words separated by',
@@ -492,6 +506,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
   const turns = [
     ...example('comer', 'Portuguese', 'jeść', ['Polish'], [
       {
+        syllables: 2,
         sounds: 'komer',
         keyword: 'komar',
         keywordLanguages: ['Polish'],
@@ -499,6 +514,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
         prompt: 'a giant mosquito eating a sandwich, simple illustration',
       },
       {
+        syllables: 2,
         sounds: 'komer',
         keyword: 'komin',
         keywordLanguages: ['Polish'],
@@ -506,6 +522,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
         prompt: 'a brick chimney swallowing lumps of coal, simple illustration',
       },
       {
+        syllables: 2,
         sounds: 'komer',
         keyword: 'komoda',
         keywordLanguages: ['Polish'],
@@ -515,6 +532,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
     ]),
     ...example('cadeira', 'Portuguese', 'krzesło', ['Polish'], [
       {
+        syllables: 3,
         sounds: 'kadejra',
         keyword: 'kadet',
         keywordLanguages: ['Polish'],
@@ -522,6 +540,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
         prompt: 'a young military cadet sitting on a wooden chair, simple illustration',
       },
       {
+        syllables: 3,
         sounds: 'kadejra',
         keyword: 'kadzidło',
         keywordLanguages: ['Polish'],
@@ -529,6 +548,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
         prompt: 'a smoking incense stick standing on a wooden chair, simple illustration',
       },
       {
+        syllables: 3,
         sounds: 'kadejra',
         keyword: 'kadź',
         keywordLanguages: ['Polish'],
@@ -548,6 +568,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
     // reached for `camel` can read a line of English.
     ...example('cama', 'Portuguese', 'łóżko', ['Polish', 'English'], [
       {
+        syllables: 2,
         sounds: 'kama',
         keyword: 'kamerdyner',
         keywordLanguages: ['Polish'],
@@ -555,6 +576,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
         prompt: 'a butler in a tailcoat making a bed, simple illustration',
       },
       {
+        syllables: 2,
         sounds: 'kama',
         keyword: 'camel',
         keywordLanguages: ['English'],
@@ -562,6 +584,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
         prompt: 'a camel asleep in a human bed, simple illustration',
       },
       {
+        syllables: 2,
         sounds: 'kama',
         keyword: 'kamień',
         keywordLanguages: ['Polish'],
@@ -571,6 +594,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
     ]),
     ...example('gato', 'Spanish', 'kot', ['Polish'], [
       {
+        syllables: 2,
         sounds: 'gato',
         keyword: 'gacie',
         keywordLanguages: ['Polish'],
@@ -578,6 +602,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
         prompt: 'a cat sitting on a pair of underpants, simple illustration',
       },
       {
+        syllables: 2,
         sounds: 'gato',
         keyword: 'garnek',
         keywordLanguages: ['Polish'],
@@ -585,6 +610,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
         prompt: 'a cat curled up asleep inside a metal cooking pot, simple illustration',
       },
       {
+        syllables: 2,
         sounds: 'gato',
         keyword: 'gad',
         keywordLanguages: ['Polish'],
@@ -603,6 +629,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
     // both ways — one pair example first would teach pairs as the default.
     ...example('opinionated', 'English', 'mający własne zdanie', ['Polish', 'Spanish'], [
       {
+        syllables: 5,
         sounds: 'opinionejtyd',
         keyword: 'opona notes',
         keywordLanguages: ['Polish', 'Polish'],
@@ -611,6 +638,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
           'a car tyre and a small notepad standing side by side with folded arms, simple illustration',
       },
       {
+        syllables: 5,
         sounds: 'opinionejtyd',
         keyword: 'opat nieto',
         keywordLanguages: ['Polish', 'Spanish'],
@@ -623,6 +651,7 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
           'give way, simple illustration',
       },
       {
+        syllables: 5,
         sounds: 'opinionejtyd',
         keyword: 'opal nietoperz',
         keywordLanguages: ['Polish', 'Polish'],
