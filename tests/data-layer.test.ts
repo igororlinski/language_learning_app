@@ -44,6 +44,7 @@ import {
   getDeckSlots,
   newCardFields,
   newCardLayout,
+  newCardSpeech,
   otherDecksQuery,
   rollbackCard,
   saveCardFields,
@@ -91,6 +92,7 @@ import migration0015 from '../drizzle/0015_adorable_cable.sql';
 import migration0016 from '../drizzle/0016_spotty_titanium_man.sql';
 import migration0017 from '../drizzle/0017_adorable_morph.sql';
 import migration0018 from '../drizzle/0018_naive_violations.sql';
+import migration0019 from '../drizzle/0019_brainy_ben_urich.sql';
 
 for (const migration of [
   migration0000,
@@ -112,6 +114,7 @@ for (const migration of [
   migration0016,
   migration0017,
   migration0018,
+  migration0019,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -418,9 +421,9 @@ const fieldDeck = createDeck({ name: 'Z polami', newPerDay: 10, reviewsPerDay: 1
 // Position 0 on each side belongs to the mandatory field, so the empty slots
 // start below it. Each one carries its own kind — a text box or an audio slot.
 syncDeckSlots(fieldDeck.id, [
-  { side: 'front', position: 1, kind: 'text' },
-  { side: 'front', position: 2, kind: 'audio' },
-  { side: 'back', position: 1, kind: 'text' },
+  { side: 'front', position: 1, kind: 'text', speech: null },
+  { side: 'front', position: 2, kind: 'audio', speech: null },
+  { side: 'back', position: 1, kind: 'text', speech: null },
 ]);
 
 // Order between the two sides carries no meaning — each side is sorted on its
@@ -444,7 +447,7 @@ check(
 );
 
 // Saving the deck again replaces the whole set rather than diffing it.
-syncDeckSlots(fieldDeck.id, [{ side: 'back', position: 1, kind: 'audio' }]);
+syncDeckSlots(fieldDeck.id, [{ side: 'back', position: 1, kind: 'audio', speech: null }]);
 
 check(
   'ponowny zapis podmienia caly zestaw slotow',
@@ -461,7 +464,7 @@ const oddDeck = createDeck({
   newCardLayout: { frontSide: 'back', frontPosition: 1, backSide: 'back', backPosition: 0 },
 });
 
-syncDeckSlots(oddDeck.id, [{ side: 'front', position: 0, kind: 'text' }]);
+syncDeckSlots(oddDeck.id, [{ side: 'front', position: 0, kind: 'text', speech: null }]);
 
 check('talia pamieta swoj domyslny uklad', newCardLayout(oddDeck.id), {
   frontSide: 'back',
@@ -479,7 +482,6 @@ check('puste pole trafia na wolna strone', newCardFields(oddDeck.id), [
     value: '',
     mediaPath: null,
     mnemonic: null,
-    // A slot holds no words yet, so there is nothing for a voice to read.
     speech: null,
   },
 ]);
@@ -1567,3 +1569,61 @@ const spokenCopy = copyCards([spokenCard.id], mnemoDeck.id, fakeCopier, now)[0];
 
 check('kopia czyta tak samo', getCard(spokenCopy)?.backSpeech, 'pt-BR');
 check('razem z polami', getCardFields(spokenCopy)[0].speech, 'pt-PT');
+
+
+group('Talia mowi, co nowa karta ma czytac na glos');
+
+/**
+ * A voice is the one thing a template can carry that is not a shape: a slot
+ * holds no words, but "every card in this deck reads its example sentence in
+ * Portuguese" is a property of the deck. Checked the way every other deck
+ * default is — written by the editor, read back out of the table — because
+ * drizzle drops a key that names no column without saying a word, and these
+ * are named `new_*` on the deck and plain on the card.
+ */
+const spokenDeck = createDeck({
+  name: 'Czyta sama',
+  newPerDay: 10,
+  reviewsPerDay: 10,
+  languages: { front: ['pl'], back: 'pt-PT' },
+  newCardSpeech: { frontSpeech: 'pl', backSpeech: 'pt-PT' },
+});
+
+syncDeckSlots(spokenDeck.id, [
+  { side: 'back', position: 1, kind: 'text', speech: 'pt-PT' },
+  { side: 'back', position: 2, kind: 'audio', speech: null },
+]);
+
+check('talia pamieta, czym czytaja nowe karty', newCardSpeech(spokenDeck.id), {
+  frontSpeech: 'pl',
+  backSpeech: 'pt-PT',
+});
+check('slot niesie swoj jezyk', newCardFields(spokenDeck.id)[0]?.speech, 'pt-PT');
+check('a slot na plik zadnego', newCardFields(spokenDeck.id)[1]?.speech, null);
+
+// The whole point: a card made from the template speaks without anybody having
+// set it up on that card.
+const bornSpeaking = createCard(
+  spokenDeck.id,
+  'okno',
+  'a janela',
+  now,
+  newCardFields(spokenDeck.id),
+  newCardLayout(spokenDeck.id),
+  newCardSpeech(spokenDeck.id)
+);
+
+check('nowa karta rodzi sie czytajaca', getCard(bornSpeaking.id)?.backSpeech, 'pt-PT');
+check('razem z polem dodatkowym', getCardFields(bornSpeaking.id)[0]?.speech, 'pt-PT');
+
+// A default is a default: changing it never reaches a card already made.
+updateDeck(spokenDeck.id, {
+  name: 'Czyta sama',
+  newPerDay: 10,
+  reviewsPerDay: 10,
+  languages: { front: ['pl'], back: 'pt-PT' },
+  newCardSpeech: { frontSpeech: null, backSpeech: null },
+});
+
+check('zmiana domyslnej nie rusza karty', getCard(bornSpeaking.id)?.backSpeech, 'pt-PT');
+check('ale nastepna rodzi sie cicha', newCardSpeech(spokenDeck.id).backSpeech, null);

@@ -347,6 +347,11 @@ export function newCardLayout(deckId: number): CardLayout {
  * The empty extra fields a new card starts with. Each slot carries its own side,
  * position and kind, because a text box and an audio slot are not the same
  * thing — a card cannot swap one for the other after the fact.
+ *
+ * A slot holds no text, but it can still hold a **voice**: "every card in this
+ * deck reads its example sentence in Portuguese" is a property of the deck, and
+ * setting it on each card by hand is a chore nobody keeps up. The language
+ * travels; the words arrive later.
  */
 export function newCardFields(deckId: number): CardFieldInput[] {
   return getDeckSlots(deckId).map((slot) => ({
@@ -357,10 +362,24 @@ export function newCardFields(deckId: number): CardFieldInput[] {
     value: '',
     mediaPath: null,
     mnemonic: null,
-    // A slot holds no text yet, so there is nothing for a voice to read. Which
-    // language it will be read in is settled on the card, once there are words.
-    speech: null,
+    speech: slot.speech,
   }));
+}
+
+/**
+ * What a new card's two mandatory fields start out reading aloud in.
+ *
+ * Kept apart from `newCardLayout` for the reason `CardSpeech` is kept apart
+ * from `CardLayout`: that one is read by the deck editor as the shape of a
+ * **template**, and this is not part of a shape. Only a brand new card reads
+ * either; from then on both belong to the card.
+ */
+export function newCardSpeech(deckId: number): CardSpeech {
+  const deck = getDeck(deckId);
+
+  if (!deck) return NO_SPEECH;
+
+  return { frontSpeech: deck.newFrontSpeech, backSpeech: deck.newBackSpeech };
 }
 
 /** The deck's empty slots, in the order the deck editor arranged them. */
@@ -373,8 +392,17 @@ export function getDeckSlots(deckId: number): DeckFieldSlot[] {
     .all();
 }
 
-/** One row of the deck editor's list; slots hold no content, only a shape. */
-export type DeckSlotInput = { side: FieldSide; position: number; kind: FieldKind };
+/**
+ * One row of the deck editor's list. Slots hold no content, only a shape — and
+ * a voice, which is a property of the deck rather than of any text: see
+ * `newCardFields`.
+ */
+export type DeckSlotInput = {
+  side: FieldSide;
+  position: number;
+  kind: FieldKind;
+  speech: string | null;
+};
 
 /**
  * Replaces the deck's slots with the list the editor holds. They carry nothing
@@ -851,6 +879,8 @@ export type DeckInput = {
   languages?: DeckLanguages;
   /** The layout every new card in this deck starts from. */
   newCardLayout?: CardLayout;
+  /** Which of its mandatory fields a new card starts reading aloud, and in what. */
+  newCardSpeech?: CardSpeech;
   /** Which way generated pictures lean here — a default, overridable per run. */
   imageQuality?: PictureQuality;
 };
@@ -859,6 +889,7 @@ export type DeckInput = {
 function deckValues(input: DeckInput) {
   const scheduling = input.scheduling ?? DEFAULT_SCHEDULING;
   const layout = input.newCardLayout ?? DEFAULT_CARD_LAYOUT;
+  const speech = input.newCardSpeech ?? NO_SPEECH;
   const languages = input.languages ?? NO_LANGUAGES;
 
   return {
@@ -881,6 +912,11 @@ function deckValues(input: DeckInput) {
     newFrontPosition: layout.frontPosition,
     newBackSide: layout.backSide,
     newBackPosition: layout.backPosition,
+    // Named, not spread: `CardSpeech` calls them `frontSpeech`/`backSpeech`
+    // because that is what they are on a card, and the deck's columns carry
+    // `new_` in front. A spread would drop both without a word.
+    newFrontSpeech: speech.frontSpeech,
+    newBackSpeech: speech.backSpeech,
     // Named columns again, for the reason spelled out above `fsrsWeights`:
     // `front` and `back` are not column names, and a spread would drop them
     // in silence.

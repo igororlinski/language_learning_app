@@ -4,9 +4,12 @@ import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
+import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { AddFieldSheet } from '@/components/add-field-sheet';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
+import { SpeakerIcon } from '@/components/icons';
+import { keptSpeech, speechMenu } from '@/components/speech-menu';
 import { Dropdown, type DropdownOption } from '@/components/dropdown';
 import { LanguageSheet } from '@/components/language-sheet';
 import { OptionPicker, type PickerOption } from '@/components/option-picker';
@@ -44,6 +47,7 @@ import {
   parseLanguages,
 } from '@/lib/languages';
 import { FIELD_NOUNS } from '@/lib/media';
+import type { SpeechScope } from '@/lib/speech';
 import {
   DEFAULT_LEARNING_STEPS,
   DEFAULT_MAXIMUM_INTERVAL,
@@ -292,9 +296,95 @@ export default function DeckEditorScreen() {
       : buildRows(DEFAULT_PLACEMENT, [])
   );
 
+  /**
+   * What a new card in this deck starts out reading aloud.
+   *
+   * The two mandatory fields keep theirs here, beside the deck's other
+   * defaults; every empty slot keeps its own on its row, exactly as a card's
+   * extra fields do. Setting "the answer is always read in Portuguese" once on
+   * the deck is the whole point — doing it on card after card is the chore
+   * nobody keeps up with.
+   */
+  const [newFrontSpeech, setNewFrontSpeech] = useState<string | null>(
+    existing?.newFrontSpeech ?? null
+  );
+  const [newBackSpeech, setNewBackSpeech] = useState<string | null>(
+    existing?.newBackSpeech ?? null
+  );
+
+  /** What the open gear offers, or null when it is closed. */
+  const [options, setOptions] = useState<{ title: string; actions: SheetAction[] } | null>(null);
+
   const nextKey = useRef(0);
   const [adding, setAdding] = useState(false);
   const info = describeRows(rows, BASE_LABELS);
+
+  /**
+   * What this deck declares **right now, in this form** — not what is stored.
+   *
+   * Languages and voices are set in one sitting: picking „portugalski" and then
+   * saying the answer should be read aloud has to work without saving and
+   * reopening in between.
+   */
+  const formLanguages = useMemo(
+    () => ({ front: frontLanguages, back: backLanguage }),
+    [frontLanguages, backLanguage]
+  );
+
+  /** Only text is read aloud; a slot for a file has nothing to say. */
+  const speechScope = (kind: FieldKind): SpeechScope | null =>
+    kind === 'text' ? 'free' : kind === 'mnemonic' ? 'mnemonic' : null;
+
+  /**
+   * The gear, and beside it the language it will start cards out in.
+   *
+   * No "listen" button here, unlike the card editor: a template holds no words,
+   * so there would be nothing to play. The language is a label rather than a
+   * control — the gear is what changes it.
+   */
+  const speechControls = (
+    label: string,
+    scope: SpeechScope,
+    current: string | null,
+    set: (code: string | null) => void
+  ) => (
+    <View style={styles.speech}>
+      {current ? (
+        <View style={styles.speakLabel}>
+          <SpeakerIcon size={13} color={theme.accent} />
+          <ThemedText type="small" style={{ color: theme.accent }}>
+            {languageLabel(current)}
+          </ThemedText>
+        </View>
+      ) : null}
+
+      <Pressable
+        onPress={() =>
+          setOptions({
+            title: label,
+            actions: speechMenu({
+              scope,
+              languages: formLanguages,
+              current,
+              set,
+              show: setOptions,
+            }),
+          })
+        }
+        hitSlop={12}
+        accessibilityRole="button"
+        accessibilityLabel={`Opcje pola: ${label}`}
+        style={({ pressed }) => [
+          styles.gear,
+          {
+            borderColor: theme.border,
+            backgroundColor: pressed ? theme.backgroundSelected : theme.backgroundElement,
+          },
+        ]}>
+        <ThemedText style={[styles.gearGlyph, { color: theme.accent }]}>⚙</ThemedText>
+      </Pressable>
+    </View>
+  );
 
   const addField = ({ side, kind }: { side: FieldSide; kind: FieldKind }) => {
     nextKey.current += 1;
@@ -306,9 +396,7 @@ export default function DeckEditorScreen() {
       mnemonic: null,
       value: '',
       mediaPath: null,
-      // A deck slot holds no text yet, so there is nothing to read out loud.
-      // Which language a field speaks in is settled on the card, once it has
-      // words — see `src/lib/speech.ts`.
+      // Silent until somebody says otherwise, like every other field.
       speech: null,
       hideValue: false,
       hideMedia: false,
@@ -327,29 +415,54 @@ export default function DeckEditorScreen() {
 
   const renderRow = (row: Row, rowInfo: RowInfo) => {
     if (row.kind === 'base') {
+      const isQuestion = row.base === 'front';
+
       return (
-        <ThemedText type="small" themeColor="textSecondary">
-          {rowInfo.label}
-        </ThemedText>
+        <View style={styles.slot}>
+          <ThemedText type="small" themeColor="textSecondary">
+            {rowInfo.label}
+          </ThemedText>
+          {speechControls(
+            rowInfo.label,
+            isQuestion ? 'question' : 'answer',
+            isQuestion ? newFrontSpeech : newBackSpeech,
+            isQuestion ? setNewFrontSpeech : setNewBackSpeech
+          )}
+        </View>
       );
     }
 
     if (row.kind === 'boundary') return null;
+
+    const scope = speechScope(row.field);
 
     return (
       <View style={styles.slot}>
         <ThemedText type="small" themeColor="textSecondary">
           {row.field === 'text' ? rowInfo.label : `${rowInfo.label} — ${FIELD_NOUNS[row.field]}`}
         </ThemedText>
-        <Pressable
-          onPress={() => removeRow(row.key)}
-          hitSlop={12}
-          accessibilityRole="button"
-          accessibilityLabel={`Usuń ${rowInfo.label}`}>
-          <ThemedText type="small" style={{ color: theme.danger }}>
-            Usuń
-          </ThemedText>
-        </Pressable>
+        <View style={styles.speech}>
+          {scope
+            ? speechControls(rowInfo.label, scope, row.speech, (code) =>
+                setRows((current) =>
+                  current.map((item) =>
+                    item.kind === 'extra' && item.key === row.key
+                      ? { ...item, speech: code }
+                      : item
+                  )
+                )
+              )
+            : null}
+          <Pressable
+            onPress={() => removeRow(row.key)}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel={`Usuń ${rowInfo.label}`}>
+            <ThemedText type="small" style={{ color: theme.danger }}>
+              Usuń
+            </ThemedText>
+          </Pressable>
+        </View>
       </View>
     );
   };
@@ -425,12 +538,19 @@ export default function DeckEditorScreen() {
     if (!canSave) return;
 
     // The template keeps no content, so only the arrangement is worth saving:
-    // where the mandatory fields sit and what shape each empty slot has.
+    // where the mandatory fields sit, what shape each empty slot has, and what
+    // each of them starts out reading aloud.
+    //
+    // `keptSpeech` drops a language this deck no longer declares. The gear only
+    // ever offers declared ones, so such a value can only be left over from
+    // before the languages were changed in this very form — and it would go on
+    // handing every new card a voice the deck does not claim.
     const { fields, placement } = toPlacement(rows);
     const slots = fields.map((field) => ({
       side: field.side,
       position: field.position,
       kind: field.kind,
+      speech: keptSpeech(speechScope(field.kind) ?? 'free', formLanguages, field.speech ?? null),
     }));
 
     const input = {
@@ -448,6 +568,10 @@ export default function DeckEditorScreen() {
         weights,
       },
       newCardLayout: placement,
+      newCardSpeech: {
+        frontSpeech: keptSpeech('question', formLanguages, newFrontSpeech),
+        backSpeech: keptSpeech('answer', formLanguages, newBackSpeech),
+      },
       languages: { front: frontLanguages, back: backLanguage },
       imageQuality,
     };
@@ -682,6 +806,13 @@ export default function DeckEditorScreen() {
         onClose={() => setLanguageSheet(null)}
       />
 
+      <ActionSheet
+        visible={options !== null}
+        title={options?.title ?? ''}
+        actions={options?.actions ?? []}
+        onClose={() => setOptions(null)}
+      />
+
       <AddFieldSheet
         visible={adding}
         askMode={false}
@@ -735,6 +866,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.two,
+  },
+  /** Whatever the right-hand end of a row carries, in one line. */
+  speech: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+  },
+  /** The icon and the language, as one label — there is nothing to play here. */
+  speakLabel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+  },
+  /**
+   * A control, not a decoration — the same one the card editor's fields carry,
+   * so the two lists read as one idea.
+   */
+  gear: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gearGlyph: {
+    fontSize: 15,
+    lineHeight: 19,
   },
   add: {
     alignSelf: 'center',

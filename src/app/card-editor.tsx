@@ -15,6 +15,7 @@ import { MediaView } from '@/components/media-view';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
 import { SpeakerIcon } from '@/components/icons';
+import { speechMenu } from '@/components/speech-menu';
 import { ThemedText } from '@/components/themed-text';
 import { TextField } from '@/components/text-field';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
@@ -30,6 +31,7 @@ import {
   getCardTagNames,
   newCardFields,
   newCardLayout,
+  newCardSpeech,
   setCardTagNames,
   updateCard,
 } from '@/db/queries';
@@ -64,14 +66,7 @@ import {
   type Mnemonic,
 } from '@/lib/mnemonic';
 import { languageByEnglish, languageEnglish, languageLabel } from '@/lib/languages';
-import {
-  matchVoice,
-  soleCandidate,
-  speechCandidates,
-  speechText,
-  speechVoice,
-  type SpeechScope,
-} from '@/lib/speech';
+import { matchVoice, speechText, speechVoice, type SpeechScope } from '@/lib/speech';
 import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
 import { draftSignature } from '@/lib/card-draft';
@@ -169,8 +164,12 @@ export default function CardEditorScreen() {
    * holds. `card_fields` keeps its own on the row, because an extra field is a
    * row all the way down.
    */
-  const [frontSpeech, setFrontSpeech] = useState<string | null>(existing?.frontSpeech ?? null);
-  const [backSpeech, setBackSpeech] = useState<string | null>(existing?.backSpeech ?? null);
+  const [frontSpeech, setFrontSpeech] = useState<string | null>(
+    () => (cardId && existing ? existing.frontSpeech : newCardSpeech(deckId).frontSpeech)
+  );
+  const [backSpeech, setBackSpeech] = useState<string | null>(
+    () => (cardId && existing ? existing.backSpeech : newCardSpeech(deckId).backSpeech)
+  );
   const [rows, setRows] = useState<Row[]>(initialRows);
   const [savedCount, setSavedCount] = useState(0);
 
@@ -326,65 +325,15 @@ export default function CardEditorScreen() {
   };
 
   /**
-   * Giving a piece of text a voice, or taking it away — the entries every text
-   * field's gear carries.
-   *
-   * The whole shape of it is decided by **how many languages the deck declares
-   * for this particular text**. One, and switching it on is one tap: the answer
-   * in a deck that learns Portuguese is Portuguese, and asking would be asking
-   * somebody to confirm the only option. Several — a question in a deck whose
-   * learner reads two languages, or an extra field, which could be either side
-   * — and the tap opens the list instead. None, and the entry stays on the list
-   * greyed out with the reason, rather than vanishing and teaching the user
-   * that cards cannot be read aloud at all.
-   *
-   * The list reuses this same sheet (`keepOpen`) rather than opening a second
-   * Modal: swapping one for another in the same frame drops the animation on
-   * Android.
+   * Giving a piece of text a voice, or taking it away. The rule itself lives in
+   * `src/components/speech-menu.ts`, shared with the deck editor: what a card
+   * can be set to and what a new card starts as must not be able to disagree.
    */
   const speechActions = (
     scope: SpeechScope,
     current: string | null,
     set: (code: string | null) => void
-  ): SheetAction[] => {
-    const candidates = speechCandidates(scope, languages);
-    const only = soleCandidate(candidates);
-
-    const openList = () =>
-      setOptions({
-        title: 'Język czytania',
-        actions: candidates.map((code) => ({
-          label: languageLabel(code),
-          onPress: () => set(code),
-        })),
-      });
-
-    if (!current) {
-      return [
-        {
-          label: 'Czytaj na głos',
-          disabled: candidates.length === 0,
-          hint:
-            candidates.length === 0
-              ? 'Talia nie mówi, w jakich językach są jej karty.'
-              : undefined,
-          keepOpen: !only,
-          onPress: () => (only ? set(only) : openList()),
-        },
-      ];
-    }
-
-    return [
-      // Offered whenever there is anything else to move to — which includes the
-      // deck having since been changed to declare one language that is not the
-      // one this field speaks. Without that, the only way back would be turning
-      // the voice off and on again.
-      ...(candidates.some((code) => code !== current)
-        ? [{ label: 'Czytaj w innym języku', keepOpen: true, onPress: openList }]
-        : []),
-      { label: 'Nie czytaj na głos', onPress: () => set(null) },
-    ];
-  };
+  ): SheetAction[] => speechMenu({ scope, languages, current, set, show: setOptions });
 
   /**
    * The language a proposal leaned on, when it is not the first one the deck
@@ -1208,22 +1157,30 @@ export default function CardEditorScreen() {
 
     setFront('');
     setBack('');
+    // Back to the deck's template, exactly as the rows below are.
+    //
+    // Until the deck could carry voices, this was kept for the batch the way
+    // the tags are — there was nowhere else to say "every card here reads its
+    // answer aloud". Now there is, and the deck saying it is better in every
+    // way: it survives leaving the screen, and it means the two mandatory
+    // fields and the empty slots reset together instead of one of them
+    // quietly keeping a setting the other had dropped.
+    const template = newCardSpeech(deckId);
+
+    setFrontSpeech(template.frontSpeech);
+    setBackSpeech(template.backSpeech);
     // The tags stay on for the next card: a batch typed in one go is usually
     // one batch of tags too, and taking them off is one tap.
     // The next card in the batch starts from the deck's default layout again.
     const nextRows = buildRows(newCardLayout(deckId), newCardFields(deckId));
     setRows(nextRows);
 
-    // Reading the answer aloud stays on for the next card, exactly as the tags
-    // do and for the same reason: it is a decision about the batch being typed,
-    // not content of the card just saved. Turning it off is one tap.
-    //
     // The form the next card starts from is what "saved" means from here on —
-    // it is empty, but what was kept for the batch would otherwise read as an
+    // it is empty, but the tags kept for the batch would otherwise read as an
     // unsaved edit the moment the back arrow was touched.
     saved.current = draftSignature('', '', nextRows, cardTags, {
-      front: frontSpeech,
-      back: backSpeech,
+      front: template.frontSpeech,
+      back: template.backSpeech,
     });
 
     setSavedCount((count) => count + 1);

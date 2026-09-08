@@ -127,6 +127,20 @@ export const decks = sqliteTable('decks', {
   newBackSide: text('new_back_side', { enum: FIELD_SIDES }).notNull().default('back'),
   newBackPosition: integer('new_back_position').notNull().default(0),
   /**
+   * Which language each mandatory field of a **new** card is read out loud in,
+   * or null for one that starts silent. The same shape as `cards.front_speech`,
+   * which is what these are copied into.
+   *
+   * A default, not a rule: it decides what a card starts as and nothing after
+   * that. Changing it never reaches a card already made — the same line the
+   * default layout and the daily limits are on. It exists because the deck is
+   * the only place that knows the answer will always be the word being learned,
+   * and setting that on every single card by hand is the kind of chore nobody
+   * keeps up for long.
+   */
+  newFrontSpeech: text('new_front_speech'),
+  newBackSpeech: text('new_back_speech'),
+  /**
    * Which languages this deck writes its questions and answers in, as JSON
    * arrays of names, or null while the deck has not said. Nothing validates a
    * card against them — see `src/lib/languages.ts` for why they exist and what
@@ -170,6 +184,8 @@ export const deckFieldSlots = sqliteTable(
     side: text('side', { enum: FIELD_SIDES }).notNull(),
     position: integer('position').notNull().default(0),
     kind: text('kind', { enum: FIELD_KINDS }).notNull().default('text'),
+    /** What a card made from this slot starts reading aloud in, if anything. */
+    speech: text('speech'),
   },
   (table) => [index('deck_field_slots_deck_id_idx').on(table.deckId)]
 );
