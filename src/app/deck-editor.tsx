@@ -31,9 +31,11 @@ import {
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
   DEFAULT_NEW_PER_DAY,
+  DEFAULT_PICTURE_QUALITY,
   DEFAULT_REVIEWS_PER_DAY,
   type NewCardOrder,
   type NewCardPlacement,
+  type PictureQuality,
 } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
 import {
@@ -95,6 +97,27 @@ const PLACEMENT_OPTIONS: PickerOption<NewCardPlacement>[] = [
     value: 'after',
     label: 'Po powtórkach',
     hint: 'Najpierw zaległe powtórki, nowe karty na koniec.',
+  },
+];
+
+/**
+ * Which way this deck's generated pictures lean.
+ *
+ * The labels alone would not carry it — „dokładny" and „szybki" say nothing
+ * about five times the wait, and that is the whole trade. The card editor asks
+ * the same question with the same words when a field is made, so that changing
+ * your mind there is recognisably the same decision.
+ */
+const QUALITY_OPTIONS: PickerOption<PictureQuality>[] = [
+  {
+    value: 'accurate',
+    label: 'Dokładne',
+    hint: 'Rysunek wypełnia kadr. Kilkanaście sekund na obraz.',
+  },
+  {
+    value: 'fast',
+    label: 'Szybkie',
+    hint: 'Mniejszy rysunek w kadrze. Kilka sekund.',
   },
 ];
 
@@ -167,6 +190,9 @@ export default function DeckEditorScreen() {
   );
   /** Which of the two lists the sheet is editing, or null while it is closed. */
   const [languageSheet, setLanguageSheet] = useState<'front' | 'back' | null>(null);
+  const [imageQuality, setImageQuality] = useState<PictureQuality>(
+    existing?.imageQuality ?? DEFAULT_PICTURE_QUALITY
+  );
   /**
    * Read once: every language any deck already names, so this one can reuse a
    * spelling instead of inventing a second one. Not a live query — it is a
@@ -413,6 +439,7 @@ export default function DeckEditorScreen() {
       },
       newCardLayout: placement,
       languages: { front: frontLanguages, back: backLanguages },
+      imageQuality,
     };
 
     if (deckId) {
@@ -588,6 +615,16 @@ export default function DeckEditorScreen() {
           setBackLanguages,
           () => setLanguageSheet('back')
         )}
+
+        {/* Stoi przy językach, bo dotyczy tej samej funkcji: skojarzeń. To
+            ustawienie domyślne — edytor karty otwiera się na nim i pozwala
+            odejść od niego przy pojedynczym obrazie. */}
+        <OptionPicker
+          label="Obrazy w skojarzeniach"
+          value={imageQuality}
+          options={QUALITY_OPTIONS}
+          onChange={setImageQuality}
+        />
 
         <View style={styles.limits}>
           <ThemedText type="smallBold">Domyślny układ nowej karty</ThemedText>

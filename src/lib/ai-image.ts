@@ -1,3 +1,4 @@
+import type { PictureQuality } from '@/db/schema';
 import { AiError, postToWorker } from '@/lib/ai-worker';
 
 /**
@@ -58,12 +59,19 @@ export function buildPrompt(term: string): string {
  * The prompt is passed whole rather than built here, so a mnemonic can send the
  * scene its own model invented instead of a bare word.
  */
-export async function generatePicture(prompt: string, workerUrl?: string): Promise<string> {
+export async function generatePicture(
+  prompt: string,
+  quality: PictureQuality = 'fast',
+  workerUrl?: string
+): Promise<string> {
   if (!prompt.trim()) throw new AiError('empty-prompt');
 
   const result = await postToWorker(
     '/image',
-    { prompt: prompt.slice(0, MAX_PROMPT), steps: STEPS },
+    // `steps` reaches only the quick model, which is the one whose whole price
+    // is how many you ask for. Sent regardless, because which model answers is
+    // decided on the other side and may yet be a third one.
+    { prompt: prompt.slice(0, MAX_PROMPT), steps: STEPS, quality },
     workerUrl
   );
 
@@ -75,8 +83,12 @@ export async function generatePicture(prompt: string, workerUrl?: string): Promi
 }
 
 /** One picture of one word — what an `ai-image` field asks for. */
-export function generateImage(term: string, workerUrl?: string): Promise<string> {
+export function generateImage(
+  term: string,
+  quality: PictureQuality = 'fast',
+  workerUrl?: string
+): Promise<string> {
   if (!term.trim()) throw new AiError('empty-prompt');
 
-  return generatePicture(buildPrompt(term), workerUrl);
+  return generatePicture(buildPrompt(term), quality, workerUrl);
 }

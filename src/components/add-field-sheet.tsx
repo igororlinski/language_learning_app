@@ -7,7 +7,7 @@ import { OptionPicker, type PickerOption } from '@/components/option-picker';
 import { SegmentedControl, type Segment } from '@/components/segmented-control';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
-import type { FieldKind, FieldSide } from '@/db/schema';
+import { DEFAULT_PICTURE_QUALITY, type FieldKind, type FieldSide, type PictureQuality } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
 
 const SIDES: Segment<FieldSide>[] = [
@@ -63,6 +63,18 @@ const MNEMONIC_TEXTS: PickerOption<'sentence' | 'word'>[] = [
   { value: 'word', label: 'Sam wyraz' },
 ];
 
+/**
+ * How carefully the picture is drawn — the one choice here with a price.
+ *
+ * The labels alone would not carry it: „dokładny" and „szybki" say nothing
+ * about five times the wait, and that is the whole trade. This is what option
+ * hints are for.
+ */
+const MNEMONIC_QUALITY: PickerOption<PictureQuality>[] = [
+  { value: 'accurate', label: 'Dokładny', hint: 'Wypełnia kadr. Kilkanaście sekund.' },
+  { value: 'fast', label: 'Szybki', hint: 'Mniejszy rysunek w kadrze. Kilka sekund.' },
+];
+
 export type AddFieldSheetProps = {
   visible: boolean;
   onClose: () => void;
@@ -71,6 +83,7 @@ export type AddFieldSheetProps = {
     kind: FieldKind;
     withPicture: boolean;
     asWord: boolean;
+    quality: PictureQuality;
   }) => void;
   /**
    * Whether picking the association also asks what it should be made of. The
@@ -78,6 +91,14 @@ export type AddFieldSheetProps = {
    * so there the question would have no answer worth keeping.
    */
   askMode?: boolean;
+  /**
+   * Which way the picture question opens — the deck's standing preference, so
+   * that the usual answer costs nothing and only the exception is a tap.
+   *
+   * The sheet returns to it every time it closes: a field drawn quickly "just
+   * this once" must not quietly become the answer for every field after it.
+   */
+  defaultQuality?: PictureQuality;
 };
 
 /**
@@ -99,7 +120,13 @@ export type AddFieldSheetProps = {
  * replacing one Modal with another in the same frame drops the animation on
  * Android, which is the same reason `ActionSheet` grew its `keepOpen`.
  */
-export function AddFieldSheet({ visible, onClose, onAdd, askMode = true }: AddFieldSheetProps) {
+export function AddFieldSheet({
+  visible,
+  onClose,
+  onAdd,
+  askMode = true,
+  defaultQuality = DEFAULT_PICTURE_QUALITY,
+}: AddFieldSheetProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
 
@@ -107,12 +134,14 @@ export function AddFieldSheet({ visible, onClose, onAdd, askMode = true }: AddFi
   const [kind, setKind] = useState<FieldKind>('text');
   const [mode, setMode] = useState<'picture' | 'text'>('picture');
   const [text, setText] = useState<'sentence' | 'word'>('sentence');
+  const [drawing, setDrawing] = useState<PictureQuality>(defaultQuality);
 
   /** Which half of the sheet is showing: the field, or the association's own two questions. */
   const [asking, setAsking] = useState(false);
 
   const close = () => {
     setAsking(false);
+    setDrawing(defaultQuality);
     onClose();
   };
 
@@ -124,7 +153,13 @@ export function AddFieldSheet({ visible, onClose, onAdd, askMode = true }: AddFi
     }
 
     close();
-    onAdd({ side, kind, withPicture: mode === 'picture', asWord: text === 'word' });
+    onAdd({
+      side,
+      kind,
+      withPicture: mode === 'picture',
+      asWord: text === 'word',
+      quality: drawing,
+    });
   };
 
   return (
@@ -163,6 +198,17 @@ export function AddFieldSheet({ visible, onClose, onAdd, askMode = true }: AddFi
                 options={MNEMONIC_TEXTS}
                 onChange={setText}
               />
+
+              {/* Only when there is a picture to draw. A field made of the
+                  sentence alone has nothing to be quick or careful about. */}
+              {mode === 'picture' ? (
+                <OptionPicker
+                  label="Obraz"
+                  value={drawing}
+                  options={MNEMONIC_QUALITY}
+                  onChange={setDrawing}
+                />
+              ) : null}
 
               <Button title="Dodaj pole" onPress={add} />
               <Button title="Wstecz" variant="ghost" onPress={() => setAsking(false)} />

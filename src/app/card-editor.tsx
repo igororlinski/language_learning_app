@@ -23,6 +23,7 @@ import {
   deleteCard,
   getCard,
   deckLanguages,
+  deckPictureQuality,
   getCardFields,
   getCardTagNames,
   newCardFields,
@@ -30,7 +31,7 @@ import {
   setCardTagNames,
   updateCard,
 } from '@/db/queries';
-import type { FieldKind, FieldSide } from '@/db/schema';
+import type { FieldKind, FieldSide, PictureQuality } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
 import {
   formatBytes,
@@ -158,6 +159,30 @@ export default function CardEditorScreen() {
   const [pictureMode, setPictureMode] = useState<Record<string, boolean>>({});
 
   /**
+   * How this deck draws unless told otherwise — its standing preference, set in
+   * the deck editor. Read once, like the languages: it is what the "+" sheet
+   * opens on and what a field falls back to.
+   */
+  const deckQuality = useMemo(() => deckPictureQuality(deckId), [deckId]);
+
+  /**
+   * Which mnemonic fields depart from that preference, by row key.
+   *
+   * The user's call, because the two are worth different things at different
+   * moments: a careful picture fills the frame and takes about five times as
+   * long. Absent means the deck's answer, so the usual case costs no taps at
+   * all and only the exception is a decision.
+   *
+   * It lives in the screen rather than in the row, and is never written back to
+   * the deck, for the same reason `pictureMode` is not stored: it decides how
+   * the *next* picture is made, not what the field is holding now. "Quickly,
+   * just this once" must not become tomorrow's default.
+   */
+  const [drawQuality, setDrawQuality] = useState<Record<string, PictureQuality>>({});
+
+  const qualityOf = (key: string): PictureQuality => drawQuality[key] ?? deckQuality;
+
+  /**
    * What the open options sheet offers, or null when it is closed.
    *
    * Built when the gear is pressed rather than on every render: the entries
@@ -212,11 +237,13 @@ export default function CardEditorScreen() {
     kind,
     withPicture: wantsPicture,
     asWord,
+    quality,
   }: {
     side: FieldSide;
     kind: FieldKind;
     withPicture: boolean;
     asWord: boolean;
+    quality: PictureQuality;
   }) => {
     nextKey.current += 1;
     const key = `new-${nextKey.current}`;
@@ -231,6 +258,11 @@ export default function CardEditorScreen() {
       hideValue: false,
       hideMedia: false,
     };
+
+    // A field whose content arrives from somewhere else stays on probation
+    // until it does — but only while that somewhere else is actually being
+    // asked. A text field needs nothing and is real at once.
+    if (isMediaKind(kind) && !isGeneratedKind(kind)) unconfirmed.current = key;
 
     setRows((current) => {
       // A front field goes just above the boundary, a back one to the very end
@@ -247,13 +279,17 @@ export default function CardEditorScreen() {
       // changes it afterwards.
       setPictureMode((current) => ({ ...current, [key]: wantsPicture }));
       setWordModes((current) => ({ ...current, [key]: asWord }));
+      setDrawQuality((current) => ({ ...current, [key]: quality }));
 
       // Straight into picking, for the same reason the file picker opens by
       // itself: an empty field is not a result, and the choice the user came
       // for is one step further on. It needs both texts to work from, so a
       // field added before the card has any waits for its button instead —
       // which is exactly when that button is disabled anyway.
-      if (front.trim() && back.trim()) void proposeMnemonic(key);
+      if (front.trim() && back.trim()) {
+        unconfirmed.current = key;
+        void proposeMnemonic(key);
+      }
     }
 
     // An empty media field is useless, so the picker opens straight away — but
@@ -271,15 +307,44 @@ export default function CardEditorScreen() {
     setRows((current) => current.filter((row) => row.key !== key));
 
   /**
+   * A field added a moment ago that has nothing in it yet.
+   *
+   * Adding one of these kinds is not really "add a field" — it is "add a
+   * picture", "add an association". The field is only the container the answer
+   * arrives in, so backing out of choosing that answer has to leave the card as
+   * it was, not leave an empty box the user now has to delete by hand.
+   *
+   * It holds a key rather than a flag, so only the row that is actually waiting
+   * can be withdrawn: cancelling a *replacement* on a field that already has
+   * something keeps that something, which is the opposite outcome from the
+   * same button.
+   */
+  const unconfirmed = useRef<string | null>(null);
+
+  /** Takes back a field nothing ever arrived in. */
+  const withdrawUnconfirmed = (key: string) => {
+    if (unconfirmed.current !== key) return;
+
+    unconfirmed.current = null;
+    removeRow(key);
+  };
+
+  /**
    * Picks a file and copies it into the app's own directory. The size is checked
    * before the copy, so an oversized file never lands on the device.
    */
   const attachMedia = async (key: string, kind: MediaKind) => {
     try {
       const picked = await pickMedia(kind);
-      if (!picked) return;
+
+      if (!picked) {
+        withdrawUnconfirmed(key);
+        return;
+      }
 
       const { fileName, name } = await importMedia(kind, picked);
+
+      unconfirmed.current = null;
       imported.current = [...imported.current, { kind, fileName }];
 
       setRows((current) =>
@@ -301,6 +366,8 @@ export default function CardEditorScreen() {
         [{ text: 'OK' }],
         { cancelable: true }
       );
+
+      withdrawUnconfirmed(key);
     }
   };
 
@@ -388,6 +455,7 @@ export default function CardEditorScreen() {
       setChoosing({ step: 'association', key, options });
     } catch (error) {
       failedMnemonic(error);
+      withdrawUnconfirmed(key);
     } finally {
       setGenerating(null);
     }
@@ -397,10 +465,17 @@ export default function CardEditorScreen() {
    * Three drawings of one association, saved and ready to be compared.
    *
    * They are drawn in parallel because they are independent and the wait is
-   * otherwise three times as long. All three land on disk before any is
-   * chosen — the two that lose are deleted the moment one wins, and deleted
+   * otherwise three times as long. All of them land on disk before any is
+   * chosen — the ones that lose are deleted the moment one wins, and deleted
    * just the same when the sheet is dismissed, so a discarded round leaves
    * nothing behind.
+   *
+   * Each file is written into `imported` the instant it exists rather than
+   * once the batch is done, and the round survives a drawing that fails.
+   * Those two go together: waiting for all three meant that one refusal left
+   * whichever siblings had already been saved on the disk with nothing
+   * pointing at them — not the row, not the cleanup that runs when the edit is
+   * abandoned, nothing. They were paid for and then leaked.
    */
   const drawMnemonic = async (key: string, association: Mnemonic) => {
     const kind = 'mnemonic' as const;
@@ -408,14 +483,32 @@ export default function CardEditorScreen() {
     try {
       setGenerating({ key, label: 'Rysuję trzy obrazy…' });
 
-      const drawn = await Promise.all(
+      const drawings = await Promise.allSettled(
         [0, 1, 2].map(async () => {
-          const base64 = await pictureFromScene(buildScenePrompt(association.prompt));
-          return saveGeneratedImage(kind, base64);
+          const base64 = await pictureFromScene(
+            buildScenePrompt(association.prompt),
+            qualityOf(key)
+          );
+          const fileName = await saveGeneratedImage(kind, base64);
+
+          imported.current = [...imported.current, { kind, fileName }];
+
+          return fileName;
         })
       );
 
-      imported.current = [...imported.current, ...drawn.map((fileName) => ({ kind, fileName }))];
+      const drawn = drawings
+        .filter((drawing) => drawing.status === 'fulfilled')
+        .map((drawing) => drawing.value);
+
+      // Two pictures beat an error message, for the same reason two
+      // associations do (`parseMnemonicList`). Only a round that drew nothing
+      // at all has failed, and then the first refusal is what explains it.
+      if (drawn.length === 0) {
+        const refused = drawings.find((drawing) => drawing.status === 'rejected');
+
+        throw refused ? refused.reason : new AiError('provider');
+      }
 
       setChoosing({ step: 'picture', key, association, files: drawn });
     } catch (error) {
@@ -428,6 +521,8 @@ export default function CardEditorScreen() {
   /** Writes a finished association into its row. */
   const applyMnemonic = (key: string, association: Mnemonic, fileName: string | null) => {
     const word = showsWord(key);
+
+    unconfirmed.current = null;
 
     setRows((current) =>
       current.map((item) =>
@@ -522,7 +617,14 @@ export default function CardEditorScreen() {
    * nobody asked for, and one the user cannot tell from a failed drawing.
    */
   const cancelChoosing = () => {
-    if (choosing?.step === 'picture') discardDrawings(choosing.files);
+    if (!choosing) return;
+
+    if (choosing.step === 'picture') discardDrawings(choosing.files);
+
+    // A field added for this run and never filled goes with it: it was only
+    // ever the container for the answer being declined. One that already held
+    // something keeps it — dismissing a replacement is not a deletion.
+    withdrawUnconfirmed(choosing.key);
     setChoosing(null);
   };
 
@@ -572,6 +674,18 @@ export default function CardEditorScreen() {
             },
           ]
         : []),
+      // Named for the state it would move to, like every other switch here. It
+      // decides how the *next* picture is drawn, so it stands whether or not
+      // the field already has one — changing your mind about a drawn picture is
+      // what "Inne obrazy" is for, and this says what those would be.
+      {
+        label: qualityOf(key) === 'accurate' ? 'Rysuj szybciej' : 'Rysuj dokładniej',
+        onPress: () =>
+          setDrawQuality((current) => ({
+            ...current,
+            [key]: qualityOf(key) === 'accurate' ? 'fast' : 'accurate',
+          })),
+      },
       // Hiding and removing are different answers to different problems, so
       // they are different entries: one is reversible and keeps the row's
       // content, the other frees the file and cannot be undone.
@@ -1127,7 +1241,12 @@ export default function CardEditorScreen() {
         onClose={() => setTaggingOpen(false)}
       />
 
-      <AddFieldSheet visible={adding} onClose={() => setAdding(false)} onAdd={addField} />
+      <AddFieldSheet
+        visible={adding}
+        onClose={() => setAdding(false)}
+        onAdd={addField}
+        defaultQuality={deckQuality}
+      />
 
       <ActionSheet
         visible={options !== null}

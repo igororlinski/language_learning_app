@@ -17,6 +17,7 @@ import {
   allTagsQuery,
   copyCards,
   deckLanguages,
+  deckPictureQuality,
   deckScheduling,
   deckTagsQuery,
   getCardTagNames,
@@ -90,6 +91,7 @@ import migration0013 from '../drizzle/0013_messy_nova.sql';
 import migration0014 from '../drizzle/0014_cultured_sphinx.sql';
 import migration0015 from '../drizzle/0015_adorable_cable.sql';
 import migration0016 from '../drizzle/0016_spotty_titanium_man.sql';
+import migration0017 from '../drizzle/0017_adorable_morph.sql';
 
 for (const migration of [
   migration0000,
@@ -109,6 +111,7 @@ for (const migration of [
   migration0014,
   migration0015,
   migration0016,
+  migration0017,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -1288,6 +1291,37 @@ updateDeck(langDeck.id, {
 });
 
 check('kilka jezykow na stronie tez', deckLanguages(langDeck.id).front, ['polski', 'łacina']);
+
+group('Domyslna jakosc obrazow w talii');
+
+/**
+ * The same rule as the languages and the weights above: what the deck editor
+ * sends has to come back. A default that silently reverted would look exactly
+ * like a user who never changed it.
+ */
+check('nowa talia rysuje dokladnie', deckPictureQuality(langDeck.id), 'accurate');
+
+updateDeck(langDeck.id, {
+  name: 'Angielski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  imageQuality: 'fast',
+});
+
+check('wybrana jakosc wraca z bazy', deckPictureQuality(langDeck.id), 'fast');
+
+// A save that says nothing about pictures must not quietly undo the choice…
+updateDeck(langDeck.id, {
+  name: 'Angielski po zmianie',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  imageQuality: 'fast',
+});
+
+check('i przezywa zapis reszty formularza', deckPictureQuality(langDeck.id), 'fast');
+
+// …and a deck that never existed answers with the default rather than throwing.
+check('nieznana talia oddaje domyslna', deckPictureQuality(9999), 'accurate');
 
 // Two spellings of one language are one language, or the future reader would
 // be told the question is in two.

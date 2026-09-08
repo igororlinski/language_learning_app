@@ -41,6 +41,25 @@ export const FIELD_KINDS = ['text', 'audio', 'image', 'video', 'ai-image', 'mnem
 export type FieldSide = (typeof FIELD_SIDES)[number];
 export type FieldKind = (typeof FIELD_KINDS)[number];
 
+/**
+ * How much care a generated picture is drawn with.
+ *
+ * An outcome, not a model: which model draws a careful picture is settled in the
+ * Worker, where changing it costs a deploy instead of a new build on a phone.
+ * The difference is about five times the wait and whether the subject fills the
+ * frame — see `src/lib/ai-image.ts`.
+ *
+ * It lives here, beside the other column enums, because a deck stores one as its
+ * default. Declared before `decks` for the reason `FIELD_SIDES` is: drizzle-kit
+ * really loads this file, and a constant used above its declaration fails at
+ * startup rather than in `tsc`.
+ */
+export const PICTURE_QUALITIES = ['accurate', 'fast'] as const;
+export type PictureQuality = (typeof PICTURE_QUALITIES)[number];
+
+/** Careful, because the wait is paid once in the editor and never in review. */
+export const DEFAULT_PICTURE_QUALITY: PictureQuality = 'accurate';
+
 export const decks = sqliteTable('decks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
@@ -96,6 +115,19 @@ export const decks = sqliteTable('decks', {
    */
   frontLanguages: text('front_languages'),
   backLanguages: text('back_languages'),
+  /**
+   * Which way this deck's generated pictures lean, careful or quick.
+   *
+   * A default rather than a rule: it is what a new field starts with and what
+   * the "+" sheet opens on, and the gear in the field overrides it for the run
+   * at hand. It sits on the deck for the same reason the default card layout
+   * and the daily limits do — it decides how new cards in *this* deck are made,
+   * and a deck of long sentences wants something different from a deck of
+   * single words.
+   */
+  imageQuality: text('image_quality', { enum: PICTURE_QUALITIES })
+    .notNull()
+    .default(DEFAULT_PICTURE_QUALITY),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .$defaultFn(() => new Date()),

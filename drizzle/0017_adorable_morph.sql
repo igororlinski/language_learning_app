@@ -1,0 +1,1 @@
+ALTER TABLE `decks` ADD `image_quality` text DEFAULT 'accurate' NOT NULL;

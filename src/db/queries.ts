@@ -42,6 +42,7 @@ import {
   decks,
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
+  DEFAULT_PICTURE_QUALITY,
   fsrsState,
   reviewLogs,
   tags,
@@ -51,6 +52,7 @@ import {
   type FieldSide,
   type NewCardOrder,
   type NewCardPlacement,
+  type PictureQuality,
 } from './schema';
 
 /** The transaction handle drizzle hands to a `db.transaction` callback. */
@@ -701,6 +703,19 @@ export function deckLanguages(deckId: number): DeckLanguages {
 }
 
 /**
+ * Which way this deck's pictures lean, for the field that is about to draw one.
+ *
+ * Read from the deck rather than remembered by the editor: it is a standing
+ * preference, not a choice being made again on every card. What the editor's
+ * gear does with it afterwards belongs to that one run and is never written
+ * back — otherwise "just this once, quickly" would quietly become the deck's
+ * new default.
+ */
+export function deckPictureQuality(deckId: number): PictureQuality {
+  return getDeck(deckId)?.imageQuality ?? DEFAULT_PICTURE_QUALITY;
+}
+
+/**
  * Every language any deck already names, so one can be reused rather than
  * retyped — the same courtesy tags get, without a table of their own: a
  * language is only ever a name, so the deck rows already hold the whole set.
@@ -824,6 +839,8 @@ export type DeckInput = {
   languages?: DeckLanguages;
   /** The layout every new card in this deck starts from. */
   newCardLayout?: CardLayout;
+  /** Which way generated pictures lean here — a default, overridable per run. */
+  imageQuality?: PictureQuality;
 };
 
 /** The columns a deck form writes, with the queue options defaulted. */
@@ -857,6 +874,7 @@ function deckValues(input: DeckInput) {
     // in silence.
     frontLanguages: languagesJson(languages.front),
     backLanguages: languagesJson(languages.back),
+    imageQuality: input.imageQuality ?? DEFAULT_PICTURE_QUALITY,
   };
 }
 

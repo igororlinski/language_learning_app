@@ -35,7 +35,58 @@
  * The address it prints goes into `WORKER_URL` in `src/lib/ai-worker.ts`.
  */
 
-const IMAGE_MODEL = '@cf/black-forest-labs/flux-1-schnell';
+/**
+ * The image models this endpoint will run, by the short name a caller asks for.
+ *
+ * An allowlist rather than a passthrough, for the same reason `/mnemonic` takes
+ * four strings instead of messages: the address is public, and a Worker that
+ * runs whatever model it is handed is a Worker somebody else will run.
+ *
+ * **Measured 2026-09-08** against the 10 000 neurons that are free each day —
+ * per 1024x1024 picture, and per association, which draws three at once:
+ *
+ *   schnell     57,6   →   173 per association   ~57 a day
+ *   klein-4b   104,0   →   312 per association   ~32 a day
+ *
+ * Two models were compared here and then deliberately dropped, which is worth
+ * more than their names: **`flux-2-dev` cost ~8000 neurons for a single
+ * picture** — four fifths of the day, from one request, where the pricing page's
+ * per-tile arithmetic predicted 150 — and `flux-2-klein-9b` is quoted at
+ * 1363,64 per megapixel, which is the same order of magnitude. Neither is
+ * reachable any more: the app never asked for them, and leaving them here meant
+ * a public address where one POST could burn the day. Their prices are written
+ * down so nobody re-adds them from the cennik alone.
+ */
+const IMAGE_MODELS = {
+  schnell: '@cf/black-forest-labs/flux-1-schnell',
+  'klein-4b': '@cf/black-forest-labs/flux-2-klein-4b',
+};
+
+/**
+ * The two speeds the app knows about, and why each is a list.
+ *
+ * The app asks for an **outcome** — careful or quick — never for a model, the
+ * same way it asks `/mnemonic` for an association and never learns who wrote
+ * it. Which model that is stays here, where changing it costs a deploy instead
+ * of a new build on somebody's phone.
+ *
+ * Measured 2026-09-08 on the same scene, three pictures in parallel:
+ * schnell 3,9 s, klein-4b 20,8 s. Quick is five times faster; careful fills
+ * the frame instead of leaving a doodle in a field of white.
+ *
+ * The second entry is what happens when the first refuses, and it is not
+ * theoretical: schnell turned down "a young military cadet sitting on a wooden
+ * chair" as NSFW (`8007`) — one of the very examples our own mnemonic prompt
+ * teaches — where klein drew it without complaint. A slow picture beats a
+ * baffling refusal, so quick falls back to careful and careful to quick.
+ */
+const QUALITY_MODELS = {
+  fast: ['schnell', 'klein-4b'],
+  accurate: ['klein-4b', 'schnell'],
+};
+
+/** What a caller that asks for neither a speed nor a model gets. */
+const DEFAULT_QUALITY = 'fast';
 
 /**
  * The biggest instruction-following model Workers AI offers on the free tier.
@@ -133,6 +184,14 @@ const MAX_TERM = 200;
 
 /** The image model's ceiling. The app asks for fewer; see its STEPS. */
 const MAX_STEPS = 8;
+
+/**
+ * The square every picture comes back as. Schnell draws 1024x1024 without being
+ * asked; the FLUX 2 models want to be told, and telling them the same number is
+ * what makes the comparison a comparison. It is also what the neuron price is
+ * quoted against — four 512x512 tiles.
+ */
+const IMAGE_SIZE = 1024;
 
 /** Room for the JSON object and nothing else. */
 const MAX_TOKENS = 900;
@@ -480,6 +539,36 @@ async function geminiAsk(env, prompt, model) {
 
 /* ------------------------------------------------------------------ routes */
 
+/**
+ * What each model wants on its input — which is not the same thing twice.
+ *
+ * `schnell` takes plain JSON and prices itself by `steps`: it is the distilled
+ * model whose whole bill is how many you ask for.
+ *
+ * The FLUX 2 models take a **multipart form** instead, and refuse anything else
+ * (`5006: required properties at '/' are 'multipart'`). That door exists
+ * because they also accept reference images to work from — `input_image_0`
+ * upwards — so even a bare prompt has to arrive through it. Nothing here sends
+ * one, but that is why the shape is what it is.
+ */
+function imageInput(wanted, prompt, steps) {
+  if (wanted === 'schnell') return { prompt, steps };
+
+  const form = new FormData();
+
+  form.append('prompt', prompt);
+  form.append('width', String(IMAGE_SIZE));
+  form.append('height', String(IMAGE_SIZE));
+
+  // `Response` is the shortest way to a stream and its boundary header; the
+  // binding wants both, and the boundary cannot be written by hand.
+  const carrier = new Response(form);
+
+  return {
+    multipart: { body: carrier.body, contentType: carrier.headers.get('content-type') },
+  };
+}
+
 async function handleImage(request, env) {
   let body;
 
@@ -498,16 +587,45 @@ async function handleImage(request, env) {
     ? Math.min(Math.max(Math.trunc(asked), 1), MAX_STEPS)
     : MAX_STEPS;
 
-  const { result, failure } = await run(env, IMAGE_MODEL, { prompt, steps });
-  if (failure) return failure;
+  // `Object.hasOwn`, not a bare lookup: `{"model":"constructor"}` would
+  // otherwise hand `env.AI.run` a function off the prototype.
+  const named = str(body?.model, 32);
 
-  // The app writes this straight into a file, so an absent image must arrive
-  // as a failure rather than as `undefined` in a success envelope.
-  if (typeof result?.image !== 'string' || result.image.length === 0) {
-    return failed('The model returned no image.', 502);
+  if (named && !Object.hasOwn(IMAGE_MODELS, named)) {
+    return failed(
+      `No image model called "${named}". Have: ${Object.keys(IMAGE_MODELS).join(', ')}.`,
+      400
+    );
   }
 
-  return ok({ image: result.image });
+  const quality = str(body?.quality, 16);
+
+  // Naming a model is the terminal's door: one model and no fallback, so that
+  // a comparison compares what it says it compares. The app names a speed.
+  const chain = named
+    ? [named]
+    : QUALITY_MODELS[Object.hasOwn(QUALITY_MODELS, quality) ? quality : DEFAULT_QUALITY];
+
+  let refusal = null;
+
+  for (const name of chain) {
+    const attempt = await run(env, IMAGE_MODELS[name], imageInput(name, prompt, steps));
+    const image = attempt.result?.image;
+
+    // Which model drew it, the way `/mnemonic` says who wrote the association:
+    // the app ignores the field, and from a terminal it is the only way to know
+    // that what you asked for is what you got.
+    if (typeof image === 'string' && image.length > 0) {
+      return ok({ image, source: IMAGE_MODELS[name] });
+    }
+
+    // A model answering without a picture has failed exactly as much as one
+    // that threw — the app writes this straight into a file, so `undefined`
+    // inside a success envelope must never be one of the shapes it can get.
+    refusal = attempt.failure ?? failed('The model returned no image.', 502);
+  }
+
+  return refusal;
 }
 
 async function handleMnemonic(request, env) {
