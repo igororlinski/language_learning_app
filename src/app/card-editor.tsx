@@ -76,6 +76,17 @@ import {
 } from '@/lib/field-rows';
 
 /**
+ * One round of proposals, and what it was asked for.
+ *
+ * `language` is the one the model was restricted to, or null when it was left
+ * to work down the deck's whole ranking. Kept beside the options because the
+ * sheet says which round you are looking at — three sound-alikes mean something
+ * different when you asked for English than when the model chose English by
+ * itself.
+ */
+type Proposals = { options: Mnemonic[]; language: string | null };
+
+/**
  * What the choice sheet is showing, when it is showing anything.
  *
  * The two steps are one flow but not one state: between them the files do
@@ -83,7 +94,22 @@ import {
  * them apart is what makes "dismiss" mean the same thing in both places.
  */
 type Choosing =
-  | { step: 'association'; key: string; options: Mnemonic[] }
+  | {
+      step: 'association';
+      key: string;
+      /**
+       * Every round asked for in this run, oldest first, with `at` pointing at
+       * the one on screen — a browser history, not a stack.
+       *
+       * Asking again is cheap and the answer is random, so the round you just
+       * threw away may well have been the good one. Going back has to be
+       * possible, and going forward again after that, or "regenerate" is a
+       * button that quietly destroys work. Asking for a new round from the
+       * middle of the history drops what was ahead, exactly as a browser does.
+       */
+      history: Proposals[];
+      at: number;
+    }
   | { step: 'picture'; key: string; association: Mnemonic; files: string[] };
 
 const BASE_LABELS: Record<BaseKind, string> = {
@@ -152,6 +178,9 @@ export default function CardEditorScreen() {
   const [generating, setGenerating] = useState<{ key: string; label: string } | null>(null);
 
   const [choosing, setChoosing] = useState<Choosing | null>(null);
+
+  /** Whether the "regenerate in…" list under the caret is open. */
+  const [pickingLanguage, setPickingLanguage] = useState(false);
 
   /**
    * Which mnemonic fields draw a picture, by row key. Absent means yes: the
@@ -477,23 +506,52 @@ export default function CardEditorScreen() {
    * association drawn badly, and merging them into a single "try again" is
    * what made the old two reroll buttons necessary in the first place.
    */
+  /**
+   * Thrown from a handler, where the error boundary cannot reach it.
+   *
+   * Declared above everything that calls it: under the React Compiler's rules a
+   * value used before its declaration is an error, not a hoisting nicety.
+   */
+  const failedMnemonic = (error: unknown) => {
+    const message =
+      error instanceof MediaTooLargeError
+        ? `Obraz ma ${formatBytes(error.size)}, a limit to ${formatBytes(MEDIA_LIMITS.mnemonic)}.`
+        : error instanceof AiError
+          ? error.message
+          : 'Coś poszło nie tak.';
+
+    Alert.alert('Nie zrobiono skojarzenia', message, [{ text: 'OK' }], { cancelable: true });
+  };
+
+  /**
+   * One round of proposals, optionally restricted to a single language the
+   * learner has.
+   *
+   * Restricting is done by sending that language as the whole ranking rather
+   * than by a new instruction: the prompt already works down the list it is
+   * given, so a list of one is a list it cannot leave. Nothing in the Worker
+   * had to learn about this.
+   */
+  const askForOptions = (language: string | null): Promise<Mnemonic[]> =>
+    requestMnemonics({
+      term: back,
+      // English names, not codes and not the Polish labels: the prompt in the
+      // Worker is written in English, and "Portuguese (European)" is worth
+      // more to the model than „portugalski" or `pt-PT`.
+      termLanguage: languages.back ? languageEnglish(languages.back) : '',
+      meaning: front,
+      // In the deck's order, which is the learner's ranking of how readily
+      // each language comes to mind — the model works down it.
+      meaningLanguages: (language ? [language] : languages.front).map(languageEnglish),
+    });
+
   const proposeMnemonic = async (key: string) => {
     try {
       setGenerating({ key, label: 'Szukam skojarzeń…' });
 
-      const options = await requestMnemonics({
-        term: back,
-        // English names, not codes and not the Polish labels: the prompt in the
-        // Worker is written in English, and "Portuguese (European)" is worth
-        // more to the model than „portugalski" or `pt-PT`.
-        termLanguage: languages.back ? languageEnglish(languages.back) : '',
-        meaning: front,
-        // In the deck's order, which is the learner's ranking of how readily
-        // each language comes to mind — the model works down it.
-        meaningLanguages: languages.front.map(languageEnglish),
-      });
+      const options = await askForOptions(null);
 
-      setChoosing({ step: 'association', key, options });
+      setChoosing({ step: 'association', key, history: [{ options, language: null }], at: 0 });
     } catch (error) {
       failedMnemonic(error);
       withdrawUnconfirmed(key);
@@ -501,6 +559,156 @@ export default function CardEditorScreen() {
       setGenerating(null);
     }
   };
+
+  /**
+   * Another round, for the same field, without leaving the sheet.
+   *
+   * The failure is deliberately quiet about the field: a round that does not
+   * arrive leaves the previous one on screen and the user where they were.
+   * Withdrawing the field here — as a first, failed run does — would throw away
+   * three perfectly good proposals because a fourth did not come.
+   */
+  const regenerate = async (language: string | null) => {
+    if (choosing?.step !== 'association') return;
+
+    const { key } = choosing;
+
+    try {
+      setGenerating({ key, label: 'Szukam skojarzeń…' });
+
+      const options = await askForOptions(language);
+
+      setChoosing((current) =>
+        current?.step === 'association' && current.key === key
+          ? {
+              ...current,
+              // Whatever was ahead in the history is dropped, the way a browser
+              // drops it: the user went back and then chose a different road.
+              history: [...current.history.slice(0, current.at + 1), { options, language }],
+              at: current.at + 1,
+            }
+          : current
+      );
+    } catch (error) {
+      failedMnemonic(error);
+    } finally {
+      setGenerating(null);
+    }
+  };
+
+  /** Steps through the rounds already asked for; nothing is requested again. */
+  const stepHistory = (by: -1 | 1) =>
+    setChoosing((current) =>
+      current?.step === 'association' &&
+      current.at + by >= 0 &&
+      current.at + by < current.history.length
+        ? { ...current, at: current.at + by }
+        : current
+    );
+
+  /** The round on screen, when a round is on screen. */
+  const round = choosing?.step === 'association' ? choosing.history[choosing.at] : null;
+
+  /**
+   * Asking again, and walking back through what was asked before.
+   *
+   * The arrows come first and the verb after, because the arrows are about what
+   * is already here and the verb spends a call. The caret exists only when the
+   * deck lists more than one language the learner has: with one, "ask again in
+   * Polish" and "ask again" are the same sentence.
+   */
+  const busyHere = choosing?.step === 'association' && generating?.key === choosing.key;
+
+  const associationToolbar =
+    choosing?.step !== 'association' ? null : (
+      <View style={styles.regenerate}>
+        <View style={styles.rowActions}>
+          <Pressable
+            onPress={() => stepHistory(-1)}
+            disabled={choosing.at === 0 || busyHere}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: choosing.at === 0 || busyHere }}
+            accessibilityLabel="Poprzednie propozycje">
+            <ThemedText
+              style={{ color: theme.accent, opacity: choosing.at === 0 || busyHere ? 0.3 : 1 }}>
+              ←
+            </ThemedText>
+          </Pressable>
+
+          <Pressable
+            onPress={() => stepHistory(1)}
+            disabled={choosing.at >= choosing.history.length - 1 || busyHere}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityState={{
+              disabled: choosing.at >= choosing.history.length - 1 || busyHere,
+            }}
+            accessibilityLabel="Następne propozycje">
+            <ThemedText
+              style={{
+                color: theme.accent,
+                opacity: choosing.at >= choosing.history.length - 1 || busyHere ? 0.3 : 1,
+              }}>
+              →
+            </ThemedText>
+          </Pressable>
+
+          <Pressable
+            onPress={() => {
+              setPickingLanguage(false);
+              void regenerate(null);
+            }}
+            disabled={busyHere}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: busyHere }}
+            accessibilityLabel="Przegeneruj propozycje">
+            <ThemedText type="small" style={{ color: theme.accent, opacity: busyHere ? 0.4 : 1 }}>
+              {busyHere ? 'Szukam…' : 'Przegeneruj'}
+            </ThemedText>
+          </Pressable>
+
+          {languages.front.length > 1 ? (
+            <Pressable
+              onPress={() => setPickingLanguage((open) => !open)}
+              disabled={busyHere}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: pickingLanguage, disabled: busyHere }}
+              accessibilityLabel="Przegeneruj w wybranym języku">
+              <ThemedText style={{ color: theme.accent, opacity: busyHere ? 0.4 : 1 }}>
+                {pickingLanguage ? '▴' : '▾'}
+              </ThemedText>
+            </Pressable>
+          ) : null}
+        </View>
+
+        {/* Pushes the sheet open rather than floating over it — the same
+            decision `Dropdown` makes, and for the same reason: a panel laid
+            over three cards would cover the very things being compared. */}
+        {pickingLanguage ? (
+          <View style={styles.regenerateLanguages}>
+            {languages.front.map((code) => (
+              <Pressable
+                key={code}
+                onPress={() => {
+                  setPickingLanguage(false);
+                  void regenerate(code);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`Przegeneruj w: ${languageLabel(code)}`}
+                style={({ pressed }) => [
+                  styles.regenerateLanguage,
+                  { backgroundColor: pressed ? theme.backgroundSelected : 'transparent' },
+                ]}>
+                <ThemedText type="small">{`Przegeneruj w: ${languageLabel(code)}`}</ThemedText>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+      </View>
+    );
 
   /**
    * Three drawings of one association, saved and ready to be compared.
@@ -624,11 +832,12 @@ export default function CardEditorScreen() {
   const pickAssociation = (index: number) => {
     if (choosing?.step !== 'association') return;
 
-    const { key, options } = choosing;
-    const association = options[index];
+    const { key } = choosing;
+    const association = choosing.history[choosing.at]?.options[index];
 
     if (!association) return;
 
+    setPickingLanguage(false);
     setChoosing(null);
 
     // A field set to "same associations only" is finished here: the sentence
@@ -666,6 +875,7 @@ export default function CardEditorScreen() {
     // ever the container for the answer being declined. One that already held
     // something keeps it — dismissing a replacement is not a deletion.
     withdrawUnconfirmed(choosing.key);
+    setPickingLanguage(false);
     setChoosing(null);
   };
 
@@ -773,18 +983,6 @@ export default function CardEditorScreen() {
           ]
         : []),
     ];
-  };
-
-  /** Thrown from a handler, where the error boundary cannot reach it. */
-  const failedMnemonic = (error: unknown) => {
-    const message =
-      error instanceof MediaTooLargeError
-        ? `Obraz ma ${formatBytes(error.size)}, a limit to ${formatBytes(MEDIA_LIMITS.mnemonic)}.`
-        : error instanceof AiError
-          ? error.message
-          : 'Coś poszło nie tak.';
-
-    Alert.alert('Nie zrobiono skojarzenia', message, [{ text: 'OK' }], { cancelable: true });
   };
 
   /**
@@ -1371,11 +1569,21 @@ export default function CardEditorScreen() {
         visible={choosing !== null}
         title={choosing?.step === 'picture' ? 'Wybierz obraz' : 'Wybierz skojarzenie'}
         // The sentence is what the three drawings have in common, so it is
-        // shown once above them rather than repeated under each.
-        subtitle={choosing?.step === 'picture' ? choosing.association.sentence : undefined}
+        // shown once above them rather than repeated under each. On the
+        // association step the same line says which language this round was
+        // asked for — but only when it was asked for one, because "the deck's
+        // usual order" is not news.
+        subtitle={
+          choosing?.step === 'picture'
+            ? choosing.association.sentence
+            : round?.language
+              ? `Szukane w: ${languageLabel(round.language)}`
+              : undefined
+        }
+        toolbar={associationToolbar}
         choices={
           choosing?.step === 'association'
-            ? choosing.options.map((option, index) => ({
+            ? (round?.options ?? []).map((option, index) => ({
                 key: String(index),
                 // What the field will hold, so the choice is between the three
                 // things you are choosing between and not their explanations —
@@ -1456,6 +1664,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: Spacing.three,
+  },
+  /** The strip under the three candidates: history arrows, then the verb. */
+  regenerate: {
+    paddingHorizontal: Spacing.four,
+    paddingTop: Spacing.three,
+    gap: Spacing.two,
+  },
+  regenerateLanguages: {
+    gap: Spacing.half,
+  },
+  regenerateLanguage: {
+    paddingVertical: Spacing.two,
+    paddingHorizontal: Spacing.two,
+    borderRadius: Radius.medium,
   },
   add: {
     alignSelf: 'center',

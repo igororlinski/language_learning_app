@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Image, Modal, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -25,6 +26,17 @@ export type ChoiceSheetProps = {
   /** What every entry has in common — shown once, above them. */
   subtitle?: string;
   choices: Choice[];
+  /**
+   * Anything the caller wants between the entries and "Anuluj" — in practice
+   * the controls for asking again and for stepping through what was asked
+   * before.
+   *
+   * A slot rather than a set of props (`onRegenerate`, `canGoBack`, …) because
+   * none of it is the sheet's business: this component knows how to show
+   * candidates and take one, and every question about *where the candidates
+   * came from* belongs to the screen that asked for them.
+   */
+  toolbar?: ReactNode;
   onPick: (key: string) => void;
   onCancel: () => void;
 };
@@ -51,6 +63,7 @@ export function ChoiceSheet({
   title,
   subtitle,
   choices,
+  toolbar,
   onPick,
   onCancel,
 }: ChoiceSheetProps) {
@@ -128,6 +141,8 @@ export function ChoiceSheet({
               );
             })}
           </View>
+
+          {toolbar}
 
           <Pressable
             onPress={onCancel}
