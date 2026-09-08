@@ -360,8 +360,17 @@ export default function DeckEditorScreen() {
     picked: string[],
     setPicked: (next: string[]) => void,
     open: () => void,
-    /** Numbered, because on the question side the order is the instruction. */
-    ranked = false
+    {
+      /** Numbered, because on the question side the order is the instruction. */
+      ranked = false,
+      /**
+       * Whether this row holds exactly one language. The chip that opens the
+       * sheet then disappears as soon as it is filled: „+ język" beside a
+       * language that cannot have a second one promises something the sheet
+       * will not do. Removing the chip that is there brings it back.
+       */
+      single = false,
+    }: { ranked?: boolean; single?: boolean } = {}
   ) => (
     <View style={styles.limits}>
       <ThemedText type="smallBold">{label}</ThemedText>
@@ -385,21 +394,23 @@ export default function DeckEditorScreen() {
             </ThemedText>
           </Pressable>
         ))}
-        <Pressable
-          onPress={open}
-          accessibilityRole="button"
-          accessibilityLabel={label}
-          style={({ pressed }) => [
-            styles.language,
-            {
-              borderColor: theme.border,
-              backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
-            },
-          ]}>
-          <ThemedText type="small" themeColor="textSecondary">
-            {picked.length > 0 ? '+ język' : '+ języki'}
-          </ThemedText>
-        </Pressable>
+        {single && picked.length > 0 ? null : (
+          <Pressable
+            onPress={open}
+            accessibilityRole="button"
+            accessibilityLabel={label}
+            style={({ pressed }) => [
+              styles.language,
+              {
+                borderColor: theme.border,
+                backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+              },
+            ]}>
+            <ThemedText type="small" themeColor="textSecondary">
+              {picked.length > 0 ? '+ język' : single ? '+ język' : '+ języki'}
+            </ThemedText>
+          </Pressable>
+        )}
       </View>
     </View>
   );
@@ -605,7 +616,7 @@ export default function DeckEditorScreen() {
           frontLanguages,
           setFrontLanguages,
           () => setLanguageSheet('front'),
-          true
+          { ranked: true }
         )}
 
         {/* One, and only one. It decides which voice reads the card and which
@@ -615,7 +626,8 @@ export default function DeckEditorScreen() {
           'Język odpowiedzi',
           backLanguage ? [backLanguage] : [],
           (next) => setBackLanguage(next[0] ?? null),
-          () => setLanguageSheet('back')
+          () => setLanguageSheet('back'),
+          { single: true }
         )}
 
         {/* Stoi przy językach, bo dotyczy tej samej funkcji: skojarzeń. To
