@@ -31,22 +31,46 @@ const MAX_SCENE = 400;
 
 /** One association, whole. */
 export type Mnemonic = {
-  /** The native word that sounds like the foreign one — "komar". */
+  /**
+   * The native word that sounds like the foreign one — "komar".
+   *
+   * Sometimes **two** words with a space between them ("opat nieto"), which is
+   * how a long foreign word gets matched at all: few languages hold a single
+   * word that echoes four syllables, and two short ones side by side do. It
+   * stays one string because it is one keyword — it is what the field shows and
+   * what the learner reads.
+   */
   keyword: string;
-  /** The scene in the learner's own language — "Komar je kanapkę." */
+  /**
+   * The scene written out — "Komar je kanapkę." — in whichever of the learner's
+   * languages the keyword came from, meaning and all. A sound-alike borrowed
+   * from their English gets an English sentence: a bare English noun inflected
+   * by Polish grammar is a sentence in neither language.
+   *
+   * **Empty when the keyword spans two of their languages.** Half Polish and
+   * half Spanish belongs to neither, so any sentence built on it is broken in
+   * one of them — there the two words and the picture are the association, and
+   * nothing is written at all.
+   */
   sentence: string;
   /** The same scene in English, for the image model. */
   prompt: string;
   /**
-   * Which of the learner's languages the keyword came from, as the model names
-   * it in English ("Polish", "English") — empty when it did not say.
+   * Which of the learner's languages the keyword leans on, as the model names
+   * them in English ("Polish", "English") — empty when it did not say.
+   *
+   * A **list**, one entry per word of the keyword, because a pair may be half
+   * one language and half another: a learner who reads Polish and Spanish hears
+   * both, so „opat nieto" is a real match to them rather than a trick. One
+   * string could only have said "Polish + Spanish", which nothing could look
+   * up.
    *
    * Optional on purpose: it is worth showing when the model had to reach past
-   * the first language to find a match ("this one leans on English"), and worth
+   * the first language to find a match ("this one leans on Spanish"), and worth
    * nothing at all when it did not. A missing one must never invalidate an
    * otherwise good association, so it is not among the parts a mnemonic needs.
    */
-  language?: string;
+  languages?: string[];
 };
 
 /**
@@ -130,6 +154,30 @@ const objectsIn = (raw: string, wanted: number): string[] => {
   return found;
 };
 
+/**
+ * Which of the learner's languages an association leans on.
+ *
+ * Both spellings are accepted, in keeping with this parser's character —
+ * forgiving about the packaging, strict about the contents. The schema asks
+ * Gemini for the list, but the fallback path answers in free-form text and has
+ * no schema holding it to anything, so a model that writes the older single
+ * `keywordLanguage` is understood rather than silently stripped of its label.
+ */
+const languagesFrom = (object: Record<string, unknown>): string[] => {
+  const named = Array.isArray(object.keywordLanguages)
+    ? object.keywordLanguages
+    : [object.keywordLanguage];
+
+  return [...new Set(named.map((name) => clean(name, MAX_KEYWORD)).filter(Boolean))];
+};
+
+/**
+ * Whether the keyword is half in one of the learner's languages and half in
+ * another — the one case with no sentence to write.
+ */
+const spansTwoLanguages = (mnemonic: Mnemonic): boolean =>
+  new Set(mnemonic.languages ?? []).size > 1;
+
 /** One association out of one JSON object, or null when a piece is missing. */
 const oneFrom = (source: string): Mnemonic | null => {
   let parsed: unknown;
@@ -148,12 +196,21 @@ const oneFrom = (source: string): Mnemonic | null => {
     keyword: clean(object.keyword, MAX_KEYWORD),
     sentence: clean(object.sentence, MAX_SENTENCE),
     prompt: clean(object.prompt, MAX_SCENE),
-    language: clean(object.keywordLanguage, MAX_KEYWORD),
+    languages: languagesFrom(object),
   };
 
-  // All three or nothing. Two out of three is a field that looks filled in and
-  // cannot be rerolled, which is worse than one that plainly failed.
-  if (!mnemonic.keyword || !mnemonic.sentence || !mnemonic.prompt) return null;
+  // The keyword and the scene are what a field cannot exist without: one is
+  // what the learner remembers, the other is what redraws the picture. A field
+  // missing either looks filled in and cannot be rerolled, which is worse than
+  // one that plainly failed.
+  if (!mnemonic.keyword || !mnemonic.prompt) return null;
+
+  // The sentence is required too — except for the one shape where having none
+  // is the right answer. A keyword split across two of the learner's languages
+  // belongs to neither, so any sentence built on it is broken in one of them;
+  // there the two words and the picture are the whole association. Everywhere
+  // else a missing sentence is a model that stopped halfway.
+  if (!mnemonic.sentence && !spansTwoLanguages(mnemonic)) return null;
 
   return mnemonic;
 };

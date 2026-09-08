@@ -168,16 +168,24 @@ const MNEMONIC_SCHEMA = {
     properties: {
       sounds: { type: 'string' },
       keyword: { type: 'string' },
-      // Which of the learner's languages the keyword belongs to. Demanded
-      // rather than inferred: a model allowed to reach into a second language
-      // must say when it did, or the user cannot tell a Polish sound-alike from
-      // an English one — and the two are worth different amounts to them.
-      keywordLanguage: { type: 'string' },
+      // Which of the learner's languages the keyword leans on. Demanded rather
+      // than inferred: a model allowed to reach into a second language must say
+      // when it did, or the user cannot tell a Polish sound-alike from an
+      // English one — and the two are worth different amounts to them.
+      //
+      // A **list**, because a keyword may be two words side by side and the two
+      // may come from two different KNOWN languages — which is the whole point
+      // of allowing pairs for a learner who has more than one. One string could
+      // only have said "Polish + Spanish", which nothing could look up.
+      //
+      // No minItems/maxItems here: the prompt says one or two, and every extra
+      // schema feature is another way for a request to come back a 400.
+      keywordLanguages: { type: 'array', items: { type: 'string' } },
       sentence: { type: 'string' },
       prompt: { type: 'string' },
     },
-    required: ['sounds', 'keyword', 'keywordLanguage', 'sentence', 'prompt'],
-    propertyOrdering: ['sounds', 'keyword', 'keywordLanguage', 'sentence', 'prompt'],
+    required: ['sounds', 'keyword', 'keywordLanguages', 'sentence', 'prompt'],
+    propertyOrdering: ['sounds', 'keyword', 'keywordLanguages', 'sentence', 'prompt'],
   },
 };
 
@@ -329,9 +337,28 @@ const languageRanking = (names) =>
  * The examples are not decoration. Without them a model tends to answer with a
  * translation, an etymology, or a sound-alike in the *wrong* language, all of
  * which are useless and all of which look plausible. They also carry what the
- * rules only assert: `Buch` → `buk` is an approximate match to a real word, and
+ * rules only assert: `kadet` is a fragment match, `garnek` a loose one, and
  * every sentence in them is plain correct grammar rather than a pile of
  * alliteration.
+ *
+ * **A keyword may be two words (2026-09-09.)** A single word only works while
+ * the foreign word is short: nothing in Polish echoes four syllables of
+ * `opinionated`, so the honest answer is two short real words side by side,
+ * each carrying half the sound. And when the learner has more than one KNOWN
+ * language, the two halves may come from two of them — `opat` + Spanish
+ * `nieto` is a real match to somebody who hears both, not a trick played on
+ * them.
+ *
+ * It is a **fallback, and the prompt is built so it reads as one**: the rule
+ * says a single word wins any tie, and the pair example sits last, after four
+ * single-word ones. Order matters more than instruction here — a pair example
+ * placed first would teach pairs as the default, which is the same mistake the
+ * old "make it strange" wording made in the other direction.
+ *
+ * The cost is a contract change: `keywordLanguages` is a list, because one
+ * string could only have said "Polish + Spanish" and nothing could look that
+ * up. Nothing stored changes — the column keeps keyword, scene and sentence,
+ * and never kept the language.
  */
 function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
   const system = [
@@ -350,8 +377,8 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
     '  right and can be pictured; then to language 3 the same way;',
     '- a good match in language 2 beats a poor one in language 1, but an equal',
     '  match in language 1 always wins. The higher up the list, the better.',
-    'Say which language you used in keywordLanguage, spelled as it appears in',
-    'the KNOWN list.',
+    'Name the language of every keyword word in keywordLanguages, spelled as it',
+    'appears in the KNOWN list.',
     '',
     'The sound-alike word must:',
     '- be a REAL word of that language, one a dictionary has and an ordinary',
@@ -362,36 +389,85 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
     '- name something concrete you could photograph — a thing, an animal, a',
     '  person. A plain noun is best;',
     '- not be a translation of the FOREIGN word, and not be a word of a language',
-    '  outside the KNOWN list.',
+    '  outside the KNOWN list;',
+    '- NEVER be the FOREIGN word itself re-spelled, and never a piece of it cut',
+    '  off and dressed up. `janela` does not give you "żanela" or "nela"; those',
+    '  are the foreign word wearing a hat. Ask yourself: did this word exist',
+    '  before I saw the FOREIGN word, and would a dictionary of that language',
+    '  have it? If not, it is not a word, however right it sounds. This is THE',
+    '  failure of this task — every other mistake here is survivable.',
     '',
     'A rough sound match is fine and expected. A real word that sounds roughly',
     'right is always better than an invented word that sounds exactly right.',
     '',
-    'Then write ONE short sentence in KNOWN language 1 — the one the learner',
-    'thinks in — containing BOTH the sound-alike word AND the MEANING. When the',
-    'keyword came from another language, keep it spelled as that language spells',
-    'it and let it sit inside the sentence unchanged. Plain, grammatically',
-    'correct, present tense, at most six words. Do not chase rhyme or',
-    'alliteration — a correct ordinary sentence is worth more than a clever',
-    'broken one.',
+    'When no single word in any KNOWN language sounds close enough, use TWO',
+    'short words side by side: the first carries the opening sounds, the second',
+    'carries the rest. Long FOREIGN words are where this happens — few languages',
+    'hold a single word that echoes four syllables.',
+    'Choose each half SEPARATELY, and walk the KNOWN list again for each one.',
+    'Language 1 being able to supply both halves does NOT mean it should: if',
+    'language 2 has a much closer word for the second half, take it from there.',
+    'A learner who reads two languages hears both, so half of one and half of',
+    'the other is a real match to them, not a trick — and a mixed pair that',
+    'sounds right beats a same-language pair that sounds forced.',
+    'Every rule above applies to EACH of the two words: both real, both spelled',
+    'as a dictionary spells them, both concrete — and the two together must make',
+    'one scene you could draw.',
+    'A pair is where invented words creep in, so guard it: cutting the FOREIGN',
+    'word in half and re-spelling the halves is NOT a pair of sound-alikes. Both',
+    'words must have existed before you saw the FOREIGN word.',
+    'One word always beats a pair when they sound equally close: one word is',
+    'easier to hold in the head. Never use more than two.',
+    'Do not split a SHORT foreign word. If any KNOWN language has a single word',
+    'that is a decent match, ALL THREE options should be single words — a pair',
+    'is for the long word that nothing echoes whole, and nothing else.',
+    'When your three options are pairs, change BOTH halves every time. Three',
+    'pairs ending in the same word — "malina tent", "małpa tent", "mewa tent" —',
+    'are one idea with three prefixes, and leave the learner nothing to choose',
+    'between. Find a different second half, even a slightly worse one.',
+    '',
+    'Then write ONE short sentence containing the sound-alike (BOTH words, when',
+    'it is a pair) AND the MEANING — in the language the sound-alike came from:',
+    '',
+    '- keyword from KNOWN language 1: write the sentence in language 1;',
+    '- keyword from a LOWER KNOWN language: write the sentence ENTIRELY in THAT',
+    '  language, with the MEANING translated into it as well. Never mix two',
+    '  languages in one sentence. The learner declared they read this language,',
+    '  so a whole sentence in it is easier than a broken one in another;',
+    '- a PAIR whose two words come from TWO DIFFERENT KNOWN languages: write NO',
+    '  sentence. Send sentence as an empty string "". No language owns such a',
+    '  pair, and picking one of them only produces a sentence that is broken in',
+    '  it. There the two words and the picture ARE the association.',
+    '',
+    'A pair from ONE language reads best with its two words next to each other,',
+    'in the order they carry the sound. Plain, grammatically correct, present',
+    'tense, at most six words — eight when the keyword is a pair, since two of',
+    'them are spent on the keyword itself. Do not chase rhyme or alliteration —',
+    'a correct ordinary sentence is worth more than a clever broken one.',
     '',
     'Answer with a JSON array of exactly THREE such objects and nothing else.',
     'The three must rest on THREE DIFFERENT sound-alike words — three angles on',
-    'the same foreign word, not one idea reworded. Put the one you believe in',
-    'most first: that is the best sound match, found as high up the KNOWN list',
-    'as possible.',
+    'the same foreign word, not one idea reworded. When they are pairs, they',
+    'must differ in BOTH words: three pairs sharing a half are one idea with',
+    'three prefixes, and the learner is choosing between one thing.',
+    'Put the one you believe in most first: that is the best sound match, found',
+    'as high up the KNOWN list as possible.',
     '',
-    '[{"sounds":"…","keyword":"…","keywordLanguage":"…","sentence":"…","prompt":"…"}, …]',
+    '[{"sounds":"…","keyword":"…","keywordLanguages":["…"],"sentence":"…","prompt":"…"}, …]',
     '',
     'sounds   — the FOREIGN word written out as it sounds, spelled the way',
     '           KNOWN language 1 spells things.',
-    'keyword  — the sound-alike word, by itself.',
-    'keywordLanguage — which KNOWN language that word belongs to.',
-    'sentence — the sentence above.',
-    'prompt   — exactly that sentence as a scene in ENGLISH for an image',
-    '           generator: name what is physically visible and nothing else.',
-    '           It must show the same things the sentence names. No text in',
-    '           the image.',
+    'keyword  — the sound-alike word by itself, or the two words separated by',
+    '           one space when a pair was needed.',
+    'keywordLanguages — a list saying which KNOWN language each of those words',
+    '           belongs to, in the same order: one entry for one word, two for',
+    '           a pair, the same name twice when both come from one language.',
+    'sentence — the sentence above, or "" when the pair spans two languages.',
+    'prompt   — that sentence as a scene in ENGLISH for an image generator:',
+    '           name what is physically visible and nothing else, and no text',
+    '           in the image. When there is no sentence, describe the keyword',
+    '           things together with the MEANING instead — the picture then',
+    '           carries the whole association alone, so it matters more.',
     '',
     'Do not explain. Do not add fields. Do not use markdown.',
   ].join('\n');
@@ -418,21 +494,21 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
       {
         sounds: 'komer',
         keyword: 'komar',
-        keywordLanguage: 'Polish',
+        keywordLanguages: ['Polish'],
         sentence: 'Komar je kanapkę.',
         prompt: 'a giant mosquito eating a sandwich, simple illustration',
       },
       {
         sounds: 'komer',
         keyword: 'komin',
-        keywordLanguage: 'Polish',
+        keywordLanguages: ['Polish'],
         sentence: 'Komin je węgiel.',
         prompt: 'a brick chimney swallowing lumps of coal, simple illustration',
       },
       {
         sounds: 'komer',
         keyword: 'komoda',
-        keywordLanguage: 'Polish',
+        keywordLanguages: ['Polish'],
         sentence: 'Komoda je talerze.',
         prompt: 'a wooden chest of drawers biting into a stack of plates, simple illustration',
       },
@@ -441,49 +517,54 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
       {
         sounds: 'kadejra',
         keyword: 'kadet',
-        keywordLanguage: 'Polish',
+        keywordLanguages: ['Polish'],
         sentence: 'Kadet siedzi na krześle.',
         prompt: 'a young military cadet sitting on a wooden chair, simple illustration',
       },
       {
         sounds: 'kadejra',
         keyword: 'kadzidło',
-        keywordLanguage: 'Polish',
+        keywordLanguages: ['Polish'],
         sentence: 'Kadzidło dymi na krześle.',
         prompt: 'a smoking incense stick standing on a wooden chair, simple illustration',
       },
       {
         sounds: 'kadejra',
         keyword: 'kadź',
-        keywordLanguage: 'Polish',
+        keywordLanguages: ['Polish'],
         sentence: 'Kadź stoi na krześle.',
         prompt: 'a large wooden vat balanced on a chair, simple illustration',
       },
     ]),
     // The one example with two KNOWN languages, and the only reason it exists:
     // the second option reaches into English because Polish had nothing better,
-    // says so in `keywordLanguage`, and still writes its sentence in Polish with
-    // the English word sitting inside it unchanged. Everything the ranking rule
-    // asserts is demonstrated here rather than only stated above.
+    // says so in `keywordLanguages`, and writes its whole sentence in English —
+    // meaning and all. Everything the ranking rule asserts is demonstrated here
+    // rather than only stated above.
+    //
+    // That sentence used to be Polish with `camel` sitting inside it, which is
+    // what the rule used to say. It reads badly: a bare English noun inflected
+    // by Polish grammar is a sentence in neither language, and somebody who
+    // reached for `camel` can read a line of English.
     ...example('cama', 'Portuguese', 'łóżko', ['Polish', 'English'], [
       {
         sounds: 'kama',
         keyword: 'kamerdyner',
-        keywordLanguage: 'Polish',
+        keywordLanguages: ['Polish'],
         sentence: 'Kamerdyner ściele łóżko.',
         prompt: 'a butler in a tailcoat making a bed, simple illustration',
       },
       {
         sounds: 'kama',
         keyword: 'camel',
-        keywordLanguage: 'English',
-        sentence: 'Camel śpi w łóżku.',
+        keywordLanguages: ['English'],
+        sentence: 'The camel sleeps in a bed.',
         prompt: 'a camel asleep in a human bed, simple illustration',
       },
       {
         sounds: 'kama',
         keyword: 'kamień',
-        keywordLanguage: 'Polish',
+        keywordLanguages: ['Polish'],
         sentence: 'Kamień leży na łóżku.',
         prompt: 'a large grey boulder resting on a bed, simple illustration',
       },
@@ -492,23 +573,62 @@ function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
       {
         sounds: 'gato',
         keyword: 'gacie',
-        keywordLanguage: 'Polish',
+        keywordLanguages: ['Polish'],
         sentence: 'Kot siedzi na gaciach.',
         prompt: 'a cat sitting on a pair of underpants, simple illustration',
       },
       {
         sounds: 'gato',
         keyword: 'garnek',
-        keywordLanguage: 'Polish',
+        keywordLanguages: ['Polish'],
         sentence: 'Kot śpi w garnku.',
         prompt: 'a cat curled up asleep inside a metal cooking pot, simple illustration',
       },
       {
         sounds: 'gato',
         keyword: 'gad',
-        keywordLanguage: 'Polish',
+        keywordLanguages: ['Polish'],
         sentence: 'Gad goni kota.',
         prompt: 'a large lizard chasing a cat across a floor, simple illustration',
+      },
+    ]),
+    // The pair example, and the only one there is. Four syllables of English
+    // have no single Polish echo, so each option is two short words carrying
+    // half the sound each — and the second reaches into the learner's Spanish
+    // for its back half, which is the case a one-language learner never has.
+    //
+    // It sits **last**, after four single-word examples, because that is the
+    // order of the rule: a pair is what you fall back to, not what you reach
+    // for. An example is worth more than a sentence of instruction, which cuts
+    // both ways — one pair example first would teach pairs as the default.
+    ...example('opinionated', 'English', 'mający własne zdanie', ['Polish', 'Spanish'], [
+      {
+        sounds: 'opinionejtyd',
+        keyword: 'opona notes',
+        keywordLanguages: ['Polish', 'Polish'],
+        sentence: 'Opona i notes mają własne zdanie.',
+        prompt:
+          'a car tyre and a small notepad standing side by side with folded arms, simple illustration',
+      },
+      {
+        sounds: 'opinionejtyd',
+        keyword: 'opat nieto',
+        keywordLanguages: ['Polish', 'Spanish'],
+        // Half Polish, half Spanish, so no language owns it and there is no
+        // sentence to write — the two words and the picture are the whole
+        // association. The scene works harder here to make up for it.
+        sentence: '',
+        prompt:
+          'an abbot in a habit and a small grandson arguing face to face, each refusing to ' +
+          'give way, simple illustration',
+      },
+      {
+        sounds: 'opinionejtyd',
+        keyword: 'opal nietoperz',
+        keywordLanguages: ['Polish', 'Polish'],
+        sentence: 'Opal i nietoperz mają własne zdanie.',
+        prompt:
+          'a glowing opal stone and a bat facing each other stubbornly, simple illustration',
       },
     ]),
     {

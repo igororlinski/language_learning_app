@@ -250,7 +250,7 @@ check(
   'malformed'
 );
 
-group('Z ktorego jezyka jest slowo-klucz');
+group('Z ktorych jezykow jest slowo-klucz');
 
 /**
  * The model may reach past the first of the learner's languages, and when it
@@ -263,14 +263,132 @@ const borrowed = parseMnemonicList(
     {
       sounds: 'kama',
       keyword: 'camel',
-      keywordLanguage: 'English',
+      keywordLanguages: ['English'],
       sentence: 'Camel śpi w łóżku.',
       prompt: 'a camel asleep in a bed',
     },
   ])
 )[0];
 
-check('jezyk klucza wraca', borrowed?.language, 'English');
+check('jezyk klucza wraca', borrowed?.languages, ['English']);
+
+/**
+ * A keyword of two words, half in one language and half in another — what a
+ * long foreign word gets matched with when no single word echoes it. Both
+ * halves are named, in the order they carry the sound.
+ */
+const pair = parseMnemonicList(
+  JSON.stringify([
+    {
+      sounds: 'opinionejtyd',
+      keyword: 'opat nieto',
+      keywordLanguages: ['Polish', 'Spanish'],
+      sentence: 'Opat i nieto mają własne zdanie.',
+      prompt: 'an abbot and a grandson arguing',
+    },
+  ])
+)[0];
+
+check('para zostaje jednym kluczem', pair?.keyword, 'opat nieto');
+check('a oba jezyki wracaja', pair?.languages, ['Polish', 'Spanish']);
+
+// Both halves from one language is the ordinary pair, and it says so once: the
+// label answers "what does this lean on", not "how many words are there".
+const samePair = parseMnemonicList(
+  JSON.stringify([
+    {
+      sounds: 'opinionejtyd',
+      keyword: 'opona notes',
+      keywordLanguages: ['Polish', 'Polish'],
+      sentence: 'Opona i notes mają własne zdanie.',
+      prompt: 'a tyre and a notepad',
+    },
+  ])
+)[0];
+
+check('powtorzony jezyk liczy sie raz', samePair?.languages, ['Polish']);
+
+group('Kiedy zdania po prostu nie ma');
+
+/**
+ * A pair split across two of the learner's languages belongs to neither, so
+ * every sentence built on it is broken in one of them. There the two words and
+ * the picture are the whole association, and the model is told to send no
+ * sentence at all — which has to arrive as an association, not as a reject.
+ */
+const wordsOnly = parseMnemonicList(
+  JSON.stringify([
+    {
+      sounds: 'opinionejtyd',
+      keyword: 'opat nieto',
+      keywordLanguages: ['Polish', 'Spanish'],
+      sentence: '',
+      prompt: 'an abbot and a grandson arguing',
+    },
+  ])
+)[0];
+
+check('para z dwoch jezykow zyje bez zdania', Boolean(wordsOnly), true);
+check('i zostaje przy samych wyrazach', wordsOnly?.sentence, '');
+check('a obraz da sie z niej zrobic', Boolean(wordsOnly?.prompt), true);
+
+// Everywhere else a missing sentence is a model that stopped halfway, and a
+// field that looks filled in but reads as nothing is worse than an honest fail.
+const oneLanguageNoSentence = parseMnemonicList(
+  JSON.stringify([
+    {
+      keyword: 'komar',
+      keywordLanguages: ['Polish'],
+      sentence: '',
+      prompt: 'a mosquito eating',
+    },
+  ])
+);
+
+check('jeden jezyk bez zdania to brak odpowiedzi', oneLanguageNoSentence.length, 0);
+
+// Same for a pair whose halves came from one language: it can be put in a
+// sentence, so a missing one is a failure like any other.
+const samePairNoSentence = parseMnemonicList(
+  JSON.stringify([
+    {
+      keyword: 'opona notes',
+      keywordLanguages: ['Polish', 'Polish'],
+      sentence: '',
+      prompt: 'a tyre and a notepad',
+    },
+  ])
+);
+
+check('para z jednego jezyka musi miec zdanie', samePairNoSentence.length, 0);
+
+// The two that nothing can do without: one is what the learner remembers, the
+// other is what draws the picture again.
+check(
+  'bez klucza nie ma skojarzenia',
+  parseMnemonicList('[{"keywordLanguages":["Polish","Spanish"],"sentence":"","prompt":"a scene"}]').length,
+  0
+);
+check(
+  'bez sceny tez nie',
+  parseMnemonicList('[{"keyword":"opat nieto","keywordLanguages":["Polish","Spanish"],"sentence":""}]').length,
+  0
+);
+
+// The fallback model answers in free-form text with no schema holding it to
+// anything, so the older single field is understood rather than dropped.
+const older = parseMnemonicList(
+  JSON.stringify([
+    {
+      keyword: 'komar',
+      keywordLanguage: 'Polish',
+      sentence: 'Komar je kanapkę.',
+      prompt: 'a mosquito eating',
+    },
+  ])
+)[0];
+
+check('stara pojedyncza nazwa tez przechodzi', older?.languages, ['Polish']);
 
 const unlabelled = parseMnemonicList(
   JSON.stringify([
@@ -281,4 +399,4 @@ const unlabelled = parseMnemonicList(
 // Not one of the parts a mnemonic needs: without it the field still shows, still
 // redraws, and only the little language label goes missing.
 check('brak jezyka nie uniewaznia skojarzenia', Boolean(unlabelled), true);
-check('a samo pole jest puste', unlabelled?.language, '');
+check('a samo pole jest puste', unlabelled?.languages, []);

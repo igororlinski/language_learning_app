@@ -336,19 +336,25 @@ export default function CardEditorScreen() {
   ): SheetAction[] => speechMenu({ scope, languages, current, set, show: setOptions });
 
   /**
-   * The language a proposal leaned on, when it is not the first one the deck
-   * lists — and an empty string when it is, because naming the obvious is
-   * noise. The model answers in English names, so this comes back through the
-   * catalogue to be shown in Polish.
+   * The languages a proposal leaned on, minus the first one the deck lists —
+   * and an empty string when there is nothing left, because naming the obvious
+   * is noise. The model answers in English names, so these come back through
+   * the catalogue to be shown in Polish.
+   *
+   * Plural because a keyword can be two words from two languages: „opat nieto"
+   * is half Polish and half Spanish, and the Spanish half is exactly the part
+   * the learner is entitled to be told about.
    */
   const borrowedFrom = (option: Mnemonic): string => {
     const primary = languages.front[0];
 
-    if (!option.language || !primary) return '';
+    if (!primary) return '';
 
-    const code = languageByEnglish(option.language);
+    const borrowed = (option.languages ?? [])
+      .map(languageByEnglish)
+      .filter((code): code is string => Boolean(code) && code !== primary);
 
-    return !code || code === primary ? '' : languageLabel(code);
+    return [...new Set(borrowed)].map(languageLabel).join(' · ');
   };
 
   const info = describeRows(rows, BASE_LABELS);
@@ -855,7 +861,12 @@ export default function CardEditorScreen() {
               // every other field's label and search material — it is what they
               // read, on the card and in the list. The other half is not lost:
               // the whole association goes into the column below.
-              value: word ? association.keyword : association.sentence,
+              //
+              // An association with no sentence — a pair drawn from two of the
+              // learner's languages — has only its words to show, whichever
+              // mode the field is in. Asking for the sentence there would empty
+              // the field of everything but its picture.
+              value: word || !association.sentence ? association.keyword : association.sentence,
               mediaPath: fileName,
               mnemonic: mnemonicJson(association),
             }
@@ -990,11 +1001,28 @@ export default function CardEditorScreen() {
       // three pictures to fix instead of being replaced by another idea. It is
       // offered without a picture too — that is how a field made as text alone
       // gains one.
+      //
+      // The association goes back exactly as it was stored. It used to be sent
+      // with `sentence` replaced by whatever the row was showing, which on a
+      // field set to show the word alone meant the keyword — and the save then
+      // wrote that keyword into the column as the sentence, losing the sentence
+      // for good. Nothing here needs it anyway: the picture is drawn from
+      // `prompt`, and `applyMnemonic` works out what to show on its own.
       ...(stored
         ? [
             {
               label: row.mediaPath ? 'Inne obrazy' : 'Dorysuj obraz',
-              onPress: () => void drawMnemonic(key, { ...stored, sentence: row.value }),
+              onPress: () => {
+                // The same seeding "Inne skojarzenie" does, and needed for the
+                // same reason: a card opened from the database has no
+                // remembered mode, so what the field shows right now has to
+                // become the setting before a new picture is applied. Without
+                // it, redrawing a field showing the word alone hands back the
+                // sentence. Safe to set here because a picture is picked from
+                // a sheet, so the write lands a render before it is read.
+                setWordModes((current) => ({ ...current, [key]: showsWord(key, row) }));
+                void drawMnemonic(key, stored);
+              },
             },
           ]
         : []),
@@ -1813,9 +1841,13 @@ export default function CardEditorScreen() {
                 // the first one the deck lists. A keyword from the language you
                 // think in needs no label; one borrowed from your second is a
                 // different kind of hint and you are entitled to know.
-                label: `${showsWord(choosing.key) ? option.keyword : option.sentence}${
-                  borrowedFrom(option) ? ` · ${borrowedFrom(option)}` : ''
-                }`,
+                // A pair drawn from two languages has no sentence, so there
+                // is only one thing it could show — and it is the right one.
+                label: `${
+                  showsWord(choosing.key) || !option.sentence
+                    ? option.keyword
+                    : option.sentence
+                }${borrowedFrom(option) ? ` · ${borrowedFrom(option)}` : ''}`,
               }))
             : choosing?.step === 'picture'
               ? choosing.files.map((fileName, index) => ({ key: String(index), fileName }))
