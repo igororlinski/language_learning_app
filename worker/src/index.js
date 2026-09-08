@@ -168,11 +168,16 @@ const MNEMONIC_SCHEMA = {
     properties: {
       sounds: { type: 'string' },
       keyword: { type: 'string' },
+      // Which of the learner's languages the keyword belongs to. Demanded
+      // rather than inferred: a model allowed to reach into a second language
+      // must say when it did, or the user cannot tell a Polish sound-alike from
+      // an English one — and the two are worth different amounts to them.
+      keywordLanguage: { type: 'string' },
       sentence: { type: 'string' },
       prompt: { type: 'string' },
     },
-    required: ['sounds', 'keyword', 'sentence', 'prompt'],
-    propertyOrdering: ['sounds', 'keyword', 'sentence', 'prompt'],
+    required: ['sounds', 'keyword', 'keywordLanguage', 'sentence', 'prompt'],
+    propertyOrdering: ['sounds', 'keyword', 'keywordLanguage', 'sentence', 'prompt'],
   },
 };
 
@@ -279,8 +284,21 @@ const langs = (value) =>
         .slice(0, 6)
     : [];
 
-/** "portugalski" / "portugalski lub hiszpański" / "nieznany" — for the prompt. */
-const languagePhrase = (names) => (names.length > 0 ? names.join(' or ') : 'unknown');
+/** One language for the prompt, or an honest "unknown". */
+const languagePhrase = (name) => name || 'unknown';
+
+/**
+ * The learner's languages as a ranking the model can act on.
+ *
+ * Written as "1. Polish (try this first)  2. English  3. German" rather than
+ * "Polish or English", because the order **is** the instruction: these are the
+ * languages the learner has, sorted by how readily each comes to mind, and a
+ * sound-alike is worth more the higher up it was found.
+ */
+const languageRanking = (names) =>
+  names.length > 0
+    ? names.map((name, index) => `${index + 1}. ${name}`).join('\n')
+    : '1. unknown';
 
 /* -------------------------------------------------------------- the prompt */
 
@@ -315,43 +333,60 @@ const languagePhrase = (names) => (names.length > 0 ? names.join(' or ') : 'unkn
  * every sentence in them is plain correct grammar rather than a pile of
  * alliteration.
  */
-function mnemonicPrompt({ term, termLanguages, meaning, meaningLanguages }) {
+function mnemonicPrompt({ term, termLanguage, meaning, meaningLanguages }) {
   const system = [
     'You invent keyword-method mnemonics for language learners.',
     '',
-    'The learner speaks NATIVE and is memorising a word in FOREIGN.',
+    'The learner is memorising a word in FOREIGN. They already speak the',
+    'languages listed under KNOWN, in that order: the first is the one they',
+    'think in, the rest are languages they read and understand.',
     '',
     'Your one real task: say the FOREIGN word out loud in your head, and find a',
-    'word in NATIVE that SOUNDS like it. The opening sounds matter most.',
+    'word in a KNOWN language that SOUNDS like it. The opening sounds matter most.',
+    '',
+    'Work down the KNOWN list in order:',
+    '- try language 1 first, and stay there if any real word sounds close;',
+    '- move to language 2 only when language 1 offers nothing that both sounds',
+    '  right and can be pictured; then to language 3 the same way;',
+    '- a good match in language 2 beats a poor one in language 1, but an equal',
+    '  match in language 1 always wins. The higher up the list, the better.',
+    'Say which language you used in keywordLanguage, spelled as it appears in',
+    'the KNOWN list.',
     '',
     'The sound-alike word must:',
-    '- be a REAL word of NATIVE, one a dictionary has and an ordinary speaker',
-    '  would recognise. Never invent a word, and never bend a real one;',
+    '- be a REAL word of that language, one a dictionary has and an ordinary',
+    '  speaker would recognise. Never invent a word, and never bend a real one;',
     '- be spelled the way a dictionary spells it, never spelled out by ear;',
     '- if it helps, be a LONGER word whose beginning carries the sound — the',
     '  whole word still has to be real and picturable;',
     '- name something concrete you could photograph — a thing, an animal, a',
     '  person. A plain noun is best;',
-    '- not be a translation of the FOREIGN word, and not be a word of any',
-    '  other language.',
+    '- not be a translation of the FOREIGN word, and not be a word of a language',
+    '  outside the KNOWN list.',
     '',
     'A rough sound match is fine and expected. A real word that sounds roughly',
     'right is always better than an invented word that sounds exactly right.',
     '',
-    'Then write ONE short sentence in NATIVE that contains BOTH the sound-alike',
-    'word AND the MEANING. Plain, grammatically correct, present tense, at most',
-    'six words. Do not chase rhyme or alliteration — a correct ordinary sentence',
-    'is worth more than a clever broken one.',
+    'Then write ONE short sentence in KNOWN language 1 — the one the learner',
+    'thinks in — containing BOTH the sound-alike word AND the MEANING. When the',
+    'keyword came from another language, keep it spelled as that language spells',
+    'it and let it sit inside the sentence unchanged. Plain, grammatically',
+    'correct, present tense, at most six words. Do not chase rhyme or',
+    'alliteration — a correct ordinary sentence is worth more than a clever',
+    'broken one.',
     '',
     'Answer with a JSON array of exactly THREE such objects and nothing else.',
     'The three must rest on THREE DIFFERENT sound-alike words — three angles on',
     'the same foreign word, not one idea reworded. Put the one you believe in',
-    'most first.',
+    'most first: that is the best sound match, found as high up the KNOWN list',
+    'as possible.',
     '',
-    '[{"sounds":"…","keyword":"…","sentence":"…","prompt":"…"}, …]',
+    '[{"sounds":"…","keyword":"…","keywordLanguage":"…","sentence":"…","prompt":"…"}, …]',
     '',
-    'sounds   — the FOREIGN word written out as it sounds, in NATIVE spelling.',
-    'keyword  — the NATIVE sound-alike word, by itself.',
+    'sounds   — the FOREIGN word written out as it sounds, spelled the way',
+    '           KNOWN language 1 spells things.',
+    'keyword  — the sound-alike word, by itself.',
+    'keywordLanguage — which KNOWN language that word belongs to.',
     'sentence — the sentence above.',
     'prompt   — exactly that sentence as a scene in ENGLISH for an image',
     '           generator: name what is physically visible and nothing else.',
@@ -361,9 +396,15 @@ function mnemonicPrompt({ term, termLanguages, meaning, meaningLanguages }) {
     'Do not explain. Do not add fields. Do not use markdown.',
   ].join('\n');
 
-  const example = (foreign, foreignLang, native, nativeLang, answers) =>
+  const example = (foreign, foreignLang, native, known, answers) =>
     [
-      { role: 'user', content: `FOREIGN (${foreignLang}): ${foreign}\nNATIVE (${nativeLang}): ${native}` },
+      {
+        role: 'user',
+        content:
+          `FOREIGN (${foreignLang}): ${foreign}\n` +
+          `MEANING: ${native}\n` +
+          `KNOWN:\n${languageRanking(known)}`,
+      },
       { role: 'assistant', content: JSON.stringify(answers) },
     ];
 
@@ -373,62 +414,99 @@ function mnemonicPrompt({ term, termLanguages, meaning, meaningLanguages }) {
   // what the rules only assert — `kadet` is a fragment match, `garnek` a loose
   // one, and every sentence is plain correct grammar rather than word-play.
   const turns = [
-    ...example('comer', 'Portuguese', 'jeść', 'Polish', [
+    ...example('comer', 'Portuguese', 'jeść', ['Polish'], [
       {
         sounds: 'komer',
         keyword: 'komar',
+        keywordLanguage: 'Polish',
         sentence: 'Komar je kanapkę.',
         prompt: 'a giant mosquito eating a sandwich, simple illustration',
       },
       {
         sounds: 'komer',
         keyword: 'komin',
+        keywordLanguage: 'Polish',
         sentence: 'Komin je węgiel.',
         prompt: 'a brick chimney swallowing lumps of coal, simple illustration',
       },
       {
         sounds: 'komer',
         keyword: 'komoda',
+        keywordLanguage: 'Polish',
         sentence: 'Komoda je talerze.',
         prompt: 'a wooden chest of drawers biting into a stack of plates, simple illustration',
       },
     ]),
-    ...example('cadeira', 'Portuguese', 'krzesło', 'Polish', [
+    ...example('cadeira', 'Portuguese', 'krzesło', ['Polish'], [
       {
         sounds: 'kadejra',
         keyword: 'kadet',
+        keywordLanguage: 'Polish',
         sentence: 'Kadet siedzi na krześle.',
         prompt: 'a young military cadet sitting on a wooden chair, simple illustration',
       },
       {
         sounds: 'kadejra',
         keyword: 'kadzidło',
+        keywordLanguage: 'Polish',
         sentence: 'Kadzidło dymi na krześle.',
         prompt: 'a smoking incense stick standing on a wooden chair, simple illustration',
       },
       {
         sounds: 'kadejra',
         keyword: 'kadź',
+        keywordLanguage: 'Polish',
         sentence: 'Kadź stoi na krześle.',
         prompt: 'a large wooden vat balanced on a chair, simple illustration',
       },
     ]),
-    ...example('gato', 'Spanish', 'kot', 'Polish', [
+    // The one example with two KNOWN languages, and the only reason it exists:
+    // the second option reaches into English because Polish had nothing better,
+    // says so in `keywordLanguage`, and still writes its sentence in Polish with
+    // the English word sitting inside it unchanged. Everything the ranking rule
+    // asserts is demonstrated here rather than only stated above.
+    ...example('cama', 'Portuguese', 'łóżko', ['Polish', 'English'], [
+      {
+        sounds: 'kama',
+        keyword: 'kamerdyner',
+        keywordLanguage: 'Polish',
+        sentence: 'Kamerdyner ściele łóżko.',
+        prompt: 'a butler in a tailcoat making a bed, simple illustration',
+      },
+      {
+        sounds: 'kama',
+        keyword: 'camel',
+        keywordLanguage: 'English',
+        sentence: 'Camel śpi w łóżku.',
+        prompt: 'a camel asleep in a human bed, simple illustration',
+      },
+      {
+        sounds: 'kama',
+        keyword: 'kamień',
+        keywordLanguage: 'Polish',
+        sentence: 'Kamień leży na łóżku.',
+        prompt: 'a large grey boulder resting on a bed, simple illustration',
+      },
+    ]),
+    ...example('gato', 'Spanish', 'kot', ['Polish'], [
       {
         sounds: 'gato',
         keyword: 'gacie',
+        keywordLanguage: 'Polish',
         sentence: 'Kot siedzi na gaciach.',
         prompt: 'a cat sitting on a pair of underpants, simple illustration',
       },
       {
         sounds: 'gato',
         keyword: 'garnek',
+        keywordLanguage: 'Polish',
         sentence: 'Kot śpi w garnku.',
         prompt: 'a cat curled up asleep inside a metal cooking pot, simple illustration',
       },
       {
         sounds: 'gato',
         keyword: 'gad',
+        keywordLanguage: 'Polish',
         sentence: 'Gad goni kota.',
         prompt: 'a large lizard chasing a cat across a floor, simple illustration',
       },
@@ -436,8 +514,9 @@ function mnemonicPrompt({ term, termLanguages, meaning, meaningLanguages }) {
     {
       role: 'user',
       content:
-        `FOREIGN (${languagePhrase(termLanguages)}): ${term}\n` +
-        `NATIVE (${languagePhrase(meaningLanguages)}): ${meaning}`,
+        `FOREIGN (${languagePhrase(termLanguage)}): ${term}\n` +
+        `MEANING: ${meaning}\n` +
+        `KNOWN:\n${languageRanking(meaningLanguages)}`,
     },
   ];
 
@@ -647,7 +726,10 @@ async function handleMnemonic(request, env) {
 
   const prompt = mnemonicPrompt({
     term,
-    termLanguages: langs(body?.termLanguages),
+    // One language, since 2026-09-08 — a word has one pronunciation. The old
+    // list is still read so that an app built before that day keeps working:
+    // its first entry was always the one that mattered.
+    termLanguage: str(body?.termLanguage, 32) || langs(body?.termLanguages)[0] || '',
     meaning,
     meaningLanguages: langs(body?.meaningLanguages),
   });

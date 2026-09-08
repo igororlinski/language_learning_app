@@ -27,13 +27,13 @@ group('Ktorym glosem');
 
 // The answer is the word being learned, and that is the one worth hearing —
 // reading the learner's own question back at them teaches nothing.
-check('czyta jezykiem odpowiedzi', speechVoice({ front: ['pl'], back: ['pt-PT'] }), 'pt-PT');
-check('a nie pytania', speechVoice({ front: ['pl'], back: [] }), null);
+check('czyta jezykiem odpowiedzi', speechVoice({ front: ['pl'], back: 'pt-PT' }), 'pt-PT');
+check('a nie pytania', speechVoice({ front: ['pl'], back: null }), null);
 
 // Silence beats confidence: `janela` read in Polish sounds like nothing and
 // teaches something false, so the field says what is missing instead.
-check('talia bez jezykow nie ma glosu', speechVoice({ front: [], back: [] }), null);
-check('kilka jezykow — pierwszy', speechVoice({ front: [], back: ['es', 'pt-PT'] }), 'es');
+check('talia bez jezykow nie ma glosu', speechVoice({ front: [], back: null }), null);
+
 
 group('Czy telefon ma glos');
 

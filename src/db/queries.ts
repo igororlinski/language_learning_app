@@ -4,8 +4,10 @@ import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/
 import { isMediaKind, type MediaKind } from '@/lib/media';
 import { DEFAULT_SCHEDULING, parseWeights, type DeckScheduling } from '@/lib/fsrs-options';
 import {
+  languageJson,
   languagesJson,
   NO_LANGUAGES,
+  parseLanguage,
   parseLanguages,
   type DeckLanguages,
 } from '@/lib/languages';
@@ -682,7 +684,9 @@ function toLanguages(row: {
 }): DeckLanguages {
   return {
     front: parseLanguages(row.frontLanguages),
-    back: parseLanguages(row.backLanguages),
+    // One language, read out of a column that may still hold a list: decks
+    // written before the answer side became single-valued keep their first.
+    back: parseLanguage(row.backLanguages),
   };
 }
 
@@ -862,7 +866,7 @@ function deckValues(input: DeckInput) {
     // `front` and `back` are not column names, and a spread would drop them
     // in silence.
     frontLanguages: languagesJson(languages.front),
-    backLanguages: languagesJson(languages.back),
+    backLanguages: languageJson(languages.back),
     imageQuality: input.imageQuality ?? DEFAULT_PICTURE_QUALITY,
   };
 }

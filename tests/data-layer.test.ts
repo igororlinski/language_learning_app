@@ -1266,18 +1266,18 @@ const langDeck = createDeck({
   reviewsPerDay: 50,
 });
 
-check('nowa talia nie deklaruje jezykow', deckLanguages(langDeck.id), { front: [], back: [] });
+check('nowa talia nie deklaruje jezykow', deckLanguages(langDeck.id), { front: [], back: null });
 
 updateDeck(langDeck.id, {
   name: 'Angielski',
   newPerDay: 50,
   reviewsPerDay: 50,
-  languages: { front: ['pl'], back: ['en-US'] },
+  languages: { front: ['pl'], back: 'en-US' },
 });
 
 check('zapisane jezyki wracaja z bazy', deckLanguages(langDeck.id), {
   front: ['pl'],
-  back: ['en-US'],
+  back: 'en-US',
 });
 
 // Several per side is the point — a deck may mix them.
@@ -1285,7 +1285,7 @@ updateDeck(langDeck.id, {
   name: 'Angielski',
   newPerDay: 50,
   reviewsPerDay: 50,
-  languages: { front: ['pl', 'la'], back: ['en-US'] },
+  languages: { front: ['pl', 'la'], back: 'en-US' },
 });
 
 check('kilka jezykow na stronie tez', deckLanguages(langDeck.id).front, ['pl', 'la']);
@@ -1327,23 +1327,23 @@ updateDeck(langDeck.id, {
   name: 'Angielski',
   newPerDay: 50,
   reviewsPerDay: 50,
-  languages: { front: ['pl', 'pl'], back: [] },
+  languages: { front: ['pl', 'pl'], back: null },
 });
 
 check('powtorzony kod sklada sie w jeden', deckLanguages(langDeck.id).front, ['pl']);
-check('pusta strona wraca pusta', deckLanguages(langDeck.id).back, []);
+check('pusta strona wraca pusta', deckLanguages(langDeck.id).back, null);
 
 // A brand new deck has to carry them too, not only an edited one.
 const bornWithLanguages = createDeck({
   name: 'Od razu z jezykami',
   newPerDay: 50,
   reviewsPerDay: 50,
-  languages: { front: ['de'], back: ['pl'] },
+  languages: { front: ['de'], back: 'pl' },
 });
 
 check('nowa talia tez je zapisuje', deckLanguages(bornWithLanguages.id), {
   front: ['de'],
-  back: ['pl'],
+  back: 'pl',
 });
 
 // Nothing outside the catalogue reaches the column: the codes are what the
@@ -1353,7 +1353,7 @@ updateDeck(langDeck.id, {
   name: 'Angielski',
   newPerDay: 50,
   reviewsPerDay: 50,
-  languages: { front: ['pl', 'klingonski'], back: [] },
+  languages: { front: ['pl', 'klingonski'], back: null },
 });
 
 check('wymyslony jezyk nie wchodzi do bazy', deckLanguages(langDeck.id).front, ['pl']);
@@ -1372,7 +1372,7 @@ const mnemoDeck = createDeck({
   name: 'Portugalski',
   newPerDay: 50,
   reviewsPerDay: 50,
-  languages: { front: ['polski'], back: ['portugalski'] },
+  languages: { front: ['pl'], back: 'pt-PT' },
 });
 
 const association = '{"keyword":"komar","prompt":"a mosquito eating a sandwich"}';

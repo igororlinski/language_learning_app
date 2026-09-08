@@ -17,9 +17,19 @@ import { parseMnemonicList, type Mnemonic } from '@/lib/mnemonic';
 export type MnemonicRequest = {
   /** The word being learned — the answer side of the card. */
   term: string;
-  termLanguages: string[];
-  /** What it means, in the learner's language — the question side. */
+  /** The one language it is written in. A word has one pronunciation. */
+  termLanguage: string;
+  /** What it means, in a language the learner has — the question side. */
   meaning: string;
+  /**
+   * Every language the learner already speaks, **best first**.
+   *
+   * The list is a ranking, not a set: the model hunts for a sound-alike in the
+   * first, and only moves to the second when the first has no real word close
+   * enough. A Pole who also reads English gets `janela` matched against Polish
+   * first and English second — which is exactly how the trick works in a head
+   * that holds two languages.
+   */
   meaningLanguages: string[];
 };
 
@@ -44,7 +54,7 @@ export async function requestMnemonics(
     '/mnemonic',
     {
       term: request.term,
-      termLanguages: request.termLanguages,
+      termLanguage: request.termLanguage,
       meaning: request.meaning,
       meaningLanguages: request.meaningLanguages,
     },

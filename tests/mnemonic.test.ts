@@ -178,7 +178,7 @@ const asked = await withStub(
     requestMnemonics(
       {
         term: 'comer',
-        termLanguages: ['portugalski'],
+        termLanguage: 'Portuguese (European)',
         meaning: 'jeść',
         meaningLanguages: ['polski'],
       },
@@ -196,8 +196,13 @@ const sent = JSON.parse(String(asked.sent?.init.body)) as Record<string, unknown
 // which that is by looking at two words.
 check('slowo uczone jedzie jako term', sent.term, 'comer');
 check('znaczenie jako meaning', sent.meaning, 'jeść');
-check('z jezykiem slowa', JSON.stringify(sent.termLanguages), '["portugalski"]');
-check('i jezykiem znaczenia', JSON.stringify(sent.meaningLanguages), '["polski"]');
+// One language for the word being learned: it has one pronunciation, and both
+// the voice that reads it and the sound a keyword must imitate follow from it.
+check('z jednym jezykiem slowa', sent.termLanguage, 'Portuguese (European)');
+
+// …and a ranking for the learner's own languages, in the deck's order. The list
+// is an instruction, not a set: the model works down it.
+check('i rankingiem jezykow znaczenia', JSON.stringify(sent.meaningLanguages), '["polski"]');
 
 /** The failure a request rejects with. */
 async function refusalOf(call: () => Promise<unknown>) {
@@ -213,7 +218,7 @@ check(
   'bez slowa nie pyta',
   await refusalOf(() =>
     requestMnemonics(
-      { term: '  ', termLanguages: [], meaning: 'jeść', meaningLanguages: [] },
+      { term: '  ', termLanguage: '', meaning: 'jeść', meaningLanguages: [] },
       'https://w.example.dev'
     )
   ),
@@ -223,7 +228,7 @@ check(
   'bez znaczenia tez nie',
   await refusalOf(() =>
     requestMnemonics(
-      { term: 'comer', termLanguages: [], meaning: '   ', meaningLanguages: [] },
+      { term: 'comer', termLanguage: '', meaning: '   ', meaningLanguages: [] },
       'https://w.example.dev'
     )
   ),
@@ -237,10 +242,43 @@ check(
   (
     await withStub({ status: 200, body: { success: true, result: { text: 'nie umiem' } } }, () =>
       requestMnemonics(
-        { term: 'comer', termLanguages: [], meaning: 'jeść', meaningLanguages: [] },
+        { term: 'comer', termLanguage: '', meaning: 'jeść', meaningLanguages: [] },
         'https://w.example.dev'
       )
     )
   ).outcome,
   'malformed'
 );
+
+group('Z ktorego jezyka jest slowo-klucz');
+
+/**
+ * The model may reach past the first of the learner's languages, and when it
+ * does it has to say so — the user is entitled to know that a hint leans on
+ * their English rather than their Polish. Missing is fine: an association that
+ * forgot to label itself is still a good association.
+ */
+const borrowed = parseMnemonicList(
+  JSON.stringify([
+    {
+      sounds: 'kama',
+      keyword: 'camel',
+      keywordLanguage: 'English',
+      sentence: 'Camel śpi w łóżku.',
+      prompt: 'a camel asleep in a bed',
+    },
+  ])
+)[0];
+
+check('jezyk klucza wraca', borrowed?.language, 'English');
+
+const unlabelled = parseMnemonicList(
+  JSON.stringify([
+    { sounds: 'kama', keyword: 'kamien', sentence: 'Kamien lezy na lozku.', prompt: 'a boulder' },
+  ])
+)[0];
+
+// Not one of the parts a mnemonic needs: without it the field still shows, still
+// redraws, and only the little language label goes missing.
+check('brak jezyka nie uniewaznia skojarzenia', Boolean(unlabelled), true);
+check('a samo pole jest puste', unlabelled?.language, '');

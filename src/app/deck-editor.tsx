@@ -37,7 +37,12 @@ import {
   type PictureQuality,
 } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
-import { dedupeLanguages, languageLabel, parseLanguages } from '@/lib/languages';
+import {
+  dedupeLanguages,
+  languageLabel,
+  parseLanguage,
+  parseLanguages,
+} from '@/lib/languages';
 import { FIELD_NOUNS } from '@/lib/media';
 import {
   DEFAULT_LEARNING_STEPS,
@@ -179,8 +184,8 @@ export default function DeckEditorScreen() {
   const [frontLanguages, setFrontLanguages] = useState(() =>
     parseLanguages(existing?.frontLanguages)
   );
-  const [backLanguages, setBackLanguages] = useState(() =>
-    parseLanguages(existing?.backLanguages)
+  const [backLanguage, setBackLanguage] = useState<string | null>(() =>
+    parseLanguage(existing?.backLanguages)
   );
   /** Which of the two lists the sheet is editing, or null while it is closed. */
   const [languageSheet, setLanguageSheet] = useState<'front' | 'back' | null>(null);
@@ -354,12 +359,14 @@ export default function DeckEditorScreen() {
     label: string,
     picked: string[],
     setPicked: (next: string[]) => void,
-    open: () => void
+    open: () => void,
+    /** Numbered, because on the question side the order is the instruction. */
+    ranked = false
   ) => (
     <View style={styles.limits}>
       <ThemedText type="smallBold">{label}</ThemedText>
       <View style={styles.languages}>
-        {picked.map((language) => (
+        {picked.map((language, index) => (
           <Pressable
             key={language}
             onPress={() => setPicked(picked.filter((own) => own !== language))}
@@ -374,7 +381,7 @@ export default function DeckEditorScreen() {
               },
             ]}>
             <ThemedText type="small" style={{ color: theme.accent }}>
-              {`${languageLabel(language)}  ×`}
+              {`${ranked ? `${index + 1}. ` : ''}${languageLabel(language)}  ×`}
             </ThemedText>
           </Pressable>
         ))}
@@ -426,7 +433,7 @@ export default function DeckEditorScreen() {
         weights,
       },
       newCardLayout: placement,
-      languages: { front: frontLanguages, back: backLanguages },
+      languages: { front: frontLanguages, back: backLanguage },
       imageQuality,
     };
 
@@ -590,17 +597,24 @@ export default function DeckEditorScreen() {
           />
         ) : null}
 
+        {/* Ranked, and numbered so that the ranking is visible: the model hunts
+            for a sound-alike in the first language and reaches for the second
+            only when the first has nothing worth using. */}
         {renderLanguages(
-          'Języki pytania',
+          'Języki pytania — od najlepiej znanego',
           frontLanguages,
           setFrontLanguages,
-          () => setLanguageSheet('front')
+          () => setLanguageSheet('front'),
+          true
         )}
 
+        {/* One, and only one. It decides which voice reads the card and which
+            word a sound-alike has to sound like, and both questions have
+            exactly one useful answer. */}
         {renderLanguages(
-          'Języki odpowiedzi',
-          backLanguages,
-          setBackLanguages,
+          'Język odpowiedzi',
+          backLanguage ? [backLanguage] : [],
+          (next) => setBackLanguage(next[0] ?? null),
           () => setLanguageSheet('back')
         )}
 
@@ -639,12 +653,15 @@ export default function DeckEditorScreen() {
 
       <LanguageSheet
         visible={languageSheet !== null}
-        title={languageSheet === 'back' ? 'Języki odpowiedzi' : 'Języki pytania'}
-        picked={languageSheet === 'back' ? backLanguages : frontLanguages}
+        title={languageSheet === 'back' ? 'Język odpowiedzi' : 'Języki pytania'}
+        single={languageSheet === 'back'}
+        picked={
+          languageSheet === 'back' ? (backLanguage ? [backLanguage] : []) : frontLanguages
+        }
         onChange={(picked) =>
-          (languageSheet === 'back' ? setBackLanguages : setFrontLanguages)(
-            dedupeLanguages(picked)
-          )
+          languageSheet === 'back'
+            ? setBackLanguage(picked[0] ?? null)
+            : setFrontLanguages(dedupeLanguages(picked))
         }
         onClose={() => setLanguageSheet(null)}
       />

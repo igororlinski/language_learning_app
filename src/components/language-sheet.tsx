@@ -12,10 +12,20 @@ import { fold } from '@/lib/search';
 
 export type LanguageSheetProps = {
   visible: boolean;
-  /** Heading of the sheet, e.g. "Języki odpowiedzi". */
+  /** Heading of the sheet, e.g. "Język odpowiedzi". */
   title: string;
   /** The codes picked right now. */
   picked: string[];
+  /**
+   * Whether this is a choice of exactly one, which the answer side is: a card
+   * is in a language, singular, and that one answers both "which voice reads
+   * it?" and "which word must the sound-alike sound like?".
+   *
+   * A single pick replaces and closes, because there is nothing left to decide
+   * once it is made — asking for "Gotowe" afterwards would be asking the user
+   * to confirm the only thing they did.
+   */
+  single?: boolean;
   onClose: () => void;
   onChange: (picked: string[]) => void;
 };
@@ -35,7 +45,14 @@ export type LanguageSheetProps = {
  * anyone who knows the language by its English name should not have to guess
  * the Polish one.
  */
-export function LanguageSheet({ visible, title, picked, onClose, onChange }: LanguageSheetProps) {
+export function LanguageSheet({
+  visible,
+  title,
+  picked,
+  single = false,
+  onClose,
+  onChange,
+}: LanguageSheetProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const [typed, setTyped] = useState('');
@@ -51,12 +68,21 @@ export function LanguageSheet({ visible, title, picked, onClose, onChange }: Lan
     );
   }, [typed]);
 
-  const toggle = (code: string) =>
-    onChange(picked.includes(code) ? picked.filter((own) => own !== code) : [...picked, code]);
-
   const close = () => {
     setTyped('');
     onClose();
+  };
+
+  const toggle = (code: string) => {
+    if (single) {
+      onChange([code]);
+      close();
+      return;
+    }
+
+    // Appending rather than inserting is what makes the picked list a ranking:
+    // the order they are tapped in is the order they are used in.
+    onChange(picked.includes(code) ? picked.filter((own) => own !== code) : [...picked, code]);
   };
 
   return (

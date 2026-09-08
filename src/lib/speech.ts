@@ -16,7 +16,7 @@
  * business in a module the tests import.
  */
 
-import { speechLanguage, type DeckLanguages } from '@/lib/languages';
+import type { DeckLanguages } from '@/lib/languages';
 
 /** Nothing longer is a flashcard word; it is an essay being read at you. */
 export const MAX_SPEECH_LENGTH = 300;
@@ -49,7 +49,7 @@ export function speechText(value: string, answer: string): string {
  * learner something false.
  */
 export function speechVoice(languages: DeckLanguages): string | null {
-  return speechLanguage(languages.back);
+  return languages.back;
 }
 
 /**

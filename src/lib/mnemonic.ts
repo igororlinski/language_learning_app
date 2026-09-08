@@ -37,6 +37,16 @@ export type Mnemonic = {
   sentence: string;
   /** The same scene in English, for the image model. */
   prompt: string;
+  /**
+   * Which of the learner's languages the keyword came from, as the model names
+   * it in English ("Polish", "English") — empty when it did not say.
+   *
+   * Optional on purpose: it is worth showing when the model had to reach past
+   * the first language to find a match ("this one leans on English"), and worth
+   * nothing at all when it did not. A missing one must never invalidate an
+   * otherwise good association, so it is not among the parts a mnemonic needs.
+   */
+  language?: string;
 };
 
 /**
@@ -138,6 +148,7 @@ const oneFrom = (source: string): Mnemonic | null => {
     keyword: clean(object.keyword, MAX_KEYWORD),
     sentence: clean(object.sentence, MAX_SENTENCE),
     prompt: clean(object.prompt, MAX_SCENE),
+    language: clean(object.keywordLanguage, MAX_KEYWORD),
   };
 
   // All three or nothing. Two out of three is a field that looks filled in and

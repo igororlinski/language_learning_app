@@ -130,20 +130,54 @@ export function languageEnglish(code: string): string {
   return BY_CODE.get(code)?.english ?? code;
 }
 
+/**
+ * The way back: an English name the model answered with, turned into a code.
+ *
+ * Needed because the model says which of the learner's languages a sound-alike
+ * came from, and it says it in the English it was given. Matching is folded and
+ * also accepts the bare language ("English" for "English (British)"), because a
+ * model repeating a name is not a model quoting a catalogue.
+ */
+export function languageByEnglish(name: string): string | null {
+  const wanted = fold(name);
+
+  if (!wanted) return null;
+
+  const exact = LANGUAGES.find((language) => fold(language.english) === wanted);
+
+  if (exact) return exact.code;
+
+  return LANGUAGES.find((language) => fold(language.english).startsWith(wanted))?.code ?? null;
+}
+
 /** The same list without repeats, in the order given. */
 export function dedupeLanguages(codes: string[]): string[] {
   return [...new Set(codes.filter(isKnownLanguage))];
 }
 
-/** What a deck declares about its two mandatory fields. */
+/**
+ * What a deck declares about its two mandatory fields — and the two sides are
+ * **not symmetrical**, which is the whole point (2026-09-08).
+ *
+ * The answer is **one language**: it is the language being learned, the one the
+ * phone reads aloud and the one a sound-alike has to sound like. Two would mean
+ * two answers to "which voice?" and "which word am I matching?", and both
+ * questions have exactly one useful answer.
+ *
+ * The question side is **a list in priority order**: these are the languages
+ * the learner already has. A Pole who also speaks English can be helped by an
+ * English sound-alike when Polish offers none — so the model tries the first,
+ * then the second, then the third, and the order is the user's ranking of how
+ * readily each one comes to mind.
+ */
 export type DeckLanguages = {
-  /** Languages the question (`cards.front`) may be written in. */
+  /** Languages the learner knows, best first. Used to hunt for a sound-alike. */
   front: string[];
-  /** Languages the answer (`cards.back`) may be written in. */
-  back: string[];
+  /** The single language being learned, or null when the deck says nothing. */
+  back: string | null;
 };
 
-export const NO_LANGUAGES: DeckLanguages = { front: [], back: [] };
+export const NO_LANGUAGES: DeckLanguages = { front: [], back: null };
 
 /**
  * The codes out of one deck column, which holds them as a JSON array.
@@ -186,19 +220,28 @@ export function languagesJson(codes: string[]): string | null {
   return clean.length > 0 ? JSON.stringify(clean) : null;
 }
 
-/** Every language named by either side, once, in the order they appear. */
-export function allLanguages(languages: DeckLanguages): string[] {
-  return dedupeLanguages([...languages.front, ...languages.back]);
+/**
+ * The one language out of a column that may still hold several.
+ *
+ * Decks written before the answer side became single-valued kept a list, and
+ * the first entry is the closest thing to what they meant — it is the one the
+ * editor showed first and the one everything already used for the voice.
+ */
+export function parseLanguage(json: string | null | undefined): string | null {
+  return parseLanguages(json)[0] ?? null;
 }
 
-/**
- * Which voice to read a side in: the first language it declares.
- *
- * First rather than "the only one" because a deck may honestly declare two —
- * a word list mixing Portuguese and Spanish, say — and something has to be
- * chosen. The first is the one the user put first, which is the closest thing
- * to an intention available here.
- */
+/** The column value for a single language, in the array shape the column keeps. */
+export function languageJson(code: string | null): string | null {
+  return code && isKnownLanguage(code) ? JSON.stringify([code]) : null;
+}
+
+/** Every language named by either side, once, in the order they appear. */
+export function allLanguages(languages: DeckLanguages): string[] {
+  return dedupeLanguages([...languages.front, ...(languages.back ? [languages.back] : [])]);
+}
+
+/** The first usable code in a list, or null — how a priority list is read. */
 export function speechLanguage(codes: string[]): string | null {
   return codes.find(isKnownLanguage) ?? null;
 }

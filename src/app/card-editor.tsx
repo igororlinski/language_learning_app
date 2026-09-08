@@ -61,7 +61,7 @@ import {
   parseMnemonicColumn,
   type Mnemonic,
 } from '@/lib/mnemonic';
-import { languageEnglish, languageLabel } from '@/lib/languages';
+import { languageByEnglish, languageEnglish, languageLabel } from '@/lib/languages';
 import { matchVoice, speechText, speechVoice } from '@/lib/speech';
 import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
@@ -239,6 +239,22 @@ export default function CardEditorScreen() {
    */
   const voices = useVoices();
   const voiceMatch = useMemo(() => matchVoice(voice, voices), [voice, voices]);
+
+  /**
+   * The language a proposal leaned on, when it is not the first one the deck
+   * lists — and an empty string when it is, because naming the obvious is
+   * noise. The model answers in English names, so this comes back through the
+   * catalogue to be shown in Polish.
+   */
+  const borrowedFrom = (option: Mnemonic): string => {
+    const primary = languages.front[0];
+
+    if (!option.language || !primary) return '';
+
+    const code = languageByEnglish(option.language);
+
+    return !code || code === primary ? '' : languageLabel(code);
+  };
 
   const info = describeRows(rows, BASE_LABELS);
 
@@ -470,8 +486,10 @@ export default function CardEditorScreen() {
         // English names, not codes and not the Polish labels: the prompt in the
         // Worker is written in English, and "Portuguese (European)" is worth
         // more to the model than „portugalski" or `pt-PT`.
-        termLanguages: languages.back.map(languageEnglish),
+        termLanguage: languages.back ? languageEnglish(languages.back) : '',
         meaning: front,
+        // In the deck's order, which is the learner's ranking of how readily
+        // each language comes to mind — the model works down it.
         meaningLanguages: languages.front.map(languageEnglish),
       });
 
@@ -1360,8 +1378,14 @@ export default function CardEditorScreen() {
             ? choosing.options.map((option, index) => ({
                 key: String(index),
                 // What the field will hold, so the choice is between the three
-                // things you are choosing between and not their explanations.
-                label: showsWord(choosing.key) ? option.keyword : option.sentence,
+                // things you are choosing between and not their explanations —
+                // plus the language, but **only** when the model reached past
+                // the first one the deck lists. A keyword from the language you
+                // think in needs no label; one borrowed from your second is a
+                // different kind of hint and you are entitled to know.
+                label: `${showsWord(choosing.key) ? option.keyword : option.sentence}${
+                  borrowedFrom(option) ? ` · ${borrowedFrom(option)}` : ''
+                }`,
               }))
             : choosing?.step === 'picture'
               ? choosing.files.map((fileName, index) => ({ key: String(index), fileName }))

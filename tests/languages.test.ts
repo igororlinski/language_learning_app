@@ -11,8 +11,11 @@ import {
   isKnownLanguage,
   LANGUAGES,
   languageEnglish,
+  languageByEnglish,
+  languageJson,
   languageLabel,
   languagesJson,
+  parseLanguage,
   parseLanguages,
   speechLanguage,
 } from '@/lib/languages';
@@ -83,7 +86,36 @@ check('czyta pierwszym zadeklarowanym', speechLanguage(['pt-PT', 'es']), 'pt-PT'
 check('talia bez jezykow nie ma czym czytac', speechLanguage([]), null);
 check('smiec pomijany', speechLanguage(['klingonski', 'de']), 'de');
 
-check('obie strony razem, bez powtorek', allLanguages({ front: ['pl'], back: ['pl', 'de'] }), [
+check('obie strony razem, bez powtorek', allLanguages({ front: ['pl', 'de'], back: 'pl' }), [
   'pl',
   'de',
 ]);
+
+group('Jeden jezyk odpowiedzi, ranking pytania');
+
+/**
+ * The two sides stopped being symmetrical on 2026-09-08. The answer is one
+ * language — a word has one pronunciation, and both the voice and the sound a
+ * keyword imitates follow from it. Decks written before that kept a list, and
+ * the first entry is what they meant.
+ */
+check('kolumna z lista oddaje pierwszy', parseLanguage('["pt-PT","es"]'), 'pt-PT');
+check('kolumna z jednym tez', parseLanguage('["pt-PT"]'), 'pt-PT');
+check('pusta kolumna to brak jezyka', parseLanguage(null), null);
+check('stara nazwa tez sie mapuje', parseLanguage('["portugalski"]'), 'pt-PT');
+
+check('zapis jednego jezyka', languageJson('pt-PT'), '["pt-PT"]');
+check('brak jezyka to NULL', languageJson(null), null);
+check('wymyslony jezyk to tez NULL', languageJson('klingonski'), null);
+
+group('Nazwa angielska w obie strony');
+
+// The model is told English names and answers with one of them, so the way
+// back has to exist — otherwise nothing can tell which language it reached for.
+check('angielska nazwa wraca na kod', languageByEnglish('Polish'), 'pl');
+check('takze bez wielkosci liter', languageByEnglish('polish'), 'pl');
+
+// A model repeating a name is not a model quoting a catalogue: "English" has
+// to find something, even though the list only holds the two regional entries.
+check('sama nazwa jezyka trafia w wariant', languageByEnglish('English'), 'en-US');
+check('czego nie ma, to null', languageByEnglish('Klingon'), null);
