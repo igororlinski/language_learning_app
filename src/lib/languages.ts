@@ -1,56 +1,138 @@
-import { fold } from '@/lib/search';
-
 /**
  * Which languages a deck's questions and answers are written in.
  *
  * This is a **declaration, not a rule**: nothing validates a card against it and
  * nothing stops a Polish word landing in a deck that says its questions are
  * English. It exists to be read by things that need to know what they are
- * looking at — the first of them being picture generation from the phonetic and
- * semantic likeness between a question and its answer, which cannot be attempted
- * without knowing which two languages are being compared.
+ * looking at — the phonetic association (which cannot compare two languages
+ * without knowing which two) and, since 2026-09-08, reading a word aloud.
  *
- * The names are typed by the user rather than picked from a closed list, so the
- * rules here are the ones tags already live by: the spelling shown is the user's
- * own, and identity is that spelling with case and diacritics folded away.
+ * **Languages are picked from this list, not typed** (changed 2026-09-08; they
+ * were free text from 09-03). Speech is what settled it: a phone is asked to
+ * read in `pt-PT`, and no amount of folding turns „brazylijski" into that. The
+ * identity of a language is now a BCP-47 code and nothing else, so the same
+ * deck says the same thing to the image model, to the language model and to the
+ * speech engine.
  *
- * Kept free of the database so the editor and whatever reads a deck later agree
- * on what a language is — see [[tags]] for the same shape one layer down.
+ * The English name is here for a second reason: the mnemonic prompt is written
+ * in English, and telling it "Portuguese" is worth more than telling it
+ * "portugalski" — see `src/lib/ai-mnemonic.ts`.
  */
 
-/** Nothing longer is a language name; it is a sentence about one. */
-export const MAX_LANGUAGE_LENGTH = 32;
+import { fold } from '@/lib/search';
 
-/** What the user sees: their own spelling, trimmed and squeezed to one line. */
-export function languageName(input: string): string {
-  return input.trim().replace(/\s+/g, ' ').slice(0, MAX_LANGUAGE_LENGTH);
-}
+export type Language = {
+  /** BCP-47, and the identity of the language everywhere in the app. */
+  code: string;
+  /** What the user sees, in Polish. */
+  name: string;
+  /** What the language model is told, because its prompt is English. */
+  english: string;
+};
 
 /**
- * What uniqueness is checked against. The same folding tags and the search box
- * use, so `Angielski`, `angielski` and `ANGIELSKI` are one language rather than
- * three — and so are `łaciński` and `lacinski`.
+ * The catalogue.
+ *
+ * Sorted by the Polish name, because that is the order somebody scanning the
+ * list expects. Regional entries exist only where they change how a word is
+ * *said* — `pt-PT` against `pt-BR` is two different pronunciations of the same
+ * word, which is the whole point of the speech field, while `de-AT` is not.
+ *
+ * A language with no speech voice on the phone stays on the list: the deck can
+ * still declare it, associations still work, and only the reading falls away
+ * with a reason (`łacina` is the obvious one).
  */
-export function languageSlug(input: string): string {
-  return fold(languageName(input));
+export const LANGUAGES: readonly Language[] = [
+  { code: 'en-US', name: 'angielski (amerykański)', english: 'English (American)' },
+  { code: 'en-GB', name: 'angielski (brytyjski)', english: 'English (British)' },
+  { code: 'ar', name: 'arabski', english: 'Arabic' },
+  { code: 'bg', name: 'bułgarski', english: 'Bulgarian' },
+  { code: 'zh-CN', name: 'chiński (uproszczony)', english: 'Mandarin Chinese (Simplified)' },
+  { code: 'zh-TW', name: 'chiński (tradycyjny)', english: 'Mandarin Chinese (Traditional)' },
+  { code: 'hr', name: 'chorwacki', english: 'Croatian' },
+  { code: 'cs', name: 'czeski', english: 'Czech' },
+  { code: 'da', name: 'duński', english: 'Danish' },
+  { code: 'et', name: 'estoński', english: 'Estonian' },
+  { code: 'fi', name: 'fiński', english: 'Finnish' },
+  { code: 'fr', name: 'francuski', english: 'French' },
+  { code: 'el', name: 'grecki', english: 'Greek' },
+  { code: 'es', name: 'hiszpański', english: 'Spanish' },
+  { code: 'es-MX', name: 'hiszpański (Meksyk)', english: 'Spanish (Mexican)' },
+  { code: 'he', name: 'hebrajski', english: 'Hebrew' },
+  { code: 'hi', name: 'hindi', english: 'Hindi' },
+  { code: 'id', name: 'indonezyjski', english: 'Indonesian' },
+  { code: 'ja', name: 'japoński', english: 'Japanese' },
+  { code: 'ko', name: 'koreański', english: 'Korean' },
+  { code: 'lt', name: 'litewski', english: 'Lithuanian' },
+  { code: 'la', name: 'łacina', english: 'Latin' },
+  { code: 'lv', name: 'łotewski', english: 'Latvian' },
+  { code: 'nl', name: 'niderlandzki', english: 'Dutch' },
+  { code: 'de', name: 'niemiecki', english: 'German' },
+  { code: 'no', name: 'norweski', english: 'Norwegian' },
+  { code: 'fa', name: 'perski', english: 'Persian' },
+  { code: 'pl', name: 'polski', english: 'Polish' },
+  { code: 'pt-PT', name: 'portugalski', english: 'Portuguese (European)' },
+  { code: 'pt-BR', name: 'portugalski (Brazylia)', english: 'Portuguese (Brazilian)' },
+  { code: 'ru', name: 'rosyjski', english: 'Russian' },
+  { code: 'ro', name: 'rumuński', english: 'Romanian' },
+  { code: 'sr', name: 'serbski', english: 'Serbian' },
+  { code: 'sk', name: 'słowacki', english: 'Slovak' },
+  { code: 'sl', name: 'słoweński', english: 'Slovenian' },
+  { code: 'sv', name: 'szwedzki', english: 'Swedish' },
+  { code: 'th', name: 'tajski', english: 'Thai' },
+  { code: 'tr', name: 'turecki', english: 'Turkish' },
+  { code: 'uk', name: 'ukraiński', english: 'Ukrainian' },
+  { code: 'hu', name: 'węgierski', english: 'Hungarian' },
+  { code: 'vi', name: 'wietnamski', english: 'Vietnamese' },
+  { code: 'it', name: 'włoski', english: 'Italian' },
+];
+
+const BY_CODE = new Map(LANGUAGES.map((language) => [language.code, language]));
+
+/**
+ * What decks written before the list existed said, folded, and where it lands.
+ *
+ * Those rows hold typed names — „polski", „portugalski", „angielski" — and
+ * throwing them away would quietly empty the one thing that makes associations
+ * work. Every catalogue name maps itself; the entries below are the bare names
+ * that no longer exist verbatim because the list splits them by region.
+ *
+ * Anything else is dropped: a deck saying „brazylijski" cannot be turned into a
+ * code by guessing, and guessing wrong is worse than the deck saying nothing.
+ */
+const LEGACY_NAMES: Record<string, string> = {
+  angielski: 'en-US',
+  chinski: 'zh-CN',
+  portugalski: 'pt-PT',
+  brazylijski: 'pt-BR',
+  hiszpanski: 'es',
+  norweski: 'no',
+  grecki: 'el',
+};
+
+const BY_NAME = new Map<string, string>([
+  ...LANGUAGES.map((language) => [fold(language.name), language.code] as const),
+  ...Object.entries(LEGACY_NAMES).map(([name, code]) => [fold(name), code] as const),
+]);
+
+/** Whether this is a code the app knows how to show and speak. */
+export function isKnownLanguage(code: string): boolean {
+  return BY_CODE.has(code);
 }
 
-/** Whether a typed name is worth saving at all. */
-export function isUsableLanguage(input: string): boolean {
-  return languageSlug(input).length > 0;
+/** What the user sees for a code — or the code itself, which beats nothing. */
+export function languageLabel(code: string): string {
+  return BY_CODE.get(code)?.name ?? code;
 }
 
-/** The same list without repeats, keeping the first spelling of each. */
-export function dedupeLanguages(names: string[]): string[] {
-  const seen = new Set<string>();
+/** What the language model is told about a code. */
+export function languageEnglish(code: string): string {
+  return BY_CODE.get(code)?.english ?? code;
+}
 
-  return names.filter((name) => {
-    const slug = languageSlug(name);
-    if (!slug || seen.has(slug)) return false;
-
-    seen.add(slug);
-    return true;
-  });
+/** The same list without repeats, in the order given. */
+export function dedupeLanguages(codes: string[]): string[] {
+  return [...new Set(codes.filter(isKnownLanguage))];
 }
 
 /** What a deck declares about its two mandatory fields. */
@@ -64,13 +146,13 @@ export type DeckLanguages = {
 export const NO_LANGUAGES: DeckLanguages = { front: [], back: [] };
 
 /**
- * The names out of one deck column, which holds them as a JSON array.
+ * The codes out of one deck column, which holds them as a JSON array.
  *
- * Anything unreadable comes back as an empty list rather than as an error: a
- * deck that cannot say what language it is in is exactly a deck that has not
- * said, and a row written by some future version must not be able to break the
- * editor. Same reasoning as `parseWeights`, different empty value — there is no
- * "default set of languages" to fall back on.
+ * Forgiving in exactly one direction: an entry that is not a code is looked up
+ * as a name first, so decks written before 09-08 keep what they declared. What
+ * matches neither is dropped, and unreadable JSON comes back as an empty list —
+ * a deck that cannot say what language it is in is exactly a deck that has not
+ * said, and a row from some future version must not break the editor.
  */
 export function parseLanguages(json: string | null | undefined): string[] {
   if (!json) return [];
@@ -85,18 +167,21 @@ export function parseLanguages(json: string | null | undefined): string[] {
 
   if (!Array.isArray(parsed)) return [];
 
-  return dedupeLanguages(
-    parsed.filter((name): name is string => typeof name === 'string').map(languageName)
-  );
+  const codes = parsed
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => (isKnownLanguage(entry) ? entry : (BY_NAME.get(fold(entry)) ?? '')))
+    .filter(Boolean);
+
+  return dedupeLanguages(codes);
 }
 
 /**
- * The column value for a list of names, or `null` when there are none — so
+ * The column value for a list of codes, or `null` when there are none — so
  * "this deck says nothing about its languages" is one value in the database
  * rather than two (`null` and `[]`) that would have to mean the same thing.
  */
-export function languagesJson(names: string[]): string | null {
-  const clean = dedupeLanguages(names.map(languageName)).filter((name) => name.length > 0);
+export function languagesJson(codes: string[]): string | null {
+  const clean = dedupeLanguages(codes);
 
   return clean.length > 0 ? JSON.stringify(clean) : null;
 }
@@ -104,4 +189,16 @@ export function languagesJson(names: string[]): string | null {
 /** Every language named by either side, once, in the order they appear. */
 export function allLanguages(languages: DeckLanguages): string[] {
   return dedupeLanguages([...languages.front, ...languages.back]);
+}
+
+/**
+ * Which voice to read a side in: the first language it declares.
+ *
+ * First rather than "the only one" because a deck may honestly declare two —
+ * a word list mixing Portuguese and Spanish, say — and something has to be
+ * chosen. The first is the one the user put first, which is the closest thing
+ * to an intention available here.
+ */
+export function speechLanguage(codes: string[]): string | null {
+  return codes.find(isKnownLanguage) ?? null;
 }

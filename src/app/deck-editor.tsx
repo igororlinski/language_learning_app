@@ -8,7 +8,7 @@ import { AddFieldSheet } from '@/components/add-field-sheet';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
 import { Dropdown, type DropdownOption } from '@/components/dropdown';
-import { NameSheet } from '@/components/name-sheet';
+import { LanguageSheet } from '@/components/language-sheet';
 import { OptionPicker, type PickerOption } from '@/components/option-picker';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
@@ -23,7 +23,6 @@ import {
   stabilitySamples,
   syncDeckSlots,
   updateDeck,
-  usedLanguages,
 } from '@/db/queries';
 import {
   type FieldKind,
@@ -38,13 +37,8 @@ import {
   type PictureQuality,
 } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
-import {
-  dedupeLanguages,
-  languageName,
-  languageSlug,
-  parseLanguages,
-} from '@/lib/languages';
-import { MEDIA_NOUNS } from '@/lib/media';
+import { dedupeLanguages, languageLabel, parseLanguages } from '@/lib/languages';
+import { FIELD_NOUNS } from '@/lib/media';
 import {
   DEFAULT_LEARNING_STEPS,
   DEFAULT_MAXIMUM_INTERVAL,
@@ -193,12 +187,6 @@ export default function DeckEditorScreen() {
   const [imageQuality, setImageQuality] = useState<PictureQuality>(
     existing?.imageQuality ?? DEFAULT_PICTURE_QUALITY
   );
-  /**
-   * Read once: every language any deck already names, so this one can reuse a
-   * spelling instead of inventing a second one. Not a live query — it is a
-   * convenience in a picker, and it must not move while the picker is open.
-   */
-  const knownLanguages = useMemo(() => usedLanguages(), []);
   const [description, setDescription] = useState(existing?.description ?? '');
   const [newPerDay, setNewPerDay] = useState(String(existing?.newPerDay ?? DEFAULT_NEW_PER_DAY));
   const [reviewsPerDay, setReviewsPerDay] = useState(
@@ -342,7 +330,7 @@ export default function DeckEditorScreen() {
     return (
       <View style={styles.slot}>
         <ThemedText type="small" themeColor="textSecondary">
-          {row.field === 'text' ? rowInfo.label : `${rowInfo.label} — ${MEDIA_NOUNS[row.field]}`}
+          {row.field === 'text' ? rowInfo.label : `${rowInfo.label} — ${FIELD_NOUNS[row.field]}`}
         </ThemedText>
         <Pressable
           onPress={() => removeRow(row.key)}
@@ -373,10 +361,10 @@ export default function DeckEditorScreen() {
       <View style={styles.languages}>
         {picked.map((language) => (
           <Pressable
-            key={languageSlug(language)}
+            key={language}
             onPress={() => setPicked(picked.filter((own) => own !== language))}
             accessibilityRole="button"
-            accessibilityLabel={`Usuń język ${language}`}
+            accessibilityLabel={`Usuń język ${languageLabel(language)}`}
             style={({ pressed }) => [
               styles.language,
               {
@@ -386,7 +374,7 @@ export default function DeckEditorScreen() {
               },
             ]}>
             <ThemedText type="small" style={{ color: theme.accent }}>
-              {`${language}  ×`}
+              {`${languageLabel(language)}  ×`}
             </ThemedText>
           </Pressable>
         ))}
@@ -649,15 +637,10 @@ export default function DeckEditorScreen() {
         </Pressable>
       </ScrollViewContainer>
 
-      <NameSheet
+      <LanguageSheet
         visible={languageSheet !== null}
         title={languageSheet === 'back' ? 'Języki odpowiedzi' : 'Języki pytania'}
-        inputLabel="Nowy język"
-        placeholder="np. angielski"
         picked={languageSheet === 'back' ? backLanguages : frontLanguages}
-        known={knownLanguages}
-        normalize={languageName}
-        identity={languageSlug}
         onChange={(picked) =>
           (languageSheet === 'back' ? setBackLanguages : setFrontLanguages)(
             dedupeLanguages(picked)

@@ -37,6 +37,11 @@ const KINDS: PickerOption<FieldKind>[] = [
   { value: 'image', label: 'Obraz' },
   { value: 'video', label: 'Wideo' },
   {
+    value: 'speech',
+    label: 'Wymowa',
+    hint: 'Telefon czyta odpowiedź na głos, w języku talii. Bez internetu.',
+  },
+  {
     value: 'mnemonic',
     label: 'Skojarzenie',
     hint: 'Słowo o podobnym brzmieniu do odpowiedzi i obrazek, który łączy je ze znaczeniem.',

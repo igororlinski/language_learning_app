@@ -6,6 +6,7 @@
 import { FIELD_KINDS } from '@/db/schema';
 import {
   extensionOf,
+  FIELD_NOUNS,
   formatBytes,
   isGeneratedKind,
   isMediaKind,
@@ -132,3 +133,14 @@ check('pusta nazwa dzwieku dostaje zastepnik', mediaLabel('audio', '   '), 'Nagr
 check('pusta nazwa obrazu tez', mediaLabel('image', ''), 'Obraz');
 check('pusta nazwa wideo tez', mediaLabel('video', ''), 'Wideo');
 check('nazwa pliku zostaje', mediaLabel('audio', 'wymowa.mp3'), 'wymowa.mp3');
+
+group('Nazwa rodzaju pola');
+
+// Every kind is labelled in both editors, including the ones that hold no file
+// at all (`speech`, `text`) — a missing entry would put `undefined` on screen.
+check(
+  'kazdy rodzaj ma swoja nazwe',
+  FIELD_KINDS.every((kind) => Boolean(FIELD_NOUNS[kind])),
+  true
+);
+check('a rodzaje z plikiem maja te sama co w MEDIA_NOUNS', FIELD_NOUNS.audio, MEDIA_NOUNS.audio);

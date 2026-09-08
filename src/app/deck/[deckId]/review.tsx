@@ -18,6 +18,8 @@ import {
   Rating,
   type Grade,
 } from '@/lib/scheduler';
+import { deckLanguages } from '@/db/queries';
+import { speechVoice } from '@/lib/speech';
 import { useReviewStore } from '@/stores/review-store';
 
 const RATING_COLOR: Record<Grade, string> = {
@@ -39,6 +41,9 @@ export default function ReviewScreen() {
 
   const { deckId: deckIdParam } = useLocalSearchParams<{ deckId: string }>();
   const deckId = Number(deckIdParam);
+
+  /** Which voice a speech field reads in — see `src/lib/speech.ts`. */
+  const voice = useMemo(() => speechVoice(deckLanguages(deckId)), [deckId]);
 
   const queue = useReviewStore((s) => s.queue);
   const revealed = useReviewStore((s) => s.revealed);
@@ -131,6 +136,7 @@ export default function ReviewScreen() {
               frontLines={current.frontLines}
               backLines={current.backLines}
               revealed={revealed}
+              voice={voice}
             />
           </ScrollView>
 

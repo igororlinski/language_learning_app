@@ -4,8 +4,6 @@ import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/
 import { isMediaKind, type MediaKind } from '@/lib/media';
 import { DEFAULT_SCHEDULING, parseWeights, type DeckScheduling } from '@/lib/fsrs-options';
 import {
-  allLanguages,
-  dedupeLanguages,
   languagesJson,
   NO_LANGUAGES,
   parseLanguages,
@@ -715,19 +713,10 @@ export function deckPictureQuality(deckId: number): PictureQuality {
   return getDeck(deckId)?.imageQuality ?? DEFAULT_PICTURE_QUALITY;
 }
 
-/**
- * Every language any deck already names, so one can be reused rather than
- * retyped — the same courtesy tags get, without a table of their own: a
- * language is only ever a name, so the deck rows already hold the whole set.
- */
-export function usedLanguages(): string[] {
-  const rows = db
-    .select({ frontLanguages: decks.frontLanguages, backLanguages: decks.backLanguages })
-    .from(decks)
-    .all();
-
-  return dedupeLanguages(rows.flatMap((row) => allLanguages(toLanguages(row))));
-}
+/* `usedLanguages()` lived here until 2026-09-08: it gathered every language any
+ * deck had typed, so a spelling could be reused instead of invented twice. The
+ * closed list in `src/lib/languages.ts` made it pointless — there is nothing to
+ * reuse when there is nothing to invent. */
 
 /**
  * What the optimiser learns from: one row per card that finished a first study

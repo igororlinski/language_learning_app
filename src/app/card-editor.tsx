@@ -33,7 +33,9 @@ import {
 } from '@/db/queries';
 import type { FieldKind, FieldSide, PictureQuality } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
+import { useVoices } from '@/hooks/use-voices';
 import {
+  FIELD_NOUNS,
   formatBytes,
   isGeneratedKind,
   isMediaKind,
@@ -49,6 +51,7 @@ import {
   pickMedia,
   saveGeneratedImage,
 } from '@/lib/media-files';
+import * as Speech from 'expo-speech';
 import { AiError } from '@/lib/ai-worker';
 import { generateImage, generatePicture as pictureFromScene } from '@/lib/ai-image';
 import { requestMnemonics } from '@/lib/ai-mnemonic';
@@ -58,6 +61,8 @@ import {
   parseMnemonicColumn,
   type Mnemonic,
 } from '@/lib/mnemonic';
+import { languageEnglish, languageLabel } from '@/lib/languages';
+import { matchVoice, speechText, speechVoice } from '@/lib/speech';
 import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
 import { draftSignature } from '@/lib/card-draft';
@@ -219,6 +224,21 @@ export default function CardEditorScreen() {
    * which that is by looking at two words.
    */
   const languages = useMemo(() => deckLanguages(deckId), [deckId]);
+
+  /**
+   * Which voice a speech field reads in — the deck's answer language, because
+   * the answer is the word being learned. Null when the deck declares none, and
+   * the field says so rather than letting the phone read Portuguese in Polish.
+   */
+  const voice = useMemo(() => speechVoice(languages), [languages]);
+
+  /**
+   * Whether this phone can say anything in that language. Checked here and not
+   * on the card: this is where a speech field is made, and a field that will be
+   * silent is worth knowing about before it is saved onto fifty cards.
+   */
+  const voices = useVoices();
+  const voiceMatch = useMemo(() => matchVoice(voice, voices), [voice, voices]);
 
   const info = describeRows(rows, BASE_LABELS);
 
@@ -447,9 +467,12 @@ export default function CardEditorScreen() {
 
       const options = await requestMnemonics({
         term: back,
-        termLanguages: languages.back,
+        // English names, not codes and not the Polish labels: the prompt in the
+        // Worker is written in English, and "Portuguese (European)" is worth
+        // more to the model than „portugalski" or `pt-PT`.
+        termLanguages: languages.back.map(languageEnglish),
         meaning: front,
-        meaningLanguages: languages.front,
+        meaningLanguages: languages.front.map(languageEnglish),
       });
 
       setChoosing({ step: 'association', key, options });
@@ -996,6 +1019,76 @@ export default function CardEditorScreen() {
       );
     }
 
+    if (row.field === 'speech') {
+      // What the button will actually say, worked out exactly as the card will
+      // work it out — the field's own text, or the answer when it has none.
+      const said = speechText(row.value, back);
+      const silent = said.length === 0 || voiceMatch.status === 'missing';
+
+      return (
+        <>
+          <ThemedText type="smallBold" themeColor="textSecondary">
+            {`${rowInfo.label} — ${FIELD_NOUNS.speech}${voice ? ` (${languageLabel(voice)})` : ''}`}
+          </ThemedText>
+
+          <TextField
+            label=""
+            value={row.value}
+            onChangeText={(text) => patchRow(row.key, text)}
+            placeholder="Domyślnie czyta odpowiedź"
+            style={styles.input}
+            multiline
+          />
+
+          <View style={styles.rowActions}>
+            {/* Hearing it here is the whole check: a wrong voice or a word the
+                engine mangles is obvious in a second and invisible on paper. */}
+            <Pressable
+              onPress={() => {
+                Speech.stop();
+                Speech.speak(said, voice ? { language: voice } : undefined);
+              }}
+              disabled={silent}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: silent }}
+              accessibilityLabel={`Posłuchaj: ${rowInfo.label}`}>
+              <ThemedText type="small" style={{ color: theme.accent, opacity: silent ? 0.4 : 1 }}>
+                Posłuchaj
+              </ThemedText>
+            </Pressable>
+
+            <Pressable
+              onPress={() => removeRow(row.key)}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel={`Usuń ${rowInfo.label}`}>
+              <ThemedText type="small" style={{ color: theme.danger }}>
+                Usuń pole
+              </ThemedText>
+            </Pressable>
+          </View>
+
+          {/* Everything that stops this field working, said here rather than
+              discovered as silence in the middle of a review. Only one line
+              shows: the deck's own gap first, then the phone's. */}
+          {voice === null ? (
+            <ThemedText type="small" themeColor="textSecondary">
+              Talia nie ma języka odpowiedzi — telefon przeczyta swoim własnym.
+            </ThemedText>
+          ) : voiceMatch.status === 'missing' ? (
+            <ThemedText type="small" themeColor="textSecondary">
+              {`Telefon nie ma głosu dla ${languageLabel(voice)}. Doinstaluj go w ustawieniach Androida (Zamiana tekstu na mowę).`}
+            </ThemedText>
+          ) : voiceMatch.status === 'variant' ? (
+            <ThemedText type="small" themeColor="textSecondary">
+              {`Telefon ma tylko ${languageLabel(voiceMatch.tag ?? '')} — przeczyta, ale innym akcentem.`}
+            </ThemedText>
+          ) : null}
+        </>
+      );
+    }
+
     if (isGeneratedKind(row.field)) {
       const kind = row.field;
       const busy = generating?.key === row.key;
@@ -1193,6 +1286,7 @@ export default function CardEditorScreen() {
                 backLines={preview.back}
                 revealed
                 compact
+                voice={voice}
               />
             </View>
           ) : null}

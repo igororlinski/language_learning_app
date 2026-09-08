@@ -37,7 +37,18 @@ export const FIELD_SIDES = ['front', 'back'] as const;
  * `npm run db:generate` says "nothing to migrate". What it does need is an entry
  * in every record in `src/lib/media.ts`; `tests/media.test.ts` enforces that.
  */
-export const FIELD_KINDS = ['text', 'audio', 'image', 'video', 'ai-image', 'mnemonic'] as const;
+export const FIELD_KINDS = [
+  'text',
+  'audio',
+  'image',
+  'video',
+  'ai-image',
+  'mnemonic',
+  // Reads a word out loud on the phone itself (`expo-speech`), so it holds no
+  // file at all — the first kind that is neither text on the card nor an
+  // attachment. See `src/lib/speech.ts` for what it reads and in which voice.
+  'speech',
+] as const;
 export type FieldSide = (typeof FIELD_SIDES)[number];
 export type FieldKind = (typeof FIELD_KINDS)[number];
 

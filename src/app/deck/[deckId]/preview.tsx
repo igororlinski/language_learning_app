@@ -8,8 +8,9 @@ import { CardFaces, cardFacesLayout } from '@/components/card-faces';
 import { EmptyState } from '@/components/empty-state';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
-import { cardsLines } from '@/db/queries';
+import { cardsLines, deckLanguages } from '@/db/queries';
 import { useTheme } from '@/hooks/use-theme';
+import { speechVoice } from '@/lib/speech';
 
 /**
  * A walk through hand-picked cards, exactly as the learner would see them —
@@ -30,7 +31,10 @@ export default function PreviewScreen() {
   const theme = useTheme();
   const router = useRouter();
 
-  const { ids } = useLocalSearchParams<{ deckId: string; ids: string }>();
+  const { deckId: deckIdParam, ids } = useLocalSearchParams<{ deckId: string; ids: string }>();
+
+  /** Which voice a speech field reads in — the same one the session uses. */
+  const voice = useMemo(() => speechVoice(deckLanguages(Number(deckIdParam))), [deckIdParam]);
 
   // Read once. A card edited or deleted elsewhere while this screen is open
   // would change the queue under the user's finger for no good reason.
@@ -94,6 +98,7 @@ export default function PreviewScreen() {
           frontLines={current.front}
           backLines={current.back}
           revealed={revealed}
+          voice={voice}
         />
       </ScrollView>
 

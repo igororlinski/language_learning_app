@@ -137,6 +137,20 @@ export const MEDIA_NOUNS: Record<MediaKind, string> = {
   mnemonic: 'skojarzenie',
 };
 
+/**
+ * The word for **any** kind of field, media or not — "Przód — pole 1 — wymowa".
+ *
+ * `MEDIA_NOUNS` covers only the kinds that hold a file, and since 2026-09-08
+ * there is a kind that holds neither a file nor text on the card (`speech`).
+ * The editors label every row, so they need a word for every kind; the media
+ * ones are reused rather than retyped so the two lists cannot drift.
+ */
+export const FIELD_NOUNS: Record<FieldKind, string> = {
+  text: 'tekst',
+  speech: 'wymowa',
+  ...MEDIA_NOUNS,
+};
+
 /** The same word in the genitive, for messages built as "Nie dodano …". */
 export const MEDIA_NOUNS_GENITIVE: Record<MediaKind, string> = {
   audio: 'dźwięku',

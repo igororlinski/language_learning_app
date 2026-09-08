@@ -52,14 +52,12 @@ import {
   updateDeck,
   type MediaCopier,
 } from '@/db/queries';
-import { usedLanguages } from '@/db/queries';
 import { decks, fsrsState, reviewLogs } from '@/db/schema';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { sortCards } from '@/lib/card-sort';
 import { filterCards } from '@/lib/search';
 import { DEFAULT_SCHEDULING, schedulingKey } from '@/lib/fsrs-options';
 import { optimizeWeights } from '@/lib/fsrs-optimizer';
-import { languageSlug } from '@/lib/languages';
 import { parseMnemonicColumn } from '@/lib/mnemonic';
 import { filterByTags } from '@/lib/tags';
 import {
@@ -489,8 +487,8 @@ const oddQueued = () =>
 
 check('nowa karta dziedziczy uklad talii: przod pusty', oddQueued()?.frontLines, []);
 check('a oba pola podstawowe czytaja sie z tylu', oddQueued()?.backLines, [
-  { text: 'latac', base: true, media: null },
-  { text: 'to fly', base: true, media: null },
+  { text: 'latac', base: true, media: null, speak: null },
+  { text: 'to fly', base: true, media: null, speak: null },
 ]);
 
 group('Uklad pol na karcie');
@@ -522,12 +520,12 @@ check(
 const queued = () => loadDueCards(fieldDeck.id, now).find((card) => card.cardId === fieldCard.id);
 
 check('przod czyta sie w kolejnosci z edytora, bez pustego pola', queued()?.frontLines, [
-  { text: '/breik/', base: false, media: null },
-  { text: 'to break', base: true, media: null },
+  { text: '/breik/', base: false, media: null, speak: null },
+  { text: 'to break', base: true, media: null, speak: null },
 ]);
 check('tyl tak samo', queued()?.backLines, [
-  { text: 'lamac', base: true, media: null },
-  { text: 'break-broke-broken', base: false, media: null },
+  { text: 'lamac', base: true, media: null, speak: null },
+  { text: 'break-broke-broken', base: false, media: null, speak: null },
 ]);
 
 const rows = getCardFields(fieldCard.id);
@@ -548,12 +546,12 @@ saveCardFields(
 );
 
 check('po przestawieniu przod ma tylko pole podstawowe', queued()?.frontLines, [
-  { text: 'to break', base: true, media: null },
+  { text: 'to break', base: true, media: null, speak: null },
 ]);
 check('a pole przeniesione czyta sie na tyle, nad podstawowym', queued()?.backLines, [
-  { text: '/breik/', base: false, media: null },
-  { text: 'lamac', base: true, media: null },
-  { text: 'break-broke-broken', base: false, media: null },
+  { text: '/breik/', base: false, media: null, speak: null },
+  { text: 'lamac', base: true, media: null, speak: null },
+  { text: 'break-broke-broken', base: false, media: null, speak: null },
 ]);
 
 check('pole wyrzucone z listy znika z karty', getCardFields(fieldCard.id).length, 3);
@@ -579,9 +577,9 @@ const emptyFrontQueued = () =>
 
 check('przod bez zadnego pola nie ma linii', emptyFrontQueued()?.frontLines, []);
 check('a caly uklad czyta sie z tylu', emptyFrontQueued()?.backLines, [
-  { text: 'to run', base: true, media: null },
-  { text: 'biegac', base: true, media: null },
-  { text: 'ran / run', base: false, media: null },
+  { text: 'to run', base: true, media: null, speak: null },
+  { text: 'biegac', base: true, media: null, speak: null },
+  { text: 'ran / run', base: false, media: null, speak: null },
 ]);
 
 group('Przenosiny a pola karty');
@@ -594,9 +592,9 @@ check(
   'uklad karty przezywa przenosiny w calosci',
   loadDueCards(fieldTarget.id, now).find((card) => card.cardId === fieldCard.id)?.backLines,
   [
-    { text: '/breik/', base: false, media: null },
-    { text: 'lamac', base: true, media: null },
-    { text: 'break-broke-broken', base: false, media: null },
+    { text: '/breik/', base: false, media: null, speak: null },
+    { text: 'lamac', base: true, media: null, speak: null },
+    { text: 'break-broke-broken', base: false, media: null, speak: null },
   ]
 );
 
@@ -691,13 +689,13 @@ const mediaQueued = () =>
   loadDueCards(mediaDeck.id, now).find((card) => card.cardId === mediaCard.id);
 
 check('linia dzwieku niesie plik i jego rodzaj', mediaQueued()?.frontLines, [
-  { text: 'to break', base: true, media: null },
-  { text: 'break.m4a', base: false, media: { kind: 'audio', fileName: 'a1.m4a' } },
+  { text: 'to break', base: true, media: null, speak: null },
+  { text: 'break.m4a', base: false, media: { kind: 'audio', fileName: 'a1.m4a' }, speak: null },
 ]);
 check('linia obrazu i wideo tak samo', mediaQueued()?.backLines, [
-  { text: 'lamac', base: true, media: null },
-  { text: 'lamanie.jpg', base: false, media: { kind: 'image', fileName: 'i1.jpg' } },
-  { text: 'lamanie.mp4', base: false, media: { kind: 'video', fileName: 'v1.mp4' } },
+  { text: 'lamac', base: true, media: null, speak: null },
+  { text: 'lamanie.jpg', base: false, media: { kind: 'image', fileName: 'i1.jpg' }, speak: null },
+  { text: 'lamanie.mp4', base: false, media: { kind: 'video', fileName: 'v1.mp4' }, speak: null },
 ]);
 
 // Deleting has to know the kind: each one lives in its own directory.
@@ -725,7 +723,7 @@ saveCardFields(mediaCard.id, [
 ]);
 
 check('pole bez pliku nie trafia na karte', mediaQueued()?.frontLines, [
-  { text: 'to break', base: true, media: null },
+  { text: 'to break', base: true, media: null, speak: null },
 ]);
 check('i nie ma czego kasowac', cardMediaFiles(mediaCard.id), []);
 
@@ -763,7 +761,7 @@ updateCard(editedCard.id, {
 });
 
 check('po edycji widac nowa tresc', getCardLines(editedCard.id)?.front, [
-  { text: 'to fall down', base: true, media: null },
+  { text: 'to fall down', base: true, media: null, speak: null },
 ]);
 
 deleteCard(editedCard.id);
@@ -1039,11 +1037,11 @@ const halfQueued = () => loadDueCards(halfDeck.id, now).find((card) => card.card
 
 check('karta bez odpowiedzi zapisuje sie', getCard(halfCard.id)?.back, '');
 check('przod czyta sie normalnie', halfQueued()?.frontLines, [
-  { text: 'to wonder', base: true, media: null },
+  { text: 'to wonder', base: true, media: null, speak: null },
 ]);
 // The empty mandatory field drops out the same way an empty extra one does.
 check('a tyl pokazuje tylko to, co ma tresc', halfQueued()?.backLines, [
-  { text: 'zastanawiac sie', base: false, media: null },
+  { text: 'zastanawiac sie', base: false, media: null, speak: null },
 ]);
 
 const emptyBack = createCard(halfDeck.id, 'to hush', '', now);
@@ -1274,12 +1272,12 @@ updateDeck(langDeck.id, {
   name: 'Angielski',
   newPerDay: 50,
   reviewsPerDay: 50,
-  languages: { front: ['polski'], back: ['angielski'] },
+  languages: { front: ['pl'], back: ['en-US'] },
 });
 
 check('zapisane jezyki wracaja z bazy', deckLanguages(langDeck.id), {
-  front: ['polski'],
-  back: ['angielski'],
+  front: ['pl'],
+  back: ['en-US'],
 });
 
 // Several per side is the point — a deck may mix them.
@@ -1287,10 +1285,10 @@ updateDeck(langDeck.id, {
   name: 'Angielski',
   newPerDay: 50,
   reviewsPerDay: 50,
-  languages: { front: ['polski', 'łacina'], back: ['angielski'] },
+  languages: { front: ['pl', 'la'], back: ['en-US'] },
 });
 
-check('kilka jezykow na stronie tez', deckLanguages(langDeck.id).front, ['polski', 'łacina']);
+check('kilka jezykow na stronie tez', deckLanguages(langDeck.id).front, ['pl', 'la']);
 
 group('Domyslna jakosc obrazow w talii');
 
@@ -1323,16 +1321,16 @@ check('i przezywa zapis reszty formularza', deckPictureQuality(langDeck.id), 'fa
 // …and a deck that never existed answers with the default rather than throwing.
 check('nieznana talia oddaje domyslna', deckPictureQuality(9999), 'accurate');
 
-// Two spellings of one language are one language, or the future reader would
-// be told the question is in two.
+// One language named twice is one language, or a future reader would be told
+// the question is in two.
 updateDeck(langDeck.id, {
   name: 'Angielski',
   newPerDay: 50,
   reviewsPerDay: 50,
-  languages: { front: ['Polski', 'polski'], back: [] },
+  languages: { front: ['pl', 'pl'], back: [] },
 });
 
-check('powtorzona pisownia sklada sie w jedna', deckLanguages(langDeck.id).front, ['Polski']);
+check('powtorzony kod sklada sie w jeden', deckLanguages(langDeck.id).front, ['pl']);
 check('pusta strona wraca pusta', deckLanguages(langDeck.id).back, []);
 
 // A brand new deck has to carry them too, not only an edited one.
@@ -1340,29 +1338,25 @@ const bornWithLanguages = createDeck({
   name: 'Od razu z jezykami',
   newPerDay: 50,
   reviewsPerDay: 50,
-  languages: { front: ['niemiecki'], back: ['polski'] },
+  languages: { front: ['de'], back: ['pl'] },
 });
 
 check('nowa talia tez je zapisuje', deckLanguages(bornWithLanguages.id), {
-  front: ['niemiecki'],
-  back: ['polski'],
+  front: ['de'],
+  back: ['pl'],
 });
 
-// What the picker offers: every language any deck already uses, once.
-const known = usedLanguages();
-const knownTimes = (name: string) =>
-  known.filter((own) => languageSlug(own) === languageSlug(name)).length;
+// Nothing outside the catalogue reaches the column: the codes are what the
+// speech engine and the language model are handed, so a made-up one would fail
+// somewhere far away from here.
+updateDeck(langDeck.id, {
+  name: 'Angielski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  languages: { front: ['pl', 'klingonski'], back: [] },
+});
 
-check('podpowiedzi znaja jezyk z innej talii', knownTimes('niemiecki'), 1);
-check('i ten z drugiej strony', knownTimes('polski'), 1);
-
-// The suggestion list is folded across decks, so one deck writing `Polski` and
-// another `polski` offers a single chip — and the spelling that survives is the
-// first one seen, not the last. Anything else would let the picker suggest two
-// entries for one language.
-check('a sklejona pisownia to ta pierwsza', known.includes('Polski'), true);
-check('nie ta pozniejsza', known.includes('polski'), false);
-check('talia bez jezykow nic nie dokłada', known.includes(''), false);
+check('wymyslony jezyk nie wchodzi do bazy', deckLanguages(langDeck.id).front, ['pl']);
 
 group('Pole ze skojarzeniem');
 
@@ -1410,8 +1404,8 @@ check(
 // a mnemonic's sentence is the association itself — so it has to reach the
 // review screen.
 check('zdanie dociera na kartę', getCardLines(mnemoCard.id)?.back, [
-  { text: 'comer', base: true, media: null },
-  { text: 'Komar je kanapkę.', base: false, media: { kind: 'mnemonic', fileName: 'komar.jpg' } },
+  { text: 'comer', base: true, media: null, speak: null },
+  { text: 'Komar je kanapkę.', base: false, media: { kind: 'mnemonic', fileName: 'komar.jpg' }, speak: null },
 ]);
 
 // An association whose picture failed is still worth reading, which is why it
@@ -1429,8 +1423,8 @@ saveCardFields(mnemoCard.id, [
 ]);
 
 check('samo zdanie bez obrazu tez sie pokazuje', getCardLines(mnemoCard.id)?.back, [
-  { text: 'comer', base: true, media: null },
-  { text: 'Komar je kanapkę.', base: false, media: null },
+  { text: 'comer', base: true, media: null, speak: null },
+  { text: 'Komar je kanapkę.', base: false, media: null, speak: null },
 ]);
 
 // The association cost a model call to invent; a copy that kept the picture but
@@ -1473,8 +1467,8 @@ check('tresc nie znika przy chowaniu', hiddenField.value, 'Żaluzja zasłania ok
 
 // The sentence is hidden, so the card shows the picture alone.
 check('karta pokazuje sam obraz', getCardLines(hiddenCard.id)?.back, [
-  { text: 'janela', base: true, media: null },
-  { text: '', base: false, media: { kind: 'mnemonic', fileName: 'zaluzja.jpg' } },
+  { text: 'janela', base: true, media: null, speak: null },
+  { text: '', base: false, media: { kind: 'mnemonic', fileName: 'zaluzja.jpg' }, speak: null },
 ]);
 
 // Turning it back on is a save like any other, and the line returns.

@@ -1,5 +1,6 @@
 import type { FieldKind, FieldSide } from '@/db/schema';
 import { isMediaKind, type MediaKind } from '@/lib/media';
+import { speechText } from '@/lib/speech';
 
 /**
  * Where the pieces of a card sit.
@@ -96,7 +97,18 @@ export type LineMedia = { kind: MediaKind; fileName: string };
  * instead of text; `text` is then the original file name, which is all the
  * label it has.
  */
-export type CardLine = { text: string; base: boolean; media: LineMedia | null };
+export type CardLine = {
+  text: string;
+  base: boolean;
+  media: LineMedia | null;
+  /**
+   * What this line reads out loud when tapped, for a `speech` field — and null
+   * for everything else. Resolved here rather than in the screen because the
+   * fallback is the card's **answer**, which lives on whichever side the layout
+   * put it, and this is the one place that can see both faces at once.
+   */
+  speak: string | null;
+};
 
 /**
  * The lines one face shows during review. Anything with nothing in it is
@@ -109,6 +121,10 @@ export type CardLine = { text: string; base: boolean; media: LineMedia | null };
  * purpose.
  */
 export function sideLines(pieces: LayoutPiece[], side: FieldSide): CardLine[] {
+  // The answer, wherever the layout put it: a speech field with nothing typed
+  // into it reads that, and it may well be sitting on the other face.
+  const answer = pieces.find((piece) => piece.base === 'back')?.value ?? '';
+
   // Hidden halves are resolved first, so everything after this point cannot
   // tell "hidden" from "never filled in" — which is the point. A piece left
   // with nothing to show then falls out through the same filter as an empty
@@ -121,8 +137,14 @@ export function sideLines(pieces: LayoutPiece[], side: FieldSide): CardLine[] {
         !piece.hideMedia && isMediaKind(piece.kind) && piece.mediaPath
           ? { kind: piece.kind as MediaKind, fileName: piece.mediaPath }
           : null,
+      speak: piece.kind === 'speech' ? speechText(piece.value, answer) : '',
     }))
-    .filter(({ piece, text, media }) => {
+    .filter(({ piece, text, media, speak }) => {
+      // Nothing to say is nothing to show: a speech field on a card with no
+      // answer and no text of its own is as empty as an empty text box, and
+      // a button that reads silence is worse than no button.
+      if (piece.kind === 'speech') return speak.length > 0;
+
       // A mnemonic is the one media field whose text stands on its own: the
       // sentence *is* the association, and an association whose picture failed
       // is still worth reading. Every other media field is its file and nothing
@@ -131,5 +153,12 @@ export function sideLines(pieces: LayoutPiece[], side: FieldSide): CardLine[] {
 
       return isMediaKind(piece.kind) ? Boolean(media) : text.trim().length > 0;
     })
-    .map(({ piece, text, media }) => ({ text, base: piece.base !== null, media }));
+    .map(({ piece, text, media, speak }) => ({
+      // A speech line shows no text: the button is the field, and the word it
+      // says is already on the card as the answer.
+      text: piece.kind === 'speech' ? '' : text,
+      base: piece.base !== null,
+      media,
+      speak: speak || null,
+    }));
 }

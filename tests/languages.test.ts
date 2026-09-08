@@ -1,82 +1,89 @@
 /**
- * What counts as a language name, and what counts as the same one.
- *
- * The names are typed rather than picked from a list, so everything here is
- * about two spellings of one language not becoming two languages — the same
- * problem tags have, and solved the same way.
+ * Languages are a closed list since 2026-09-08, and the reason is the speech
+ * field: a phone is told `pt-PT`, and no folding of a typed name gets there.
+ * So what is tested here is the identity (a code), the door for decks written
+ * before the list existed, and the two things the codes are handed to — the
+ * language model, in English, and the speech engine.
  */
 import {
   allLanguages,
   dedupeLanguages,
-  isUsableLanguage,
-  languageName,
-  languageSlug,
+  isKnownLanguage,
+  LANGUAGES,
+  languageEnglish,
+  languageLabel,
   languagesJson,
-  MAX_LANGUAGE_LENGTH,
   parseLanguages,
+  speechLanguage,
 } from '@/lib/languages';
 
 import { check, group } from './harness';
 
-group('Nazwa jezyka');
+group('Katalog jezykow');
 
-check('traci obce spacje', languageName('  angielski  '), 'angielski');
-check('i sklejone spacje w srodku', languageName('staro   angielski'), 'staro angielski');
+check('polski jest na liscie', isKnownLanguage('pl'), true);
+check('portugalski europejski i brazylijski to dwa wpisy', isKnownLanguage('pt-BR'), true);
+check('wymyslony kod nie', isKnownLanguage('klingonski'), false);
+
+// Every entry has to answer both questions asked of it: what the user reads and
+// what the prompt is told. An entry missing either would fail far from here.
 check(
-  'bardzo dluga nazwa jest przycinana',
-  languageName('x'.repeat(100)).length,
-  MAX_LANGUAGE_LENGTH
+  'kazdy wpis ma nazwe i angielska nazwe',
+  LANGUAGES.every((language) => language.code && language.name && language.english),
+  true
 );
 
-group('Tozsamosc jezyka');
-
-// The whole point: a deck saying "Angielski" and one saying "angielski" must
-// not look like two different languages to whatever reads them later.
-check('wielkosc liter nie tworzy nowego jezyka', languageSlug('Angielski'), languageSlug('angielski'));
-check('ani ogonki', languageSlug('łaciński'), languageSlug('lacinski'));
-check('rozne jezyki maja rozne slugi', languageSlug('polski') === languageSlug('polnisch'), false);
-
-check('sama spacja to nie jezyk', isUsableLanguage('   '), false);
-check('pusty tekst tez nie', isUsableLanguage(''), false);
-check('zwykle slowo tak', isUsableLanguage('polski'), true);
-
-group('Lista jezykow bez powtorek');
-
+// Codes are the identity, so two entries sharing one would make a deck's
+// declaration ambiguous.
 check(
-  'powtorki znikaja, zostaje pierwsza pisownia',
-  dedupeLanguages(['Angielski', 'angielski', 'ANGIELSKI']),
-  ['Angielski']
+  'kody sa unikalne',
+  new Set(LANGUAGES.map((language) => language.code)).size,
+  LANGUAGES.length
 );
-check('puste wpisy wypadaja', dedupeLanguages(['polski', '   ', '']), ['polski']);
-check('rozne jezyki zostaja w kolejnosci', dedupeLanguages(['polski', 'angielski']), [
-  'polski',
-  'angielski',
+
+check('etykieta to polska nazwa', languageLabel('pt-PT'), 'portugalski');
+// Better a bare code than an empty chip: a row from a future version still says
+// something the user can read back to us.
+check('nieznany kod pokazuje sam siebie', languageLabel('xx'), 'xx');
+check('model dostaje angielska nazwe', languageEnglish('pl'), 'Polish');
+
+group('Kolumna z jezykami');
+
+check('zapis i odczyt', parseLanguages(languagesJson(['pl', 'pt-PT'])), ['pl', 'pt-PT']);
+check('pusta lista to NULL', languagesJson([]), null);
+check('powtorki sie skladaja', dedupeLanguages(['pl', 'pl', 'de']), ['pl', 'de']);
+check('smiec nie przechodzi', dedupeLanguages(['pl', 'klingonski']), ['pl']);
+
+// A row from a future version must not be able to break the editor.
+check('niepoprawny JSON to brak jezykow', parseLanguages('{{'), []);
+check('nie-tablica tez', parseLanguages('"pl"'), []);
+check('brak kolumny tez', parseLanguages(null), []);
+
+group('Talie sprzed zamknietej listy');
+
+/**
+ * Decks written between 09-03 and 09-08 hold typed names. Dropping them would
+ * quietly empty the one thing that makes an association possible, so a name is
+ * looked up before it is thrown away.
+ */
+check('nazwa z katalogu mapuje sie na kod', parseLanguages('["polski"]'), ['pl']);
+check('takze bez ogonkow', parseLanguages('["hiszpanski"]'), ['es']);
+check('nazwa bez regionu ladzie na domyslnym', parseLanguages('["portugalski"]'), ['pt-PT']);
+check('angielski dostaje amerykanski', parseLanguages('["angielski"]'), ['en-US']);
+
+// What cannot be resolved is dropped rather than guessed: a wrong code is worse
+// than a deck that says nothing, because it would be read aloud in the wrong
+// language and nobody would know why.
+check('czego nie da sie rozpoznac, wypada', parseLanguages('["brzmi jak polski"]'), []);
+check('a reszta listy zostaje', parseLanguages('["cos", "pl"]'), ['pl']);
+
+group('Ktory glos czyta');
+
+check('czyta pierwszym zadeklarowanym', speechLanguage(['pt-PT', 'es']), 'pt-PT');
+check('talia bez jezykow nie ma czym czytac', speechLanguage([]), null);
+check('smiec pomijany', speechLanguage(['klingonski', 'de']), 'de');
+
+check('obie strony razem, bez powtorek', allLanguages({ front: ['pl'], back: ['pl', 'de'] }), [
+  'pl',
+  'de',
 ]);
-
-group('Zapis i odczyt kolumny');
-
-check('lista wraca taka, jaka poszla', parseLanguages(languagesJson(['polski', 'angielski'])), [
-  'polski',
-  'angielski',
-]);
-
-// One value for "this deck has not said", not two.
-check('pusta lista to null w kolumnie', languagesJson([]), null);
-check('same puste nazwy tez', languagesJson(['  ', '']), null);
-check('null czyta sie jako pusta lista', parseLanguages(null), []);
-
-// A row written by some future version must not be able to break the editor,
-// so anything unreadable is "has not said" rather than an error.
-check('smieci czytaja sie jako pusta lista', parseLanguages('{{{'), []);
-check('obiekt zamiast tablicy tez', parseLanguages('{"front":"polski"}'), []);
-check('liczby w tablicy wypadaja', parseLanguages('["polski", 7, null]'), ['polski']);
-check('powtorki w kolumnie tez sie skladaja', parseLanguages('["polski", "Polski"]'), ['polski']);
-
-group('Oba boki razem');
-
-check(
-  'jezyk uzyty po obu stronach liczy sie raz',
-  allLanguages({ front: ['polski'], back: ['Polski', 'angielski'] }),
-  ['polski', 'angielski']
-);
-check('pusta talia nie zna zadnego', allLanguages({ front: [], back: [] }), []);

@@ -181,3 +181,37 @@ check(
   piecesOnSide(association({ hideValue: true, hideMedia: true }), 'back').length,
   2
 );
+
+group('Pole wymowy');
+
+/**
+ * A speech field carries no file and shows no text — it is a button. What it
+ * says is its own text, or the card's answer, and the answer may well be laid
+ * out on the other face, which is why this is resolved here rather than in the
+ * screen that draws one side.
+ */
+const speechCard = cardPieces(plainCard(), [
+  { side: 'front', position: 1, value: '', kind: 'speech' as const },
+]);
+
+const speechLine = sideLines(speechCard, 'front')[1];
+
+check('pole wymowy zostaje na karcie', Boolean(speechLine), true);
+check('czyta odpowiedz z drugiej strony', speechLine?.speak, 'lamac');
+check('i nie pokazuje zadnego tekstu', speechLine?.text, '');
+check('zwykla linia nie ma czego czytac', sideLines(speechCard, 'front')[0]?.speak, null);
+
+// Its own text wins, which is how a spelling the engine mangles gets nudged.
+const spelled = cardPieces(plainCard(), [
+  { side: 'front', position: 1, value: 'lamacz', kind: 'speech' as const },
+]);
+
+check('wpisany tekst wygrywa z odpowiedzia', sideLines(spelled, 'front')[1]?.speak, 'lamacz');
+
+// A button that reads silence is worse than no button.
+const mute = cardPieces(
+  { ...plainCard(), back: '' },
+  [{ side: 'front', position: 1, value: '', kind: 'speech' as const }]
+);
+
+check('bez odpowiedzi i bez tekstu pole znika', sideLines(mute, 'front').length, 1);

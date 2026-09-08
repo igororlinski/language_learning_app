@@ -14,6 +14,7 @@ import './ai-worker.test';
 import './ai-image.test';
 import './mnemonic.test';
 import './languages.test';
+import './speech.test';
 import './tags.test';
 import './study-day.test';
 import './fsrs-options.test';
