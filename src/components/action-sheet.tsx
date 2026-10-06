@@ -1,6 +1,7 @@
-import { Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Switch, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { SegmentedControl } from '@/components/segmented-control';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -26,10 +27,36 @@ export type SheetAction = {
   keepOpen?: boolean;
 };
 
+/**
+ * A two-state setting shown above the actions, for the things a menu toggles
+ * rather than does. A setting changes something and leaves the sheet open; an
+ * action is a verb that runs once and closes it. Keeping them in the same sheet,
+ * but told apart by their shape, is what makes a menu readable: a switch looks
+ * like a switch and a choice looks like a choice, instead of every option being
+ * a line of text you tap and guess at.
+ */
+export type SheetSetting =
+  | {
+      kind: 'segment';
+      /** The small label above the choice. */
+      label: string;
+      value: string;
+      options: readonly { value: string; label: string }[];
+      onChange: (value: string) => void;
+    }
+  | {
+      kind: 'toggle';
+      label: string;
+      value: boolean;
+      onChange: (value: boolean) => void;
+    };
+
 export type ActionSheetProps = {
   visible: boolean;
   title: string;
   subtitle?: string;
+  /** Two-state controls shown above the actions; mostly empty. */
+  settings?: SheetSetting[];
   actions: SheetAction[];
   onClose: () => void;
 };
@@ -39,7 +66,14 @@ export type ActionSheetProps = {
  * dialog caps out at three buttons, drops the rest without warning and cannot
  * be styled; this one takes any number of entries and follows the app theme.
  */
-export function ActionSheet({ visible, title, subtitle, actions, onClose }: ActionSheetProps) {
+export function ActionSheet({
+  visible,
+  title,
+  subtitle,
+  settings,
+  actions,
+  onClose,
+}: ActionSheetProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
 
@@ -81,6 +115,37 @@ export function ActionSheet({ visible, title, subtitle, actions, onClose }: Acti
               </ThemedText>
             ) : null}
           </View>
+
+          {settings && settings.length > 0 ? (
+            <View style={styles.settings}>
+              {settings.map((setting, index) =>
+                setting.kind === 'segment' ? (
+                  <View key={`setting-${index}`} style={styles.setting}>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {setting.label}
+                    </ThemedText>
+                    <SegmentedControl
+                      value={setting.value}
+                      options={setting.options}
+                      onChange={setting.onChange}
+                      accessibilityLabel={setting.label}
+                    />
+                  </View>
+                ) : (
+                  <View key={`setting-${index}`} style={[styles.setting, styles.toggle]}>
+                    <ThemedText style={styles.toggleLabel}>{setting.label}</ThemedText>
+                    <Switch
+                      value={setting.value}
+                      onValueChange={setting.onChange}
+                      trackColor={{ true: theme.accent, false: theme.border }}
+                      thumbColor={theme.backgroundElement}
+                      ios_backgroundColor={theme.border}
+                    />
+                  </View>
+                )
+              )}
+            </View>
+          ) : null}
 
           {actions.map((action, index) => (
             <Pressable
@@ -155,6 +220,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.four,
     paddingBottom: Spacing.three,
     gap: Spacing.half,
+  },
+  settings: {
+    paddingHorizontal: Spacing.four,
+    paddingBottom: Spacing.three,
+    gap: Spacing.three,
+  },
+  setting: {
+    gap: Spacing.one,
+  },
+  toggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  toggleLabel: {
+    fontSize: 16,
+    flexShrink: 1,
+    paddingRight: Spacing.three,
   },
   title: {
     fontSize: 17,

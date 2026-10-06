@@ -6,7 +6,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, TextInput, View } from
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
-import { ActionSheet, type SheetAction } from '@/components/action-sheet';
+import { ActionSheet, type SheetAction, type SheetSetting } from '@/components/action-sheet';
 import { AddFieldSheet } from '@/components/add-field-sheet';
 import { ChoiceSheet } from '@/components/choice-sheet';
 import { NameSheet } from '@/components/name-sheet';
@@ -237,19 +237,29 @@ export default function CardEditorScreen() {
   const qualityOf = (key: string): PictureQuality => drawQuality[key] ?? deckQuality;
 
   /**
-   * What the open options sheet offers and what it calls itself, or null when it
-   * is closed.
+   * The bottom sheet behind a field's gear. Both kinds go through the one
+   * `ActionSheet`, so the speech submenu can swap the open sheet's contents
+   * (`keepOpen`) rather than opening a second Modal, and the heading travels
+   * with the entries because every text field on the card opens this same sheet
+   * — one saying „Skojarzenie" over a plain text field's options would be wrong.
    *
-   * Built when the gear is pressed rather than on every render: the entries
-   * close over the generating flow, which touches the list of files imported
-   * this session, and that is a ref — reading it while rendering is exactly
-   * what React tells you not to do.
-   *
-   * The heading travels with the entries because the same sheet is now opened
-   * by every text field on the card, not just an association — and one that
-   * says „Skojarzenie" over the question's options would simply be wrong.
+   * The `actions` are a snapshot taken when the gear is pressed, because they
+   * close over the generating flow, which touches the imported-files ref:
+   * building them has to happen in that event handler, never during render
+   * (`react-hooks/refs`). The mnemonic field's *settings*, on the other hand,
+   * are built live each render from its row (`liveSettings` below) so its
+   * sliders and switches move the instant they are touched — and that is safe
+   * only because a setting reads state and sets state, never a ref.
    */
-  const [options, setOptions] = useState<{ title: string; actions: SheetAction[] } | null>(null);
+  type SheetState =
+    | { kind: 'menu'; title: string; actions: SheetAction[] }
+    | { kind: 'mnemonic'; key: string; actions: SheetAction[] };
+
+  const [sheet, setSheet] = useState<SheetState | null>(null);
+
+  /** Swaps the open sheet for a plain menu — what the speech submenu reuses. */
+  const showMenu = (menu: { title: string; actions: SheetAction[] }) =>
+    setSheet({ kind: 'menu', ...menu });
 
   const withPicture = (key: string) => pictureMode[key] ?? true;
 
@@ -333,7 +343,7 @@ export default function CardEditorScreen() {
     scope: SpeechScope,
     current: string | null,
     set: (code: string | null) => void
-  ): SheetAction[] => speechMenu({ scope, languages, current, set, show: setOptions });
+  ): SheetAction[] => speechMenu({ scope, languages, current, set, show: showMenu });
 
   /**
    * The languages a proposal leaned on, minus the first one the deck lists —
@@ -805,7 +815,7 @@ export default function CardEditorScreen() {
    * pointing at them — not the row, not the cleanup that runs when the edit is
    * abandoned, nothing. They were paid for and then leaked.
    */
-  const drawMnemonic = async (key: string, association: Mnemonic) => {
+  const drawMnemonic = async (key: string, association: Mnemonic, quality: PictureQuality) => {
     const kind = 'mnemonic' as const;
 
     try {
@@ -813,10 +823,7 @@ export default function CardEditorScreen() {
 
       const drawings = await Promise.allSettled(
         [0, 1, 2].map(async () => {
-          const base64 = await pictureFromScene(
-            buildScenePrompt(association.prompt),
-            qualityOf(key)
-          );
+          const base64 = await pictureFromScene(buildScenePrompt(association.prompt), quality);
           const fileName = await saveGeneratedImage(kind, base64);
 
           imported.current = [...imported.current, { kind, fileName }];
@@ -927,7 +934,7 @@ export default function CardEditorScreen() {
     // A field set to "same associations only" is finished here: the sentence
     // is the whole field, and `mnemonic` is the one kind that shows without a
     // file precisely because its text is worth reading on its own.
-    if (withPicture(key)) void drawMnemonic(key, association);
+    if (withPicture(key)) void drawMnemonic(key, association, qualityOf(key));
     else applyMnemonic(key, association, null);
   };
 
@@ -964,17 +971,84 @@ export default function CardEditorScreen() {
   };
 
   /**
-   * Everything a mnemonic field can be told to do.
+   * The mnemonic field's live settings — the two-state controls above the
+   * actions. Built during render, which is safe because every one of them only
+   * reads and writes state: which half the learner reads, and whether each half
+   * reaches them. Sliders and switches read at a glance, where a menu row named
+   * after the state it would move to did not.
    *
-   * Gathered behind the gear rather than standing in the row: making another
-   * association and drawing it again are things you reach for occasionally,
-   * and as permanent links beside the sentence they competed with the
-   * sentence for attention — which is the one thing there worth reading.
-   *
-   * The mode appears as the state it would move to, so the entry names an
-   * outcome rather than describing the current setting.
+   * Image quality is deliberately NOT here: how carefully a picture is drawn is
+   * a decision about one draw, not a standing property of the field, so it is
+   * asked at the moment a picture is actually drawn — see the draw action below.
    */
-  const mnemonicOptions = (key: string): SheetAction[] => {
+  const buildMnemonicSettings = (key: string): SheetSetting[] => {
+    const row = rows.find((item) => item.kind === 'extra' && item.key === key);
+
+    if (row?.kind !== 'extra') return [];
+
+    const stored = parseMnemonicColumn(row.mnemonic);
+
+    return [
+      // Which half the learner reads — only when there is a choice, i.e. the
+      // field holds both a sentence and the word to switch between.
+      ...(stored?.sentence && row.value.trim()
+        ? [
+            {
+              kind: 'segment' as const,
+              label: 'Na karcie widać',
+              value: showsWord(key, row) ? 'word' : 'sentence',
+              options: [
+                { value: 'word', label: 'Wyraz' },
+                { value: 'sentence', label: 'Zdanie' },
+              ],
+              onChange: (value: string) => {
+                const word = value === 'word';
+
+                setWordModes((current) => ({ ...current, [key]: word }));
+                setRows((current) =>
+                  current.map((item) =>
+                    item.kind === 'extra' && item.key === key
+                      ? { ...item, value: word ? stored.keyword : stored.sentence }
+                      : item
+                  )
+                );
+              },
+            },
+          ]
+        : []),
+      // Each half can be kept from the learner without being deleted: a hidden
+      // half still rides along in the row, one tap from coming back. Deleting a
+      // picture for good is a separate, irreversible action below.
+      ...(row.value.trim()
+        ? [
+            {
+              kind: 'toggle' as const,
+              label: 'Pokaż skojarzenie przy nauce',
+              value: !row.hideValue,
+              onChange: () => toggleHidden(key, 'value'),
+            },
+          ]
+        : []),
+      ...(row.mediaPath
+        ? [
+            {
+              kind: 'toggle' as const,
+              label: 'Pokaż obraz przy nauce',
+              value: !row.hideMedia,
+              onChange: () => toggleHidden(key, 'media'),
+            },
+          ]
+        : []),
+    ];
+  };
+
+  /**
+   * The mnemonic field's actions — the verbs. Built when the gear is pressed,
+   * never during render: they close over the generating flow, which reads the
+   * imported-files ref (`react-hooks/refs`). They need not update while the
+   * sheet is open — remaking, redrawing and deleting all close it.
+   */
+  const buildMnemonicActions = (key: string): SheetAction[] => {
     const row = rows.find((item) => item.kind === 'extra' && item.key === key);
 
     if (row?.kind !== 'extra') return [];
@@ -997,85 +1071,36 @@ export default function CardEditorScreen() {
         disabled: !ready,
         hint: ready ? undefined : 'Najpierw wpisz pytanie i odpowiedź.',
       },
-      // Redrawing skips the model call, so a good idea badly drawn costs
-      // three pictures to fix instead of being replaced by another idea. It is
-      // offered without a picture too — that is how a field made as text alone
-      // gains one.
-      //
-      // The association goes back exactly as it was stored. It used to be sent
-      // with `sentence` replaced by whatever the row was showing, which on a
-      // field set to show the word alone meant the keyword — and the save then
-      // wrote that keyword into the column as the sentence, losing the sentence
-      // for good. Nothing here needs it anyway: the picture is drawn from
+      // Redrawing skips the model call, so a good idea badly drawn costs three
+      // pictures to fix instead of a whole new association. Offered without a
+      // picture too — that is how a field made as text alone gains one. The
+      // association goes back exactly as stored; the picture is drawn from
       // `prompt`, and `applyMnemonic` works out what to show on its own.
+      //
+      // The quality is chosen right here, as the draw is triggered, rather than
+      // kept as a standing setting on the field: it is a decision about this one
+      // picture. The submenu reuses the open sheet (`keepOpen`), like the speech
+      // one, so it does not open a second Modal.
       ...(stored
         ? [
             {
               label: row.mediaPath ? 'Inne obrazy' : 'Dorysuj obraz',
+              keepOpen: true,
               onPress: () => {
-                // The same seeding "Inne skojarzenie" does, and needed for the
-                // same reason: a card opened from the database has no
-                // remembered mode, so what the field shows right now has to
-                // become the setting before a new picture is applied. Without
-                // it, redrawing a field showing the word alone hands back the
-                // sentence. Safe to set here because a picture is picked from
-                // a sheet, so the write lands a render before it is read.
                 setWordModes((current) => ({ ...current, [key]: showsWord(key, row) }));
-                void drawMnemonic(key, stored);
+                showMenu({
+                  title: 'Jakość obrazu',
+                  actions: [
+                    { label: 'Szybki', onPress: () => void drawMnemonic(key, stored, 'fast') },
+                    { label: 'Dokładny', onPress: () => void drawMnemonic(key, stored, 'accurate') },
+                  ],
+                });
               },
-            },
-          ]
-        : []),
-      // Named for the state it would move to, like every other switch here. It
-      // decides how the *next* picture is drawn, so it stands whether or not
-      // the field already has one — changing your mind about a drawn picture is
-      // what "Inne obrazy" is for, and this says what those would be.
-      {
-        label: qualityOf(key) === 'accurate' ? 'Rysuj szybciej' : 'Rysuj dokładniej',
-        onPress: () =>
-          setDrawQuality((current) => ({
-            ...current,
-            [key]: qualityOf(key) === 'accurate' ? 'fast' : 'accurate',
-          })),
-      },
-      // Hiding and removing are different answers to different problems, so
-      // they are different entries: one is reversible and keeps the row's
-      // content, the other frees the file and cannot be undone.
-      // Both halves were invented in the same breath and both are kept, so
-      // changing your mind costs a re-read rather than another association.
-      ...(stored?.sentence && row.value.trim()
-        ? [
-            {
-              label: showsWord(key, row) ? 'Pokaż całe zdanie' : 'Pokaż sam wyraz',
-              onPress: () => {
-                const word = !showsWord(key, row);
-
-                setWordModes((current) => ({ ...current, [key]: word }));
-                setRows((current) =>
-                  current.map((item) =>
-                    item.kind === 'extra' && item.key === key
-                      ? { ...item, value: word ? stored.keyword : stored.sentence }
-                      : item
-                  )
-                );
-              },
-            },
-          ]
-        : []),
-      ...(row.value.trim()
-        ? [
-            {
-              label: row.hideValue ? 'Pokaż skojarzenie przy nauce' : 'Schowaj skojarzenie',
-              onPress: () => toggleHidden(key, 'value'),
             },
           ]
         : []),
       ...(row.mediaPath
         ? [
-            {
-              label: row.hideMedia ? 'Pokaż obraz przy nauce' : 'Schowaj obraz',
-              onPress: () => toggleHidden(key, 'media'),
-            },
             {
               label: 'Usuń obraz',
               onPress: () => removePicture(key, row.mediaPath as string),
@@ -1084,12 +1109,16 @@ export default function CardEditorScreen() {
           ]
         : []),
       // An association is written in one of the learner's own languages, so it
-      // asks the same question the card's question does. Worth having: hearing
-      // „Komar je kanapkę" said aloud is how you find out the phone will mangle
-      // it before fifty cards carry the same mistake.
+      // asks the same question the card's question does. Hearing „Komar je
+      // kanapkę" aloud is how you catch the phone mangling it before fifty
+      // cards carry the same mistake.
       ...speechActions('mnemonic', row.speech, (code) => setRowSpeech(key, code)),
     ];
   };
+
+  /** The mnemonic field's live settings, when its gear is the one open. */
+  const liveSettings =
+    sheet?.kind === 'mnemonic' ? buildMnemonicSettings(sheet.key) : undefined;
 
   /**
    * Comparing what the form says now against what it said when it was last
@@ -1277,7 +1306,7 @@ export default function CardEditorScreen() {
 
           <Pressable
             onPress={() =>
-              setOptions({ title: label, actions: speechActions(scope, speech, setSpeech) })
+              setSheet({ kind: 'menu', title: label, actions: speechActions(scope, speech, setSpeech) })
             }
             hitSlop={12}
             accessibilityRole="button"
@@ -1421,7 +1450,7 @@ export default function CardEditorScreen() {
                 of the association itself. */}
             <Pressable
               onPress={() =>
-                setOptions({ title: MEDIA_NOUNS.mnemonic, actions: mnemonicOptions(row.key) })
+                setSheet({ kind: 'mnemonic', key: row.key, actions: buildMnemonicActions(row.key) })
               }
               disabled={busy}
               hitSlop={12}
@@ -1809,10 +1838,11 @@ export default function CardEditorScreen() {
       />
 
       <ActionSheet
-        visible={options !== null}
-        title={options?.title ?? ''}
-        actions={options?.actions ?? []}
-        onClose={() => setOptions(null)}
+        visible={sheet !== null}
+        title={sheet?.kind === 'mnemonic' ? MEDIA_NOUNS.mnemonic : (sheet?.title ?? '')}
+        settings={liveSettings}
+        actions={sheet?.actions ?? []}
+        onClose={() => setSheet(null)}
       />
 
       <ChoiceSheet
