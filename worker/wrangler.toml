@@ -14,3 +14,12 @@ compatibility_date = "2026-09-03"
 
 [ai]
 binding = "AI"
+
+# The daily-usage counters behind POST /usage live in this KV namespace, created
+# once with `npx wrangler kv namespace create USAGE`. Without this binding the
+# Worker still runs — it just reports `tracking: false` and counts nothing, which
+# is why generation never depends on it. (For `wrangler dev`, add a
+# `preview_id = "<id from --preview>"` line below.)
+[[kv_namespaces]]
+binding = "USAGE"
+id = "18fca122f9fe46318fb6f0be77550ecb"

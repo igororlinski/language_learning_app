@@ -50,6 +50,15 @@ export const QueueColors = {
   review: '#30A46C',
 } as const;
 
+/**
+ * The colour a "how much is left" meter takes at a given remaining percent:
+ * green with room to spare, amber as it tightens, red when nearly gone. Shared
+ * by the full "Limity AI" screen and the compact bar in the mnemonic flow so
+ * the two can never disagree about what a number means.
+ */
+export const budgetColor = (pctLeft: number): string =>
+  pctLeft >= 50 ? RatingColors.good : pctLeft >= 20 ? RatingColors.hard : RatingColors.again;
+
 export const Fonts = Platform.select({
   ios: {
     sans: 'system-ui',

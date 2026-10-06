@@ -110,6 +110,26 @@ export function SpeakerIcon({ size = 14, color, style }: IconProps) {
   );
 }
 
+/**
+ * A hamburger: three stacked bars. Like the speaker, it is three views so it
+ * answers to `color` and renders on the first frame — a glyph would have to be
+ * loaded and a colour-emoji would ignore the colour entirely.
+ */
+export function MenuIcon({ size = 20, color, style }: IconProps) {
+  const bar = Math.max(1.5, size / 10);
+  const line = { height: bar, borderRadius: bar / 2, backgroundColor: color };
+
+  // `space-between` pins the bars to top, middle and bottom of the box; the
+  // default column stretch gives each bar the box's full width.
+  return (
+    <View style={[{ width: size, height: size * 0.72, justifyContent: 'space-between' }, style]}>
+      <View style={line} />
+      <View style={line} />
+      <View style={line} />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',

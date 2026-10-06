@@ -8,6 +8,7 @@ import { ScrollViewContainer } from 'react-native-reorderable-list';
 
 import { ActionSheet, type SheetAction, type SheetSetting } from '@/components/action-sheet';
 import { AddFieldSheet } from '@/components/add-field-sheet';
+import { AiUsageBar } from '@/components/ai-usage-bar';
 import { ChoiceSheet } from '@/components/choice-sheet';
 import { NameSheet } from '@/components/name-sheet';
 import { CardFaces } from '@/components/card-faces';
@@ -198,6 +199,13 @@ export default function CardEditorScreen() {
   const [generating, setGenerating] = useState<{ key: string; label: string } | null>(null);
 
   const [choosing, setChoosing] = useState<Choosing | null>(null);
+
+  // Bumped whenever a generation finishes, so the usage bar in the choice sheet
+  // refetches and shows what the round just spent. It is only ever read by that
+  // bar; the sheet mounts it, so a run that happened before the sheet opened is
+  // already reflected by the bar's own fetch on mount.
+  const [usageToken, setUsageToken] = useState(0);
+  const refreshUsage = () => setUsageToken((n) => n + 1);
 
   /** Whether the "regenerate in…" list under the caret is open. */
   const [pickingLanguage, setPickingLanguage] = useState(false);
@@ -571,6 +579,7 @@ export default function CardEditorScreen() {
       Alert.alert('Nie zrobiono obrazu', message, [{ text: 'OK' }], { cancelable: true });
     } finally {
       setGenerating(null);
+      refreshUsage();
     }
   };
 
@@ -646,6 +655,7 @@ export default function CardEditorScreen() {
       withdrawUnconfirmed(key);
     } finally {
       setGenerating(null);
+      refreshUsage();
     }
   };
 
@@ -682,6 +692,7 @@ export default function CardEditorScreen() {
       failedMnemonic(error);
     } finally {
       setGenerating(null);
+      refreshUsage();
     }
   };
 
@@ -850,6 +861,7 @@ export default function CardEditorScreen() {
       failedMnemonic(error);
     } finally {
       setGenerating(null);
+      refreshUsage();
     }
   };
 
@@ -1861,6 +1873,10 @@ export default function CardEditorScreen() {
               : undefined
         }
         toolbar={associationToolbar}
+        // The same budget readout as the "Limity AI" screen, here where it is
+        // being spent. Keyed to `usageToken` so it refreshes after every round;
+        // it shows nothing when the Worker is not counting yet.
+        note={<AiUsageBar refreshToken={usageToken} />}
         choices={
           choosing?.step === 'association'
             ? (round?.options ?? []).map((option, index) => ({

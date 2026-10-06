@@ -3,6 +3,7 @@
  *
  *   POST /          → a picture, from a prompt the app wrote     (also /image)
  *   POST /mnemonic  → a keyword-method association, as raw text
+ *   POST /usage     → how much of today's free daily allowances is left
  *
  * The app used to call Cloudflare directly, which meant every installation
  * carried an API token — and a token inside a mobile bundle is a token anybody
@@ -765,6 +766,112 @@ async function geminiAsk(env, prompt, model) {
   return { text };
 }
 
+/* ------------------------------------------------------------------- usage */
+
+/**
+ * How much of each free daily allowance is left — the one thing this Worker
+ * keeps state for, and a deliberate departure from "stores nothing".
+ *
+ * **What a percentage here actually means.** These allowances are not per-user;
+ * they are a single daily pool shared by everyone who calls this Worker and paid
+ * for by whoever deployed it. So "how much is left" is "how much of *today's*
+ * free quota is left for everybody", and it resets every day. With one phone the
+ * distinction does not matter; it is written down so a second user is not a
+ * surprise.
+ *
+ * **Why count here and not ask the provider.** Cloudflare can report real neuron
+ * consumption through its analytics API, but that needs an account token this
+ * Worker deliberately does not carry, and it would not cover Gemini at all —
+ * Google exposes no "requests left today". So the Worker counts what it serves.
+ * The number is approximate on purpose, exactly like `looksLikeLimit`: guessing
+ * a little wrong costs a slightly-off meter, never a broken feature.
+ *
+ * **Why two reset days.** Cloudflare's neuron allowance resets at 00:00 UTC;
+ * Google's free-tier request allowance resets at midnight Pacific. Keying each
+ * counter in its own provider's day keeps the meter honest across the reset
+ * instead of lurching at the wrong midnight.
+ *
+ * All of this is best-effort: if the KV namespace is not bound (a deploy without
+ * the `USAGE` binding in wrangler.toml), counting is a silent no-op and `/usage`
+ * says `tracking: false` rather than lying about a number it does not have.
+ */
+const DAILY_CAPS = {
+  // Workers AI's free allocation, spent by every image this Worker draws.
+  neurons: 10000,
+  // gemini-3.5-flash (20) + gemini-3.5-flash-lite (500). Past this the mnemonic
+  // feature still answers, on the weaker Workers AI model — so it is a quality
+  // ceiling, not a wall, which is why the app's note says the button still works.
+  geminiGood: 520,
+};
+
+/** Two days: long enough to read today's counter, short enough to self-clean. */
+const USAGE_TTL = 60 * 60 * 48;
+
+/** What one image cost, by the short name actually run. Measured 2026-09-08. */
+const imageNeurons = (name, steps) => (name === 'schnell' ? 19.2 + 9.6 * steps : 104);
+
+/** The calendar day in a given zone as YYYY-MM-DD — the day a counter resets on. */
+const dayIn = (timeZone) =>
+  new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+
+/**
+ * Adds to a daily counter, keyed by its own reset day, and never throws.
+ *
+ * With one user the calls are sequential, so a read-modify-write loses nothing;
+ * a genuinely shared Worker would want an atomic store (a Durable Object) here
+ * instead. A usage number that fails to record is worth far less than the
+ * generation the user asked for, so a KV hiccup is swallowed, not surfaced.
+ */
+async function addUsage(env, metric, day, amount) {
+  if (!env.USAGE || !amount) return;
+
+  const key = `${metric}:${day}`;
+
+  try {
+    const current = Number((await env.USAGE.get(key)) ?? 0);
+    const total = (Number.isFinite(current) ? current : 0) + amount;
+
+    await env.USAGE.put(key, String(total), { expirationTtl: USAGE_TTL });
+  } catch (error) {
+    console.log(`usage: could not record ${key}: ${error}`);
+  }
+}
+
+/** One counter's value for its current day, or 0 when there is nothing to read. */
+async function readUsage(env, metric, day) {
+  if (!env.USAGE) return 0;
+
+  try {
+    const value = Number((await env.USAGE.get(`${metric}:${day}`)) ?? 0);
+
+    return Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Today's two budgets, used against cap, in the same envelope as everything
+ * else so the app reads this answer the way it reads the others. Percentages
+ * are left to the app — the Worker reports the raw numbers and the ceilings, so
+ * changing a ceiling is a redeploy rather than a new build on a phone.
+ */
+async function handleUsage(env) {
+  const neurons = await readUsage(env, 'neurons', dayIn('UTC'));
+  const geminiGood = await readUsage(env, 'gemini', dayIn('America/Los_Angeles'));
+
+  return ok({
+    tracking: Boolean(env.USAGE),
+    images: { used: Math.round(neurons), cap: DAILY_CAPS.neurons },
+    text: { used: geminiGood, cap: DAILY_CAPS.geminiGood },
+  });
+}
+
 /* ------------------------------------------------------------------ routes */
 
 /**
@@ -844,6 +951,11 @@ async function handleImage(request, env) {
     // the app ignores the field, and from a terminal it is the only way to know
     // that what you asked for is what you got.
     if (typeof image === 'string' && image.length > 0) {
+      // Billed to the UTC day, like Cloudflare's own allowance. Awaited so the
+      // write lands before the response, but swallowed inside `addUsage` so it
+      // can never cost the picture the user just paid for.
+      await addUsage(env, 'neurons', dayIn('UTC'), imageNeurons(name, steps));
+
       return ok({ image, source: IMAGE_MODELS[name] });
     }
 
@@ -890,7 +1002,14 @@ async function handleMnemonic(request, env) {
   if (env.GEMINI_KEY) {
     const attempt = await geminiMnemonic(env, prompt);
 
-    if (attempt.text) return ok({ text: attempt.text, source: attempt.model });
+    if (attempt.text) {
+      // One "good" request against the Pacific-day allowance, whichever Gemini
+      // model answered. The Workers AI fallback below is not counted: it is the
+      // thing that happens once this budget is spent, not part of it.
+      await addUsage(env, 'gemini', dayIn('America/Los_Angeles'), 1);
+
+      return ok({ text: attempt.text, source: attempt.model });
+    }
 
     console.log(`Gemini unavailable, falling back to Workers AI: ${attempt.error}`);
   }
@@ -933,6 +1052,7 @@ export default {
     // of this Worker had no paths at all, and an app still pointing at the bare
     // address must not break the moment this one is deployed.
     if (pathname === '/mnemonic') return handleMnemonic(request, env);
+    if (pathname === '/usage') return handleUsage(env);
     if (pathname === '/' || pathname === '/image') return handleImage(request, env);
 
     return failed(`No endpoint at ${pathname}.`, 404);

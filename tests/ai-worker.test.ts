@@ -7,7 +7,14 @@
  * silently if a field moves, and the half that must never hand a screen
  * `undefined` to write into a file.
  */
-import { AiError, failureForStatus, postToWorker, resultFromResponse } from '@/lib/ai-worker';
+import {
+  AiError,
+  failureForStatus,
+  fetchUsage,
+  postToWorker,
+  resultFromResponse,
+  usageFromResult,
+} from '@/lib/ai-worker';
 
 import { check, group } from './harness';
 
@@ -146,3 +153,47 @@ check(
   ).outcome,
   'rate-limited'
 );
+
+group('Zuzycie limitow');
+
+// The percentage is worked out in the app from the Worker's raw used/cap, so it
+// is the half that has to be right without a network behind it.
+const halfLeft = usageFromResult({
+  tracking: true,
+  images: { used: 5000, cap: 10000 },
+  text: { used: 0, cap: 520 },
+});
+
+check('polowa neuronow zostala', halfLeft.images.pctLeft, 50);
+check('tekst nietkniety to 100%', halfLeft.text.pctLeft, 100);
+check('flaga liczenia przechodzi', halfLeft.tracking, true);
+
+// Over the cap clamps to nothing left, not a negative percent.
+check(
+  'przekroczony limit to 0%, nie liczba ujemna',
+  usageFromResult({ tracking: true, images: { used: 600, cap: 520 }, text: {} }).images.pctLeft,
+  0
+);
+
+// Rounding, so a bar and its label agree.
+check(
+  'procent jest zaokraglany',
+  usageFromResult({ tracking: true, images: { used: 2500, cap: 10000 }, text: {} }).images.pctLeft,
+  75
+);
+
+// `tracking` is only true when the Worker says so; anything else means the
+// usage store is not wired up and the numbers are not to be trusted.
+const empty = usageFromResult({});
+
+check('brak flagi to brak liczenia', empty.tracking, false);
+check('brak pola to zerowy budzet', empty.images.cap, 0);
+check('zerowy sufit nie dzieli przez zero', empty.images.pctLeft, 0);
+
+// `fetchUsage` reads from its own endpoint.
+const usage = await withStub(
+  { status: 200, body: { success: true, result: { tracking: true, images: { used: 1000, cap: 10000 }, text: { used: 52, cap: 520 } } } },
+  () => fetchUsage('https://w.example.dev')
+);
+
+check('zuzycie pytane pod /usage', usage.sent?.url, 'https://w.example.dev/usage');

@@ -40,7 +40,14 @@ export default function RootLayout() {
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <StatusBar style="auto" />
           <Stack screenOptions={{ headerBackTitle: 'Wstecz' }}>
-            <Stack.Screen name="index" options={{ title: 'Talie' }} />
+            {/*
+              The main screen draws its own header (see index.tsx): the native
+              one doubled the status-bar inset in edge-to-edge mode, leaving a
+              big gap above the title, and `headerStatusBarHeight` is not exposed
+              on this Stack's options to correct it.
+            */}
+            <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="ai-limits" options={{ title: 'Limity AI' }} />
             <Stack.Screen name="deck/[deckId]/index" options={{ title: 'Talia' }} />
             <Stack.Screen
               name="deck/[deckId]/review"

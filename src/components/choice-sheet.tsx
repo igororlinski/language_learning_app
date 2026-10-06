@@ -37,6 +37,14 @@ export type ChoiceSheetProps = {
    * came from* belongs to the screen that asked for them.
    */
   toolbar?: ReactNode;
+  /**
+   * A line shown above the toolbar, for context that is true of the whole sheet
+   * rather than of any one entry — in practice, how much of today's AI budget is
+   * left. A slot rather than a prop for the same reason `toolbar` is one: the
+   * sheet shows candidates and knows nothing about where they came from or what
+   * they cost.
+   */
+  note?: ReactNode;
   onPick: (key: string) => void;
   onCancel: () => void;
 };
@@ -64,6 +72,7 @@ export function ChoiceSheet({
   subtitle,
   choices,
   toolbar,
+  note,
   onPick,
   onCancel,
 }: ChoiceSheetProps) {
@@ -141,6 +150,8 @@ export function ChoiceSheet({
               );
             })}
           </View>
+
+          {note}
 
           {toolbar}
 

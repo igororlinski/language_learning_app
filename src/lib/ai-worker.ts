@@ -167,3 +167,66 @@ export async function postToWorker(
 
   return resultFromResponse(parsed);
 }
+
+/* ------------------------------------------------------------------- usage */
+
+/**
+ * One free daily allowance: how much today has spent, the ceiling, and the
+ * whole-percent that is left — the number the user actually asked to see.
+ *
+ * These allowances are a single pool shared by everyone who calls the Worker,
+ * not a per-user quota, and they reset every day. With one phone that is a
+ * distinction without a difference; the screen names it anyway so it does not
+ * quietly become wrong with a second user.
+ */
+export type AiBudget = {
+  used: number;
+  cap: number;
+  /** Percent of the day's allowance still free, clamped to 0..100. */
+  pctLeft: number;
+};
+
+export type AiUsage = {
+  /**
+   * False when the Worker has no usage store wired up yet (no `USAGE` binding).
+   * The numbers are then meaningless and the screen says so rather than drawing
+   * a full bar it cannot vouch for.
+   */
+  tracking: boolean;
+  images: AiBudget;
+  text: AiBudget;
+};
+
+/** A finite number from the Worker, or 0 — the same leniency as the rest of this file. */
+const asNumber = (value: unknown): number =>
+  typeof value === 'number' && Number.isFinite(value) ? value : 0;
+
+/** One budget out of the Worker's raw `{ used, cap }`, with the percentage worked out here. */
+function budgetFrom(raw: unknown): AiBudget {
+  const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const used = asNumber(source.used);
+  const cap = asNumber(source.cap);
+  const pctLeft = cap > 0 ? Math.max(0, Math.min(100, Math.round((100 * (cap - used)) / cap))) : 0;
+
+  return { used, cap, pctLeft };
+}
+
+/**
+ * The usage figures out of a parsed `result`, percentages included.
+ *
+ * Separate from the request and exported for the same reason as
+ * `resultFromResponse`: this is the half that breaks silently if a field moves,
+ * and it is worth a test without a network behind it.
+ */
+export function usageFromResult(result: Record<string, unknown>): AiUsage {
+  return {
+    tracking: result.tracking === true,
+    images: budgetFrom(result.images),
+    text: budgetFrom(result.text),
+  };
+}
+
+/** Asks the Worker how much of today's free allowances is left. */
+export async function fetchUsage(workerUrl: string = WORKER_URL): Promise<AiUsage> {
+  return usageFromResult(await postToWorker('/usage', {}, workerUrl));
+}
