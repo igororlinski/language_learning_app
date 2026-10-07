@@ -16,7 +16,7 @@ import { MediaView } from '@/components/media-view';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
 import { SpeakerIcon } from '@/components/icons';
-import { speechMenu } from '@/components/speech-menu';
+import { phoneticMenu, speechMenu } from '@/components/speech-menu';
 import { ThemedText } from '@/components/themed-text';
 import { TextField } from '@/components/text-field';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
@@ -59,6 +59,7 @@ import {
 import * as Speech from 'expo-speech';
 import { AiError } from '@/lib/ai-worker';
 import { generateImage, generatePictures as picturesFromScene } from '@/lib/ai-image';
+import { requestPhonetic } from '@/lib/ai-phonetic';
 import { requestMnemonics } from '@/lib/ai-mnemonic';
 import {
   buildScenePrompt,
@@ -170,6 +171,17 @@ export default function CardEditorScreen() {
   );
   const [backSpeech, setBackSpeech] = useState<string | null>(
     () => (cardId && existing ? existing.backSpeech : newCardSpeech(deckId).backSpeech)
+  );
+  /**
+   * How each mandatory field is pronounced, in IPA, or null. Screen state for
+   * the same reason the voices above are. A new card starts with none: a
+   * transcription is of words, and a new card has none yet.
+   */
+  const [frontPhonetic, setFrontPhonetic] = useState<string | null>(
+    () => (cardId && existing ? existing.frontPhonetic : null)
+  );
+  const [backPhonetic, setBackPhonetic] = useState<string | null>(
+    () => (cardId && existing ? existing.backPhonetic : null)
   );
   const [rows, setRows] = useState<Row[]>(initialRows);
   const [savedCount, setSavedCount] = useState(0);
@@ -354,6 +366,61 @@ export default function CardEditorScreen() {
   ): SheetAction[] => speechMenu({ scope, languages, current, set, show: showMenu });
 
   /**
+   * Writes out how one text is pronounced, in IPA, and puts it under the text.
+   *
+   * The words are read from the **form**, as everywhere else here: the card may
+   * not be saved yet, and what was just typed is what is meant. Pressing it
+   * again replaces the transcription — after the text changed, say.
+   */
+  const makePhonetic = async (
+    key: string,
+    text: string,
+    language: string,
+    set: (phonetic: string | null) => void
+  ) => {
+    setGenerating({ key, label: 'Piszę zapis fonetyczny…' });
+
+    try {
+      set(await requestPhonetic(text, language));
+    } catch (error) {
+      // Thrown from a handler, where the error boundary cannot reach it.
+      Alert.alert(
+        'Nie zrobiono zapisu fonetycznego',
+        error instanceof AiError ? error.message : 'Coś poszło nie tak.',
+        [{ text: 'OK' }],
+        { cancelable: true }
+      );
+    } finally {
+      setGenerating(null);
+      refreshUsage();
+    }
+  };
+
+  /**
+   * The gear's transcription entries for one text. The rule — which language,
+   * and when to ask — lives beside the reading-aloud one in
+   * `src/components/speech-menu.ts`, because it is the same question.
+   */
+  const phoneticActions = (
+    key: string,
+    scope: SpeechScope,
+    text: string,
+    speech: string | null,
+    current: string | null,
+    set: (phonetic: string | null) => void
+  ): SheetAction[] =>
+    phoneticMenu({
+      scope,
+      languages,
+      speech,
+      hasText: text.trim().length > 0,
+      current,
+      make: (code) => void makePhonetic(key, text, code, set),
+      clear: () => set(null),
+      show: showMenu,
+    });
+
+  /**
    * The languages a proposal leaned on, minus the first one the deck lists —
    * and an empty string when there is nothing left, because naming the obvious
    * is noise. The model answers in English names, so these come back through
@@ -382,10 +449,13 @@ export default function CardEditorScreen() {
   // leaves out and the order dragging produced.
   const preview = useMemo(() => {
     const { fields, placement } = toPlacement(rows);
-    const pieces = cardPieces({ front, back, frontSpeech, backSpeech, ...placement }, fields);
+    const pieces = cardPieces(
+      { front, back, frontSpeech, backSpeech, frontPhonetic, backPhonetic, ...placement },
+      fields
+    );
 
     return { front: sideLines(pieces, 'front'), back: sideLines(pieces, 'back') };
-  }, [rows, front, back, frontSpeech, backSpeech]);
+  }, [rows, front, back, frontSpeech, backSpeech, frontPhonetic, backPhonetic]);
 
   const addField = ({
     side,
@@ -413,6 +483,7 @@ export default function CardEditorScreen() {
       hideValue: false,
       hideMedia: false,
       speech: null,
+      phonetic: null,
     };
 
     // A field whose content arrives from somewhere else stays on probation
@@ -463,6 +534,12 @@ export default function CardEditorScreen() {
   const setRowSpeech = (key: string, speech: string | null) =>
     setRows((current) =>
       current.map((row) => (row.kind === 'extra' && row.key === key ? { ...row, speech } : row))
+    );
+
+  /** Gives one extra field a transcription, or takes it away. */
+  const setRowPhonetic = (key: string, phonetic: string | null) =>
+    setRows((current) =>
+      current.map((row) => (row.kind === 'extra' && row.key === key ? { ...row, phonetic } : row))
     );
 
   const removeRow = (key: string) =>
@@ -1113,6 +1190,9 @@ export default function CardEditorScreen() {
       // kanapkę" aloud is how you catch the phone mangling it before fifty
       // cards carry the same mistake.
       ...speechActions('mnemonic', row.speech, (code) => setRowSpeech(key, code)),
+      ...phoneticActions(key, 'mnemonic', row.value, row.speech, row.phonetic, (phonetic) =>
+        setRowPhonetic(key, phonetic)
+      ),
     ];
   };
 
@@ -1126,8 +1206,16 @@ export default function CardEditorScreen() {
    * by each `onChange` would also fire for typing a letter and deleting it.
    */
   const signature = useMemo(
-    () => draftSignature(front, back, rows, cardTags, { front: frontSpeech, back: backSpeech }),
-    [back, backSpeech, cardTags, front, frontSpeech, rows]
+    () =>
+      draftSignature(
+        front,
+        back,
+        rows,
+        cardTags,
+        { front: frontSpeech, back: backSpeech },
+        { front: frontPhonetic, back: backPhonetic }
+      ),
+    [back, backPhonetic, backSpeech, cardTags, front, frontPhonetic, frontSpeech, rows]
   );
 
   const saved = useRef(signature);
@@ -1188,6 +1276,7 @@ export default function CardEditorScreen() {
         fields,
         layout: placement,
         speech: { frontSpeech, backSpeech },
+        phonetic: { frontPhonetic, backPhonetic },
       });
       setCardTagNames(cardId, cardTags);
 
@@ -1206,10 +1295,16 @@ export default function CardEditorScreen() {
 
     // Fast entry: saving a new card clears the form and keeps the editor open so
     // a whole batch can be typed in one go. Leaving is the header back arrow.
-    const card = createCard(deckId, front, back, new Date(), fields, placement, {
-      frontSpeech,
-      backSpeech,
-    });
+    const card = createCard(
+      deckId,
+      front,
+      back,
+      new Date(),
+      fields,
+      placement,
+      { frontSpeech, backSpeech },
+      { frontPhonetic, backPhonetic }
+    );
     setCardTagNames(card.id, cardTags);
 
     setFront('');
@@ -1226,6 +1321,9 @@ export default function CardEditorScreen() {
 
     setFrontSpeech(template.frontSpeech);
     setBackSpeech(template.backSpeech);
+    // A transcription is of this card's words, and the next card has none.
+    setFrontPhonetic(null);
+    setBackPhonetic(null);
     // The tags stay on for the next card: a batch typed in one go is usually
     // one batch of tags too, and taking them off is one tap.
     // The next card in the batch starts from the deck's default layout again.
@@ -1276,17 +1374,28 @@ export default function CardEditorScreen() {
    * than a sentence explaining a setting.
    */
   const textActions = (
+    key: string,
     label: string,
     scope: SpeechScope,
     text: string,
     speech: string | null,
     setSpeech: (code: string | null) => void,
+    phonetic: string | null,
+    setPhonetic: (phonetic: string | null) => void,
     extra?: ReactNode
   ) => {
     const problem = speech ? voiceProblem(speech) : null;
+    const busy = generating?.key === key;
 
     return (
       <>
+        {/* Under the field it transcribes, the way the card shows it. */}
+        {phonetic ? (
+          <ThemedText type="small" themeColor="textSecondary" style={styles.phonetic}>
+            {phonetic}
+          </ThemedText>
+        ) : null}
+
         <View style={styles.rowActions}>
           {speech ? (
             <Pressable
@@ -1306,16 +1415,26 @@ export default function CardEditorScreen() {
 
           <Pressable
             onPress={() =>
-              setSheet({ kind: 'menu', title: label, actions: speechActions(scope, speech, setSpeech) })
+              setSheet({
+                kind: 'menu',
+                title: label,
+                actions: [
+                  ...speechActions(scope, speech, setSpeech),
+                  ...phoneticActions(key, scope, text, speech, phonetic, setPhonetic),
+                ],
+              })
             }
+            disabled={busy}
             hitSlop={12}
             accessibilityRole="button"
+            accessibilityState={{ disabled: busy }}
             accessibilityLabel={`Opcje pola: ${label}`}
             style={({ pressed }) => [
               styles.gear,
               {
                 borderColor: theme.border,
                 backgroundColor: pressed ? theme.backgroundSelected : theme.backgroundElement,
+                opacity: busy ? 0.4 : 1,
               },
             ]}>
             <ThemedText style={[styles.gearGlyph, { color: theme.accent }]}>⚙</ThemedText>
@@ -1328,6 +1447,15 @@ export default function CardEditorScreen() {
           <ThemedText type="small" themeColor="textSecondary">
             {problem}
           </ThemedText>
+        ) : null}
+
+        {busy && generating ? (
+          <View style={styles.generating}>
+            <ActivityIndicator />
+            <ThemedText type="small" themeColor="textSecondary">
+              {generating.label}
+            </ThemedText>
+          </View>
         ) : null}
       </>
     );
@@ -1367,11 +1495,14 @@ export default function CardEditorScreen() {
               one word being learned, the question is whichever of the learner's
               own languages this deck is written in. */}
           {textActions(
+            row.key,
             rowInfo.label,
             isQuestion ? 'question' : 'answer',
             isQuestion ? front : back,
             isQuestion ? frontSpeech : backSpeech,
-            isQuestion ? setFrontSpeech : setBackSpeech
+            isQuestion ? setFrontSpeech : setBackSpeech,
+            isQuestion ? frontPhonetic : backPhonetic,
+            isQuestion ? setFrontPhonetic : setBackPhonetic
           )}
         </>
       );
@@ -1417,6 +1548,15 @@ export default function CardEditorScreen() {
               on the card, because judging it is the whole point. */}
           {row.value.trim() ? (
             <ThemedText style={row.hideValue ? styles.hidden : null}>{row.value}</ThemedText>
+          ) : null}
+
+          {row.value.trim() && row.phonetic ? (
+            <ThemedText
+              type="small"
+              themeColor="textSecondary"
+              style={[styles.phonetic, row.hideValue ? styles.hidden : null]}>
+              {row.phonetic}
+            </ThemedText>
           ) : null}
 
           {row.value.trim() && row.hideValue ? (
@@ -1696,11 +1836,14 @@ export default function CardEditorScreen() {
             likely to be an example in the language being learned as a note in
             the learner's own, so both sides' languages are on offer. */}
         {textActions(
+          row.key,
           rowInfo.label,
           'free',
           row.value,
           row.speech,
           (code) => setRowSpeech(row.key, code),
+          row.phonetic,
+          (phonetic) => setRowPhonetic(row.key, phonetic),
           removeAction(rowInfo.label, row.key)
         )}
       </>
@@ -1990,6 +2133,10 @@ const styles = StyleSheet.create({
   /** Dimmed rather than removed: still part of the card, just not shown. */
   hidden: {
     opacity: 0.35,
+  },
+  /** A transcription under its field: quiet, and read as one with the words. */
+  phonetic: {
+    marginTop: -Spacing.one,
   },
   /**
    * A control, not a decoration. As a small grey glyph it read as a label and

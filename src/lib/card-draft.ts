@@ -23,7 +23,9 @@ export function draftSignature(
    * They live outside the rows for the same reason their text does: a row
    * carries where a mandatory field sits, never what it holds.
    */
-  speech: { front: string | null; back: string | null } = { front: null, back: null }
+  speech: { front: string | null; back: string | null } = { front: null, back: null },
+  /** Their transcriptions — each one is a paid-for model call. */
+  phonetic: { front: string | null; back: string | null } = { front: null, back: null }
 ): string {
   const { fields, placement } = toPlacement(rows);
 
@@ -33,6 +35,7 @@ export function draftSignature(
     back: back.trim(),
     placement,
     speech,
+    phonetic,
     fields: fields.map((field) => [
       field.side,
       field.position,
@@ -42,6 +45,7 @@ export function draftSignature(
       // Switching a field's voice on writes a column, so leaving without
       // saving loses it — which is exactly what the warning is for.
       field.speech ?? null,
+      field.phonetic ?? null,
     ]),
     tags,
   });

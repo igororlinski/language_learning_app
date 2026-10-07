@@ -12,6 +12,7 @@ import './field-rows.test';
 import './media.test';
 import './ai-worker.test';
 import './ai-image.test';
+import './ai-phonetic.test';
 import './mnemonic.test';
 import './languages.test';
 import './speech.test';

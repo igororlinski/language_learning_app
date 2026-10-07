@@ -280,3 +280,45 @@ const mute = cardPieces(
 );
 
 check('bez odpowiedzi i bez tekstu pole znika', sideLines(mute, 'front').length, 1);
+
+group('Zapis fonetyczny');
+
+/**
+ * A transcription is an adornment on its line, like the loudspeaker, and it
+ * obeys the same two rules: only words have one, and hidden words have none.
+ */
+const transcribed = cardPieces({ ...plainCard(), backPhonetic: '/ˈlamat͡s/' }, [
+  { side: 'back', position: 1, value: 'a janela', kind: 'text' as const, phonetic: '/ɐ ʒɐˈnɛlɐ/' },
+  { side: 'back', position: 2, value: 'bez zapisu', kind: 'text' as const },
+  {
+    side: 'back',
+    position: 3,
+    value: 'Komar je.',
+    kind: 'mnemonic' as const,
+    mediaPath: 'komar.jpg',
+    phonetic: '/ˈkɔmar jɛ/',
+    hideValue: true,
+  },
+  {
+    side: 'back',
+    position: 4,
+    value: 'img_2043.jpg',
+    kind: 'image' as const,
+    mediaPath: 'stored.jpg',
+    phonetic: '/nie/',
+  },
+]);
+
+const transcribedBack = sideLines(transcribed, 'back');
+
+check('odpowiedz niesie swoj zapis', transcribedBack[0]?.phonetic, '/ˈlamat͡s/');
+check('pole dodatkowe tez', transcribedBack[1]?.phonetic, '/ɐ ʒɐˈnɛlɐ/');
+check('pole bez zapisu nie ma nic', transcribedBack[2]?.phonetic, null);
+check('schowany tekst chowa tez zapis', transcribedBack[3]?.phonetic, null);
+check('plik nie ma wymowy', transcribedBack[4]?.phonetic, null);
+
+// A transcription with nothing under it is nothing: the empty field still
+// drops out, rather than standing on the card as pronunciation of silence.
+const orphan = cardPieces({ ...plainCard(), back: '', backPhonetic: '/ˈlamat͡s/' }, []);
+
+check('zapis bez tekstu nie trzyma linii', sideLines(orphan, 'back').length, 0);

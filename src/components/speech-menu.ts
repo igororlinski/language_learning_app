@@ -94,3 +94,71 @@ export function keptSpeech(
 ): string | null {
   return code && speechCandidates(scope, languages).includes(code) ? code : null;
 }
+
+/**
+ * The entries behind the gear that write a text's pronunciation under it, or
+ * take it away. Card editor only: a deck's template holds no words, so there is
+ * nothing there to transcribe.
+ *
+ * The language is settled by the same rule as reading aloud, because it is the
+ * same question — which language are these words in. A field that already
+ * reads aloud has answered it, so its voice is used without asking; otherwise
+ * one candidate goes straight ahead, several open the list in the same sheet,
+ * and none greys the entry out with the reason.
+ */
+export type PhoneticMenu = {
+  scope: SpeechScope;
+  languages: DeckLanguages;
+  /** The field's own voice, if it has one — the language already chosen. */
+  speech: string | null;
+  /** Whether there are words to transcribe yet. */
+  hasText: boolean;
+  current: string | null;
+  make: (code: string) => void;
+  clear: () => void;
+  show: (sheet: { title: string; actions: SheetAction[] }) => void;
+};
+
+export function phoneticMenu({
+  scope,
+  languages,
+  speech,
+  hasText,
+  current,
+  make,
+  clear,
+  show,
+}: PhoneticMenu): SheetAction[] {
+  const candidates = speechCandidates(scope, languages);
+  const known = speech && candidates.includes(speech) ? speech : soleCandidate(candidates);
+
+  const ask = () =>
+    known
+      ? make(known)
+      : show({
+          title: 'Język zapisu',
+          actions: candidates.map((code) => ({
+            label: languageLabel(code),
+            onPress: () => make(code),
+          })),
+        });
+
+  const hint =
+    candidates.length === 0
+      ? 'Talia nie mówi, w jakich językach są jej karty.'
+      : !hasText
+        ? 'Najpierw wpisz tekst.'
+        : undefined;
+
+  const write: SheetAction = {
+    label: current ? 'Zapis fonetyczny od nowa' : 'Zapis fonetyczny',
+    disabled: hint !== undefined,
+    hint,
+    keepOpen: !known,
+    onPress: ask,
+  };
+
+  return current
+    ? [write, { label: 'Usuń zapis fonetyczny', onPress: clear, destructive: true }]
+    : [write];
+}

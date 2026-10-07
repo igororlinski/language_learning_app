@@ -23,6 +23,7 @@ const field = (
   kind: 'extra',
   id: null,
   speech,
+  phonetic: null,
   hideValue: false,
   hideMedia: false,
   field: 'text',

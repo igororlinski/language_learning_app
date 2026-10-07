@@ -31,6 +31,8 @@ export type Row =
       hideMedia: boolean;
       /** Read out loud in this language, or null for a field that stays silent. */
       speech: string | null;
+      /** Its pronunciation in IPA, or null for none. */
+      phonetic: string | null;
     };
 
 /** Where the two mandatory fields sit. */
@@ -53,6 +55,7 @@ export type RowField = {
   hideValue?: boolean;
   hideMedia?: boolean;
   speech?: string | null;
+  phonetic?: string | null;
 };
 
 /** What a row means once the list order is read top to bottom. */
@@ -97,6 +100,7 @@ export function buildRows(placement: RowPlacement, fields: RowField[]): Row[] {
       hideValue: field.hideValue ?? false,
       hideMedia: field.hideMedia ?? false,
       speech: field.speech ?? null,
+      phonetic: field.phonetic ?? null,
       side: field.side,
       position: field.position,
     })),
@@ -180,6 +184,7 @@ export function toPlacement(rows: Row[]): { fields: RowField[]; placement: RowPl
       hideValue: row.hideValue,
       hideMedia: row.hideMedia,
       speech: row.speech,
+      phonetic: row.phonetic,
     });
   }
 

@@ -398,6 +398,7 @@ export default function DeckEditorScreen() {
       mediaPath: null,
       // Silent until somebody says otherwise, like every other field.
       speech: null,
+      phonetic: null,
       hideValue: false,
       hideMedia: false,
     };

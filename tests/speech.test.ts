@@ -12,7 +12,7 @@ import {
   speechVoice,
 } from '@/lib/speech';
 
-import { keptSpeech, speechMenu } from '@/components/speech-menu';
+import { keptSpeech, phoneticMenu, speechMenu } from '@/components/speech-menu';
 
 import { check, group } from './harness';
 
@@ -199,3 +199,75 @@ check('niezadeklarowany wypada', keptSpeech('question', declared, 'de'), null);
 // guess, and a guess about pronunciation is silent when it is wrong.
 check('jezyk odpowiedzi nie wchodzi w pytanie', keptSpeech('question', declared, 'pt-PT'), null);
 check('brak zostaje brakiem', keptSpeech('answer', declared, null), null);
+
+group('Trybik: zapis fonetyczny');
+
+/** The transcription entries, checked by shape like the voice menu above. */
+const phonetic = (
+  scope: 'question' | 'answer' | 'mnemonic' | 'free',
+  languages: { front: string[]; back: string | null },
+  speech: string | null,
+  current: string | null,
+  hasText = true
+) => {
+  const made: string[] = [];
+  let cleared = false;
+  let shown: { title: string; actions: { label: string; onPress: () => void }[] } | null = null;
+
+  const actions = phoneticMenu({
+    scope,
+    languages,
+    speech,
+    hasText,
+    current,
+    make: (code) => made.push(code),
+    clear: () => {
+      cleared = true;
+    },
+    show: (sheet) => {
+      shown = sheet as typeof shown;
+    },
+  });
+
+  return { actions, made, cleared: () => cleared, sheet: () => shown };
+};
+
+// One candidate: no question to ask.
+const soleIpa = phonetic('answer', { front: ['pl'], back: 'pt-PT' }, null, null);
+
+check('jeden kandydat: jedna pozycja', soleIpa.actions.length, 1);
+soleIpa.actions[0]?.onPress();
+check('i od razu pisze w jedynym jezyku', soleIpa.made, ['pt-PT']);
+
+// A field that already reads aloud has answered which language it is in.
+const voiced = phonetic('question', { front: ['pl', 'en-US'], back: 'pt-PT' }, 'en-US', null);
+
+check('pole z glosem nie pyta o jezyk', voiced.actions[0]?.keepOpen, false);
+voiced.actions[0]?.onPress();
+check('tylko bierze jezyk glosu', voiced.made, ['en-US']);
+
+// Several and no voice: the same tap opens the list.
+const askIpa = phonetic('question', { front: ['pl', 'en-US'], back: 'pt-PT' }, null, null);
+
+check('kilku kandydatow: arkusz zostaje otwarty', askIpa.actions[0]?.keepOpen, true);
+askIpa.actions[0]?.onPress();
+check('nic nie zostalo napisane za uzytkownika', askIpa.made, []);
+askIpa.sheet()?.actions[0]?.onPress();
+check('wybor z listy pisze we wskazanym', askIpa.made, ['pl']);
+
+// Nothing to transcribe, or nothing to transcribe it in: greyed, with why.
+const emptyIpa = phonetic('answer', { front: ['pl'], back: 'pt-PT' }, null, null, false);
+
+check('bez tekstu pozycja jest wyszarzona', emptyIpa.actions[0]?.disabled, true);
+check('i mowi dlaczego', Boolean(emptyIpa.actions[0]?.hint), true);
+
+const noLanguage = phonetic('free', { front: [], back: null }, null, null);
+
+check('bez jezykow tez', noLanguage.actions[0]?.disabled, true);
+
+// Once there is one: write it again, or take it away.
+const hasIpa = phonetic('answer', { front: ['pl'], back: 'pt-PT' }, null, '/kuˈmeɾ/');
+
+check('z zapisem: dwie pozycje', hasIpa.actions.length, 2);
+hasIpa.actions[1]?.onPress();
+check('druga go usuwa', hasIpa.cleared(), true);

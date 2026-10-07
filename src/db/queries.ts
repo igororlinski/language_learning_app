@@ -90,6 +90,15 @@ export type CardSpeech = { frontSpeech: string | null; backSpeech: string | null
 
 const NO_SPEECH: CardSpeech = { frontSpeech: null, backSpeech: null };
 
+/**
+ * How the two mandatory fields are pronounced, in IPA, or null for none. Apart
+ * from `CardSpeech` because they are made and dropped separately: a card can
+ * be read aloud with no transcription under it, and the other way round.
+ */
+export type CardPhonetic = { frontPhonetic: string | null; backPhonetic: string | null };
+
+const NO_PHONETIC: CardPhonetic = { frontPhonetic: null, backPhonetic: null };
+
 /** Comma-separated bind params for a `state in (...)` test. */
 function stateList(states: State[]) {
   return sql.join(
@@ -302,6 +311,8 @@ export function cardsLines(
       backPosition: cards.backPosition,
       frontSpeech: cards.frontSpeech,
       backSpeech: cards.backSpeech,
+      frontPhonetic: cards.frontPhonetic,
+      backPhonetic: cards.backPhonetic,
     })
     .from(cards)
     .where(inArray(cards.id, cardIds))
@@ -363,6 +374,7 @@ export function newCardFields(deckId: number): CardFieldInput[] {
     mediaPath: null,
     mnemonic: null,
     speech: slot.speech,
+    phonetic: null,
   }));
 }
 
@@ -618,6 +630,8 @@ export function loadDueCards(
       backPosition: cards.backPosition,
       frontSpeech: cards.frontSpeech,
       backSpeech: cards.backSpeech,
+      frontPhonetic: cards.frontPhonetic,
+      backPhonetic: cards.backPhonetic,
       createdAt: cards.createdAt,
       due: fsrsState.due,
       stability: fsrsState.stability,
@@ -964,6 +978,8 @@ export type CardFieldInput = {
   hideMedia?: boolean;
   /** Read out loud in this language, or null for a field that stays silent. */
   speech?: string | null;
+  /** Its pronunciation in IPA, or null for none. */
+  phonetic?: string | null;
 };
 
 /**
@@ -994,6 +1010,7 @@ function writeCardFields(tx: Tx, cardId: number, fields: CardFieldInput[]) {
       hideValue: field.hideValue ?? false,
       hideMedia: field.hideMedia ?? false,
       speech: field.speech ?? null,
+      phonetic: field.phonetic?.trim() || null,
     };
 
     if (field.id === null) {
@@ -1019,7 +1036,8 @@ export function createCard(
   now = new Date(),
   fields: CardFieldInput[] = [],
   layout: CardLayout = DEFAULT_CARD_LAYOUT,
-  speech: CardSpeech = NO_SPEECH
+  speech: CardSpeech = NO_SPEECH,
+  phonetic: CardPhonetic = NO_PHONETIC
 ) {
   return db.transaction((tx) => {
     const card = tx
@@ -1031,6 +1049,9 @@ export function createCard(
         createdAt: now,
         ...layout,
         ...speech,
+        // Named, not spread — pitfall 11.
+        frontPhonetic: phonetic.frontPhonetic?.trim() || null,
+        backPhonetic: phonetic.backPhonetic?.trim() || null,
       })
       .returning()
       .get();
@@ -1053,6 +1074,7 @@ export function updateCard(
     fields?: CardFieldInput[];
     layout?: CardLayout;
     speech?: CardSpeech;
+    phonetic?: CardPhonetic;
   }
 ) {
   return db.transaction((tx) => {
@@ -1062,6 +1084,12 @@ export function updateCard(
         back: patch.back.trim(),
         ...(patch.layout ?? {}),
         ...(patch.speech ?? {}),
+        ...(patch.phonetic
+          ? {
+              frontPhonetic: patch.phonetic.frontPhonetic?.trim() || null,
+              backPhonetic: patch.phonetic.backPhonetic?.trim() || null,
+            }
+          : {}),
       })
       .where(eq(cards.id, cardId))
       .run();
@@ -1143,6 +1171,10 @@ export function copyCards(
           // the copy exactly as the layout does.
           frontSpeech: source.frontSpeech,
           backSpeech: source.backSpeech,
+          // A transcription cost a model call and needs no file, so it
+          // travels too.
+          frontPhonetic: source.frontPhonetic,
+          backPhonetic: source.backPhonetic,
           createdAt: now,
         })
         .returning()
@@ -1171,6 +1203,7 @@ export function copyCards(
             hideValue: field.hideValue,
             hideMedia: field.hideMedia,
             speech: field.speech,
+            phonetic: field.phonetic,
           })
           .run();
       }

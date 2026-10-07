@@ -36,6 +36,8 @@ export type LayoutPiece = {
    * rather than an exotic one.
    */
   speech: string | null;
+  /** How this piece's text is pronounced, in IPA, or null for none. */
+  phonetic: string | null;
 };
 
 /** The columns that place a card's two mandatory fields. */
@@ -50,6 +52,8 @@ export type CardPlacement = {
    *  hand — does not have to say "silent" twice to mean nothing. */
   frontSpeech?: string | null;
   backSpeech?: string | null;
+  frontPhonetic?: string | null;
+  backPhonetic?: string | null;
 };
 
 /** Everything a card is made of, mandatory fields and extras in one list. */
@@ -63,6 +67,7 @@ export function cardPieces<
     hideValue?: boolean;
     hideMedia?: boolean;
     speech?: string | null;
+    phonetic?: string | null;
   },
 >(card: CardPlacement, extras: T[]): LayoutPiece[] {
   const base = (
@@ -70,7 +75,8 @@ export function cardPieces<
     side: FieldSide,
     position: number,
     value: string,
-    speech: string | null
+    speech: string | null,
+    phonetic: string | null
   ): LayoutPiece => ({
     base: kind,
     side,
@@ -81,11 +87,26 @@ export function cardPieces<
     hideValue: false,
     hideMedia: false,
     speech,
+    phonetic,
   });
 
   return [
-    base('front', card.frontSide, card.frontPosition, card.front, card.frontSpeech ?? null),
-    base('back', card.backSide, card.backPosition, card.back, card.backSpeech ?? null),
+    base(
+      'front',
+      card.frontSide,
+      card.frontPosition,
+      card.front,
+      card.frontSpeech ?? null,
+      card.frontPhonetic ?? null
+    ),
+    base(
+      'back',
+      card.backSide,
+      card.backPosition,
+      card.back,
+      card.backSpeech ?? null,
+      card.backPhonetic ?? null
+    ),
     ...extras.map<LayoutPiece>((field) => ({
       base: null,
       side: field.side,
@@ -96,6 +117,7 @@ export function cardPieces<
       hideValue: field.hideValue ?? false,
       hideMedia: field.hideMedia ?? false,
       speech: field.speech ?? null,
+      phonetic: field.phonetic ?? null,
     })),
   ];
 }
@@ -142,6 +164,13 @@ export type CardLine = {
    * layout put it, and this is the one place that can see both faces at once.
    */
   speak: LineSpeech | null;
+  /**
+   * How the line's words are pronounced, in IPA, shown in small type under
+   * them — or null. Another adornment on the line, like `speak`, and silenced
+   * by the same rule: a hidden text's transcription would hand over exactly
+   * the word the learner asked not to be shown.
+   */
+  phonetic: string | null;
 };
 
 /**
@@ -175,6 +204,7 @@ export function sideLines(pieces: LayoutPiece[], side: FieldSide): CardLine[] {
             ? { kind: piece.kind as MediaKind, fileName: piece.mediaPath }
             : null,
         speak: speechOf(piece, text, answer),
+        phonetic: phoneticOf(piece, text),
       };
     })
     .filter(({ piece, text, media, speak }) => {
@@ -191,7 +221,7 @@ export function sideLines(pieces: LayoutPiece[], side: FieldSide): CardLine[] {
 
       return isMediaKind(piece.kind) ? Boolean(media) : text.trim().length > 0;
     })
-    .map(({ piece, text, media, speak }) => ({
+    .map(({ piece, text, media, speak, phonetic }) => ({
       // The retired speech field is the one line whose text is the button: it
       // never had any of its own, and the word it says stands on the card as
       // the answer already.
@@ -199,7 +229,20 @@ export function sideLines(pieces: LayoutPiece[], side: FieldSide): CardLine[] {
       base: piece.base !== null,
       media,
       speak,
+      phonetic,
     }));
+}
+
+/**
+ * What one piece shows as its pronunciation, if anything — under the same two
+ * conditions as `speechOf`: only words have one, and words that are hidden
+ * have none.
+ */
+function phoneticOf(piece: LayoutPiece, text: string): string | null {
+  if (piece.kind !== 'text' && piece.kind !== 'mnemonic') return null;
+  if (!text.trim()) return null;
+
+  return piece.phonetic?.trim() || null;
 }
 
 /**

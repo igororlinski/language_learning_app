@@ -236,6 +236,17 @@ export const cards = sqliteTable(
      */
     frontSpeech: text('front_speech'),
     backSpeech: text('back_speech'),
+    /**
+     * How each mandatory field is pronounced, written out in IPA (`/kuˈmeɾ/`),
+     * or null for none. Made in the editor, on request, by a language model —
+     * see `src/lib/ai-phonetic.ts` — and stored, because a review must never
+     * need a network. Shown in small type under the words it transcribes.
+     *
+     * It is text, not a language code: the language it was made in is a
+     * decision of the moment it was made, and nothing afterwards needs it.
+     */
+    frontPhonetic: text('front_phonetic'),
+    backPhonetic: text('back_phonetic'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -312,6 +323,11 @@ export const cardFields = sqliteTable(
      * is not a feature. `sideLines` holds to the same rule on the way out.
      */
     speech: text('speech'),
+    /**
+     * This field's pronunciation in IPA, or null — the same as
+     * `cards.front_phonetic`, and offered for the same kinds `speech` is.
+     */
+    phonetic: text('phonetic'),
   },
   (table) => [index('card_fields_card_id_idx').on(table.cardId)]
 );

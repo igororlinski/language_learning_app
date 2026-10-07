@@ -710,11 +710,11 @@ const forGemini = ({ system, turns }) => ({
  * one extra round trip to find out, while a model that is merely out of
  * quota is the case this exists for.
  */
-async function geminiMnemonic(env, prompt) {
+async function geminiMnemonic(env, prompt, shape = MNEMONIC_SHAPE) {
   let last = { error: 'no model tried' };
 
   for (const model of GEMINI_MODELS) {
-    last = await geminiAsk(env, prompt, model);
+    last = await geminiAsk(env, prompt, model, shape);
 
     if (last.text) return { ...last, model };
   }
@@ -722,8 +722,11 @@ async function geminiMnemonic(env, prompt) {
   return last;
 }
 
+/** What an association asks of Gemini: wild, and in the three-object schema. */
+const MNEMONIC_SHAPE = { schema: MNEMONIC_SCHEMA, temperature: TEMPERATURE };
+
 /** One try, at one model. */
-async function geminiAsk(env, prompt, model) {
+async function geminiAsk(env, prompt, model, shape = MNEMONIC_SHAPE) {
   const { systemInstruction, contents } = forGemini(prompt);
 
   let response;
@@ -736,11 +739,11 @@ async function geminiAsk(env, prompt, model) {
         systemInstruction,
         contents,
         generationConfig: {
-          temperature: TEMPERATURE,
+          temperature: shape.temperature,
           maxOutputTokens: GEMINI_MAX_TOKENS,
           thinkingConfig: { thinkingLevel: 'low' },
           responseMimeType: 'application/json',
-          responseSchema: MNEMONIC_SCHEMA,
+          responseSchema: shape.schema,
         },
       }),
     });
@@ -1074,6 +1077,94 @@ async function handleMnemonic(request, env) {
   return ok({ text, source: TEXT_MODEL });
 }
 
+/* --------------------------------------------------------- transcription */
+
+/** The longest text worth transcribing — the same ceiling the phone reads aloud. */
+const MAX_PHONETIC_TEXT = 300;
+
+/**
+ * A transcription is the opposite of an association: there is one right
+ * answer and nothing to gain from a wild one, so the temperature is low and
+ * the shape is a single string.
+ */
+const PHONETIC_SHAPE = {
+  schema: {
+    type: 'object',
+    properties: { ipa: { type: 'string' } },
+    required: ['ipa'],
+  },
+  temperature: 0.2,
+};
+
+/**
+ * Broad IPA, the way a dictionary prints it — `/kuˈmeɾ/` — for the exact
+ * variety the deck names. "Portuguese (European)" and "Portuguese (Brazilian)"
+ * transcribe differently, which is the reason the language comes from the
+ * deck's closed list, in English, rather than being guessed from the word.
+ */
+function phoneticPrompt({ text, language }) {
+  return {
+    system: [
+      'You write phonetic transcriptions in the International Phonetic Alphabet.',
+      'Transcribe how a native speaker of the given language variety pronounces the given text.',
+      'Use broad IPA between slashes, as a dictionary prints it, with primary stress marks.',
+      'Transcribe the whole text, keeping a space between words.',
+      'Do not translate, do not explain, do not add anything else.',
+      'Answer as JSON: {"ipa": "/.../"}.',
+    ].join('\n'),
+    turns: [{ role: 'user', content: `Language: ${language}\nText: ${text}` }],
+  };
+}
+
+async function handlePhonetic(request, env) {
+  let body;
+
+  try {
+    body = await request.json();
+  } catch {
+    return failed('Body is not JSON.', 400);
+  }
+
+  const text = str(body?.text, MAX_PHONETIC_TEXT);
+  const language = str(body?.language, 64);
+
+  if (!text) return failed('No text.', 400);
+  // Never guessed: `janela` transcribed as Polish is confidently wrong.
+  if (!language) return failed('No language.', 400);
+
+  const prompt = phoneticPrompt({ text, language });
+
+  // Gemini first, Workers AI behind it — the same fallback as `/mnemonic`, and
+  // counted against the same allowance.
+  if (env.GEMINI_KEY) {
+    const attempt = await geminiMnemonic(env, prompt, PHONETIC_SHAPE);
+
+    if (attempt.text) {
+      await addUsage(env, 'gemini', dayIn('America/Los_Angeles'), 1);
+
+      return ok({ text: attempt.text, source: attempt.model });
+    }
+
+    console.log(`Gemini unavailable, falling back to Workers AI: ${attempt.error}`);
+  }
+
+  const { result, failure } = await run(env, TEXT_MODEL, {
+    messages: forWorkersAi(prompt),
+    max_tokens: 200,
+    temperature: PHONETIC_SHAPE.temperature,
+  });
+
+  if (failure) return failure;
+
+  // Raw text again, read in the app where there are tests for it
+  // (`src/lib/ai-phonetic.ts`).
+  const answer = textFrom(result);
+
+  if (!answer.trim()) return failed('The model returned nothing.', 502);
+
+  return ok({ text: answer, source: TEXT_MODEL });
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return envelope({ success: true }, 204);
@@ -1094,6 +1185,7 @@ export default {
     // of this Worker had no paths at all, and an app still pointing at the bare
     // address must not break the moment this one is deployed.
     if (pathname === '/mnemonic') return handleMnemonic(request, env);
+    if (pathname === '/phonetic') return handlePhonetic(request, env);
     if (pathname === '/usage') return handleUsage(env);
     if (pathname === '/' || pathname === '/image') return handleImage(request, env);
 

@@ -116,6 +116,27 @@ export function CardFaces({
       content
     );
 
+  /**
+   * Words with their pronunciation under them, in small quiet type — the way
+   * a dictionary prints it. Under rather than beside, unlike the loudspeaker:
+   * a transcription is as long as the words, and beside them it would halve
+   * the width both have to wrap in.
+   */
+  const withPhonetic = (content: ReactNode, phonetic: string | null, key: string) =>
+    phonetic ? (
+      <View key={key} style={styles.transcribed}>
+        {content}
+        <ThemedText
+          type="small"
+          themeColor="textSecondary"
+          style={compact ? styles.phoneticCompact : styles.phonetic}>
+          {phonetic}
+        </ThemedText>
+      </View>
+    ) : (
+      content
+    );
+
   const renderLine = (prefix: string, item: CardLine, index: number) => {
     const key = `${prefix}-${index}`;
 
@@ -143,17 +164,21 @@ export function CardFaces({
       return (
         <View key={key} style={styles.mnemonic}>
           {view}
-          {withSpeaker(
-            <ThemedText
-              key={`${key}-text`}
-              style={[
-                compact ? styles.valueCompact : styles.value,
-                item.speak ? styles.shrink : null,
-              ]}>
-              {item.text}
-            </ThemedText>,
-            item.speak,
-            `${key}-said`
+          {withPhonetic(
+            withSpeaker(
+              <ThemedText
+                key={`${key}-text`}
+                style={[
+                  compact ? styles.valueCompact : styles.value,
+                  item.speak ? styles.shrink : null,
+                ]}>
+                {item.text}
+              </ThemedText>,
+              item.speak,
+              `${key}-said`
+            ),
+            item.phonetic,
+            `${key}-ipa`
           )}
         </View>
       );
@@ -162,18 +187,22 @@ export function CardFaces({
     const base = item.base ? (compact ? styles.faceCompact : styles.face) : null;
     const extra = compact ? styles.valueCompact : styles.value;
 
-    return withSpeaker(
-      <ThemedText
-        key={key}
-        style={[
-          base ?? extra,
-          item.base && prefix === 'back' ? styles.answer : null,
-          item.speak ? styles.shrink : null,
-        ]}>
-        {item.text}
-      </ThemedText>,
-      item.speak,
-      key
+    return withPhonetic(
+      withSpeaker(
+        <ThemedText
+          key={key}
+          style={[
+            base ?? extra,
+            item.base && prefix === 'back' ? styles.answer : null,
+            item.speak ? styles.shrink : null,
+          ]}>
+          {item.text}
+        </ThemedText>,
+        item.speak,
+        key
+      ),
+      item.phonetic,
+      `${key}-ipa`
     );
   };
 
@@ -264,6 +293,22 @@ const styles = StyleSheet.create({
   mnemonic: {
     gap: Spacing.two,
     alignSelf: 'stretch',
+  },
+  /** Words and their transcription, close enough to read as one thing. */
+  transcribed: {
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    gap: Spacing.half,
+  },
+  phonetic: {
+    fontSize: 15,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  phoneticCompact: {
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
   },
   divider: {
     borderTopWidth: StyleSheet.hairlineWidth,
