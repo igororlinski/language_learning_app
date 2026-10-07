@@ -59,6 +59,12 @@ export default function RootLayout() {
             />
             <Stack.Screen name="deck-editor" options={{ presentation: 'modal' }} />
             <Stack.Screen name="card-editor" options={{ presentation: 'modal' }} />
+            {/* Opened from the card editor, which is itself a modal — so this
+                goes over it as one, or iOS would push it underneath. */}
+            <Stack.Screen
+              name="card-preview"
+              options={{ headerShown: false, presentation: 'fullScreenModal', animation: 'fade' }}
+            />
           </Stack>
         </ThemeProvider>
       </KeyboardProvider>

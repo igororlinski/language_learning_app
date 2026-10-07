@@ -11,7 +11,6 @@ import { AddFieldSheet } from '@/components/add-field-sheet';
 import { AiUsageBar } from '@/components/ai-usage-bar';
 import { ChoiceSheet } from '@/components/choice-sheet';
 import { NameSheet } from '@/components/name-sheet';
-import { CardFaces } from '@/components/card-faces';
 import { MediaView } from '@/components/media-view';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
@@ -194,7 +193,6 @@ export default function CardEditorScreen() {
   const [taggingOpen, setTaggingOpen] = useState(false);
   const { data: knownTags } = useLiveQuery(allTagsQuery(), []);
   const [adding, setAdding] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
 
   // Rows added here have no database id yet, so they need a key of their own to
   // stay put while they are being edited.
@@ -1898,37 +1896,23 @@ export default function CardEditorScreen() {
           </Pressable>
         </View>
 
-        <View
-          style={[
-            styles.preview,
-            { borderColor: theme.border, backgroundColor: theme.backgroundElement },
-          ]}>
-          <Pressable
-            onPress={() => setShowPreview((shown) => !shown)}
-            accessibilityRole="button"
-            accessibilityState={{ expanded: showPreview }}
-            accessibilityLabel="Podgląd karty"
-            style={styles.previewHeader}>
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              PODGLĄD KARTY
-            </ThemedText>
-            <ThemedText type="small" style={{ color: theme.accent }}>
-              {showPreview ? 'Ukryj' : 'Pokaż'}
-            </ThemedText>
-          </Pressable>
-
-          {showPreview ? (
-            <View style={styles.previewCard}>
-              <CardFaces
-                frontLines={preview.front}
-                backLines={preview.back}
-                revealed
-                compact
-                voice={voice}
-              />
-            </View>
-          ) : null}
-        </View>
+        {/* The card on the screen a review shows it on, front first, from the
+            unsaved form — see `src/app/card-preview.tsx`. */}
+        <Button
+          title="Podgląd karty"
+          variant="secondary"
+          disabled={!canSave}
+          onPress={() =>
+            router.push({
+              pathname: '/card-preview',
+              params: {
+                deckId,
+                ...(cardId ? { cardId } : {}),
+                faces: JSON.stringify(preview),
+              },
+            })
+          }
+        />
 
         <FieldLayoutList
           rows={rows}
@@ -2069,22 +2053,6 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
     width: '100%',
     alignSelf: 'center',
-  },
-  preview: {
-    borderRadius: Radius.medium,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: Spacing.three,
-    gap: Spacing.two,
-  },
-  previewHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  previewCard: {
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingVertical: Spacing.two,
   },
   input: {
     // Grows with the text instead of always reserving room for four lines.

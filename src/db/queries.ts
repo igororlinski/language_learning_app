@@ -30,6 +30,7 @@ import {
   toFsrsCard,
   toReviewLog,
   toStateValues,
+  type FsrsCard,
   type Grade,
 } from '@/lib/scheduler';
 
@@ -736,6 +737,19 @@ export function deckScheduling(deckId: number): DeckScheduling {
   if (!deck) return DEFAULT_SCHEDULING;
 
   return toScheduling(deck);
+}
+
+/**
+ * Where a card stands in FSRS right now — or, for a card that does not exist
+ * yet, where a brand new one would. What the editor's preview needs to show the
+ * grading buttons with the intervals a real review would offer.
+ */
+export function cardSchedule(cardId: number | null, now = new Date()): FsrsCard {
+  const row = cardId
+    ? db.select().from(fsrsState).where(eq(fsrsState.cardId, cardId)).get()
+    : undefined;
+
+  return toFsrsCard(row ?? newCardState(now));
 }
 
 /** Those two columns as a pair — one mapping, every reader. */
