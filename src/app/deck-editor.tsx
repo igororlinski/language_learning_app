@@ -9,7 +9,7 @@ import { AddFieldSheet } from '@/components/add-field-sheet';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
 import { SpeakerIcon } from '@/components/icons';
-import { keptSpeech, speechMenu } from '@/components/speech-menu';
+import { keptSpeech, PHONETIC_DEFAULT_LABELS, speechMenu } from '@/components/speech-menu';
 import { Dropdown, type DropdownOption } from '@/components/dropdown';
 import { LanguageSheet } from '@/components/language-sheet';
 import { OptionPicker, type PickerOption } from '@/components/option-picker';
@@ -312,6 +312,18 @@ export default function DeckEditorScreen() {
     existing?.newBackSpeech ?? null
   );
 
+  /**
+   * Which language a new card's mandatory fields get transcribed in when it is
+   * saved. Beside the voices because it is the same kind of default, set the
+   * same way; the slots keep theirs on their rows.
+   */
+  const [newFrontPhonetic, setNewFrontPhonetic] = useState<string | null>(
+    existing?.newFrontPhoneticLanguage ?? null
+  );
+  const [newBackPhonetic, setNewBackPhonetic] = useState<string | null>(
+    existing?.newBackPhoneticLanguage ?? null
+  );
+
   /** What the open gear offers, or null when it is closed. */
   const [options, setOptions] = useState<{ title: string; actions: SheetAction[] } | null>(null);
 
@@ -346,7 +358,9 @@ export default function DeckEditorScreen() {
     label: string,
     scope: SpeechScope,
     current: string | null,
-    set: (code: string | null) => void
+    set: (code: string | null) => void,
+    phonetic: string | null,
+    setPhonetic: (code: string | null) => void
   ) => (
     <View style={styles.speech}>
       {current ? (
@@ -358,17 +372,34 @@ export default function DeckEditorScreen() {
         </View>
       ) : null}
 
+      {/* The same kind of label for the transcription a new card will get. */}
+      {phonetic ? (
+        <ThemedText type="small" style={{ color: theme.accent }}>
+          {`IPA · ${languageLabel(phonetic)}`}
+        </ThemedText>
+      ) : null}
+
       <Pressable
         onPress={() =>
           setOptions({
             title: label,
-            actions: speechMenu({
-              scope,
-              languages: formLanguages,
-              current,
-              set,
-              show: setOptions,
-            }),
+            actions: [
+              ...speechMenu({
+                scope,
+                languages: formLanguages,
+                current,
+                set,
+                show: setOptions,
+              }),
+              ...speechMenu({
+                scope,
+                languages: formLanguages,
+                current: phonetic,
+                set: setPhonetic,
+                show: setOptions,
+                labels: PHONETIC_DEFAULT_LABELS,
+              }),
+            ],
           })
         }
         hitSlop={12}
@@ -399,6 +430,7 @@ export default function DeckEditorScreen() {
       // Silent until somebody says otherwise, like every other field.
       speech: null,
       phonetic: null,
+      phoneticLanguage: null,
       hideValue: false,
       hideMedia: false,
     };
@@ -427,7 +459,9 @@ export default function DeckEditorScreen() {
             rowInfo.label,
             isQuestion ? 'question' : 'answer',
             isQuestion ? newFrontSpeech : newBackSpeech,
-            isQuestion ? setNewFrontSpeech : setNewBackSpeech
+            isQuestion ? setNewFrontSpeech : setNewBackSpeech,
+            isQuestion ? newFrontPhonetic : newBackPhonetic,
+            isQuestion ? setNewFrontPhonetic : setNewBackPhonetic
           )}
         </View>
       );
@@ -444,14 +478,27 @@ export default function DeckEditorScreen() {
         </ThemedText>
         <View style={styles.speech}>
           {scope
-            ? speechControls(rowInfo.label, scope, row.speech, (code) =>
-                setRows((current) =>
-                  current.map((item) =>
-                    item.kind === 'extra' && item.key === row.key
-                      ? { ...item, speech: code }
-                      : item
+            ? speechControls(
+                rowInfo.label,
+                scope,
+                row.speech,
+                (code) =>
+                  setRows((current) =>
+                    current.map((item) =>
+                      item.kind === 'extra' && item.key === row.key
+                        ? { ...item, speech: code }
+                        : item
+                    )
+                  ),
+                row.phoneticLanguage,
+                (code) =>
+                  setRows((current) =>
+                    current.map((item) =>
+                      item.kind === 'extra' && item.key === row.key
+                        ? { ...item, phoneticLanguage: code }
+                        : item
+                    )
                   )
-                )
               )
             : null}
           <Pressable
@@ -552,6 +599,13 @@ export default function DeckEditorScreen() {
       position: field.position,
       kind: field.kind,
       speech: keptSpeech(speechScope(field.kind) ?? 'free', formLanguages, field.speech ?? null),
+      // The same rule for the same reason: a transcription language the deck
+      // no longer declares would hand every new card one it does not claim.
+      phoneticLanguage: keptSpeech(
+        speechScope(field.kind) ?? 'free',
+        formLanguages,
+        field.phoneticLanguage ?? null
+      ),
     }));
 
     const input = {
@@ -572,6 +626,10 @@ export default function DeckEditorScreen() {
       newCardSpeech: {
         frontSpeech: keptSpeech('question', formLanguages, newFrontSpeech),
         backSpeech: keptSpeech('answer', formLanguages, newBackSpeech),
+      },
+      newCardPhoneticLanguages: {
+        front: keptSpeech('question', formLanguages, newFrontPhonetic),
+        back: keptSpeech('answer', formLanguages, newBackPhonetic),
       },
       languages: { front: frontLanguages, back: backLanguage },
       imageQuality,

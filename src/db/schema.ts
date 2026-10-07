@@ -147,6 +147,18 @@ export const decks = sqliteTable('decks', {
   newFrontSpeech: text('new_front_speech'),
   newBackSpeech: text('new_back_speech'),
   /**
+   * Which language each mandatory field of a **new** card gets its IPA
+   * transcription written in when the card is saved, or null for none.
+   *
+   * A language and not a transcription: the template has no words yet, so
+   * what it can say is only "transcribe this, in that". The card editor asks
+   * the model at save time, for whatever was typed — see `src/lib/ai-phonetic.ts`.
+   * A default like the voices above: it decides how a card starts and nothing
+   * after that.
+   */
+  newFrontPhoneticLanguage: text('new_front_phonetic_language'),
+  newBackPhoneticLanguage: text('new_back_phonetic_language'),
+  /**
    * Which languages this deck writes its questions and answers in, as JSON
    * arrays of names, or null while the deck has not said. Nothing validates a
    * card against them — see `src/lib/languages.ts` for why they exist and what
@@ -197,6 +209,8 @@ export const deckFieldSlots = sqliteTable(
     kind: text('kind', { enum: FIELD_KINDS }).notNull().default('text'),
     /** What a card made from this slot starts reading aloud in, if anything. */
     speech: text('speech'),
+    /** Which language a card made from this slot transcribes it in, if any. */
+    phoneticLanguage: text('phonetic_language'),
   },
   (table) => [index('deck_field_slots_deck_id_idx').on(table.deckId)]
 );

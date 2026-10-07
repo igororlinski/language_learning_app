@@ -22,6 +22,7 @@ import m0017 from './0017_adorable_morph.sql';
 import m0018 from './0018_naive_violations.sql';
 import m0019 from './0019_brainy_ben_urich.sql';
 import m0020 from './0020_mean_reavers.sql';
+import m0021 from './0021_tiny_hobgoblin.sql';
 
   export default {
     journal,
@@ -46,7 +47,8 @@ m0016,
 m0017,
 m0018,
 m0019,
-m0020
+m0020,
+m0021
     }
   }
   

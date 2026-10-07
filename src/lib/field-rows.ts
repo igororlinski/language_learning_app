@@ -33,6 +33,11 @@ export type Row =
       speech: string | null;
       /** Its pronunciation in IPA, or null for none. */
       phonetic: string | null;
+      /**
+       * Which language to transcribe it in when a new card is saved — what a
+       * deck's template asks for, and in the deck editor what it is set to.
+       */
+      phoneticLanguage: string | null;
     };
 
 /** Where the two mandatory fields sit. */
@@ -56,6 +61,7 @@ export type RowField = {
   hideMedia?: boolean;
   speech?: string | null;
   phonetic?: string | null;
+  phoneticLanguage?: string | null;
 };
 
 /** What a row means once the list order is read top to bottom. */
@@ -101,6 +107,7 @@ export function buildRows(placement: RowPlacement, fields: RowField[]): Row[] {
       hideMedia: field.hideMedia ?? false,
       speech: field.speech ?? null,
       phonetic: field.phonetic ?? null,
+      phoneticLanguage: field.phoneticLanguage ?? null,
       side: field.side,
       position: field.position,
     })),
@@ -185,6 +192,7 @@ export function toPlacement(rows: Row[]): { fields: RowField[]; placement: RowPl
       hideMedia: row.hideMedia,
       speech: row.speech,
       phonetic: row.phonetic,
+      phoneticLanguage: row.phoneticLanguage,
     });
   }
 

@@ -31,6 +31,7 @@ import {
   getCardTagNames,
   newCardFields,
   newCardLayout,
+  newCardPhoneticLanguages,
   newCardSpeech,
   setCardTagNames,
   updateCard,
@@ -482,6 +483,7 @@ export default function CardEditorScreen() {
       hideMedia: false,
       speech: null,
       phonetic: null,
+      phoneticLanguage: null,
     };
 
     // A field whose content arrives from somewhere else stays on probation
@@ -1257,13 +1259,93 @@ export default function CardEditorScreen() {
   // or a recording for an answer, and some are a prompt with nothing at all.
   const canSave = front.trim().length > 0;
 
-  const save = () => {
-    if (!canSave) return;
+  /**
+   * Which language a new card's mandatory fields are transcribed in when it is
+   * saved — the deck's template. An edited card has none: the template only
+   * ever decides how a card starts.
+   */
+  const phoneticTemplate = useMemo(
+    () => (cardId ? { front: null, back: null } : newCardPhoneticLanguages(deckId)),
+    [cardId, deckId]
+  );
 
-    const { fields, placement } = toPlacement(rows);
-    const kept = new Set(fields.map((field) => field.mediaPath).filter(Boolean));
+  /** A save waiting on the transcriptions the deck's template asked for. */
+  const [saving, setSaving] = useState(false);
+
+  /**
+   * The transcriptions the deck's template asks for and the form does not have
+   * yet, made now — at save, because a template holds no words and this is the
+   * first moment the card has any.
+   *
+   * Only what is missing: a transcription already there, made by hand from the
+   * gear, is kept rather than paid for twice. The requests go in parallel, and
+   * one that fails costs only its own field — the card is saved regardless,
+   * and the first failure is handed back to be said once the card is safe.
+   */
+  const transcribeForTemplate = async () => {
+    let filledFront = frontPhonetic;
+    let filledBack = backPhonetic;
+    let filledRows = rows;
+
+    const jobs: Promise<void>[] = [];
+
+    if (phoneticTemplate.front && front.trim() && !frontPhonetic) {
+      const language = phoneticTemplate.front;
+
+      jobs.push(
+        requestPhonetic(front, language).then((ipa) => {
+          filledFront = ipa;
+        })
+      );
+    }
+
+    if (phoneticTemplate.back && back.trim() && !backPhonetic) {
+      const language = phoneticTemplate.back;
+
+      jobs.push(
+        requestPhonetic(back, language).then((ipa) => {
+          filledBack = ipa;
+        })
+      );
+    }
+
+    for (const row of rows) {
+      if (row.kind !== 'extra' || !row.phoneticLanguage || row.phonetic) continue;
+      if (row.field !== 'text' && row.field !== 'mnemonic') continue;
+      if (!row.value.trim()) continue;
+
+      const { key } = row;
+
+      jobs.push(
+        requestPhonetic(row.value, row.phoneticLanguage).then((ipa) => {
+          filledRows = filledRows.map((item) =>
+            item.kind === 'extra' && item.key === key ? { ...item, phonetic: ipa } : item
+          );
+        })
+      );
+    }
+
+    if (jobs.length === 0) return { filledFront, filledBack, filledRows, failure: null };
+
+    // Only now, with something actually to wait for: a save the template asks
+    // nothing of must not flash "Generuję" for no reason.
+    setSaving(true);
+
+    const settled = await Promise.allSettled(jobs);
+    const refused = settled.find((result) => result.status === 'rejected');
+
+    refreshUsage();
+
+    return { filledFront, filledBack, filledRows, failure: refused ? refused.reason : null };
+  };
+
+  const save = async () => {
+    if (!canSave || saving) return;
 
     if (cardId) {
+      const { fields, placement } = toPlacement(rows);
+      const kept = new Set(fields.map((field) => field.mediaPath).filter(Boolean));
+
       // The copies live outside the database, so files the card no longer points
       // at have to be cleared by hand — the ones it dropped and the ones
       // imported here and then replaced.
@@ -1288,6 +1370,23 @@ export default function CardEditorScreen() {
       return;
     }
 
+    // What was on the form when „Zapisz" was pressed is what gets saved; the
+    // wait below only adds transcriptions to it.
+    const typedFront = front;
+    const typedBack = back;
+
+    let transcribed: Awaited<ReturnType<typeof transcribeForTemplate>>;
+
+    try {
+      transcribed = await transcribeForTemplate();
+    } finally {
+      setSaving(false);
+    }
+
+    const { filledFront, filledBack, filledRows, failure } = transcribed;
+    const { fields, placement } = toPlacement(filledRows);
+    const kept = new Set(fields.map((field) => field.mediaPath).filter(Boolean));
+
     deleteMedia(imported.current.filter((file) => !kept.has(file.fileName)));
     imported.current = [];
 
@@ -1295,13 +1394,13 @@ export default function CardEditorScreen() {
     // a whole batch can be typed in one go. Leaving is the header back arrow.
     const card = createCard(
       deckId,
-      front,
-      back,
+      typedFront,
+      typedBack,
       new Date(),
       fields,
       placement,
       { frontSpeech, backSpeech },
-      { frontPhonetic, backPhonetic }
+      { frontPhonetic: filledFront, backPhonetic: filledBack }
     );
     setCardTagNames(card.id, cardTags);
 
@@ -1338,6 +1437,17 @@ export default function CardEditorScreen() {
 
     setSavedCount((count) => count + 1);
     questionInput.current?.focus();
+
+    // Said only now, with the card safe: a transcription that did not arrive
+    // is a missing line under a word, not a reason to lose what was typed.
+    if (failure) {
+      Alert.alert(
+        'Karta zapisana bez zapisu fonetycznego',
+        failure instanceof AiError ? failure.message : 'Coś poszło nie tak.',
+        [{ text: 'OK' }],
+        { cancelable: true }
+      );
+    }
   };
 
   const confirmDelete = () => {
@@ -1361,6 +1471,24 @@ export default function CardEditorScreen() {
   };
 
   /**
+   * The mark under a field the deck's template will transcribe at save.
+   *
+   * Without it the save simply took longer for no visible reason — the
+   * setting lives in the deck editor, out of sight here. It names what will be
+   * written and when, in the same words the deck editor labels the field with.
+   */
+  const pendingPhonetic = (language: string | null) =>
+    language ? (
+      <ThemedText
+        type="small"
+        themeColor="textSecondary"
+        style={[styles.phonetic, styles.pending]}
+        accessibilityLabel={`Zapis fonetyczny: ${languageLabel(language)}, dopisze się przy zapisie`}>
+        {`IPA · ${languageLabel(language)}`}
+      </ThemedText>
+    ) : null;
+
+  /**
    * The strip under a text field: hear it, open its options, and whatever else
    * that particular row can do.
    *
@@ -1380,6 +1508,7 @@ export default function CardEditorScreen() {
     setSpeech: (code: string | null) => void,
     phonetic: string | null,
     setPhonetic: (phonetic: string | null) => void,
+    pendingLanguage: string | null,
     extra?: ReactNode
   ) => {
     const problem = speech ? voiceProblem(speech) : null;
@@ -1387,12 +1516,15 @@ export default function CardEditorScreen() {
 
     return (
       <>
-        {/* Under the field it transcribes, the way the card shows it. */}
+        {/* Under the field it transcribes, the way the card shows it — or,
+            until the save makes it, the mark of the one the deck will add. */}
         {phonetic ? (
           <ThemedText type="small" themeColor="textSecondary" style={styles.phonetic}>
             {phonetic}
           </ThemedText>
-        ) : null}
+        ) : (
+          pendingPhonetic(pendingLanguage)
+        )}
 
         <View style={styles.rowActions}>
           {speech ? (
@@ -1500,7 +1632,8 @@ export default function CardEditorScreen() {
             isQuestion ? frontSpeech : backSpeech,
             isQuestion ? setFrontSpeech : setBackSpeech,
             isQuestion ? frontPhonetic : backPhonetic,
-            isQuestion ? setFrontPhonetic : setBackPhonetic
+            isQuestion ? setFrontPhonetic : setBackPhonetic,
+            isQuestion ? phoneticTemplate.front : phoneticTemplate.back
           )}
         </>
       );
@@ -1555,7 +1688,9 @@ export default function CardEditorScreen() {
               style={[styles.phonetic, row.hideValue ? styles.hidden : null]}>
               {row.phonetic}
             </ThemedText>
-          ) : null}
+          ) : row.phonetic ? null : (
+            pendingPhonetic(row.phoneticLanguage)
+          )}
 
           {row.value.trim() && row.hideValue ? (
             <ThemedText type="small" themeColor="textSecondary">
@@ -1842,6 +1977,7 @@ export default function CardEditorScreen() {
           (code) => setRowSpeech(row.key, code),
           row.phonetic,
           (phonetic) => setRowPhonetic(row.key, phonetic),
+          row.phoneticLanguage,
           removeAction(rowInfo.label, row.key)
         )}
       </>
@@ -1940,7 +2076,17 @@ export default function CardEditorScreen() {
       </ScrollViewContainer>
 
       <View style={[styles.footer, { borderColor: theme.border }]}>
-        <Button title="Zapisz" onPress={save} disabled={!canSave} />
+        {/* Why this save is taking a moment: the deck asked for
+            transcriptions, and they are being written right now. */}
+        {saving ? (
+          <View style={styles.generating}>
+            <ActivityIndicator />
+            <ThemedText type="small" themeColor="textSecondary">
+              Generuję zapis fonetyczny…
+            </ThemedText>
+          </View>
+        ) : null}
+        <Button title="Zapisz" onPress={() => void save()} disabled={!canSave} loading={saving} />
         {cardId ? <Button title="Usuń kartę" variant="danger" onPress={confirmDelete} /> : null}
       </View>
 
@@ -2105,6 +2251,11 @@ const styles = StyleSheet.create({
   /** A transcription under its field: quiet, and read as one with the words. */
   phonetic: {
     marginTop: -Spacing.one,
+  },
+  /** Not written yet — a promise, so fainter than the real thing. */
+  pending: {
+    fontStyle: 'italic',
+    opacity: 0.7,
   },
   /**
    * A control, not a decoration. As a small grey glyph it read as a label and

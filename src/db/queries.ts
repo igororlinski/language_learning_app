@@ -100,6 +100,14 @@ export type CardPhonetic = { frontPhonetic: string | null; backPhonetic: string 
 
 const NO_PHONETIC: CardPhonetic = { frontPhonetic: null, backPhonetic: null };
 
+/**
+ * Which language a new card's two mandatory fields are transcribed in when it
+ * is saved — the deck's template, not anything stored on a card.
+ */
+export type PhoneticLanguages = { front: string | null; back: string | null };
+
+const NO_PHONETIC_LANGUAGES: PhoneticLanguages = { front: null, back: null };
+
 /** Comma-separated bind params for a `state in (...)` test. */
 function stateList(states: State[]) {
   return sql.join(
@@ -376,6 +384,7 @@ export function newCardFields(deckId: number): CardFieldInput[] {
     mnemonic: null,
     speech: slot.speech,
     phonetic: null,
+    phoneticLanguage: slot.phoneticLanguage,
   }));
 }
 
@@ -393,6 +402,15 @@ export function newCardSpeech(deckId: number): CardSpeech {
   if (!deck) return NO_SPEECH;
 
   return { frontSpeech: deck.newFrontSpeech, backSpeech: deck.newBackSpeech };
+}
+
+/** Which language a new card's mandatory fields are transcribed in, if any. */
+export function newCardPhoneticLanguages(deckId: number): PhoneticLanguages {
+  const deck = getDeck(deckId);
+
+  if (!deck) return NO_PHONETIC_LANGUAGES;
+
+  return { front: deck.newFrontPhoneticLanguage, back: deck.newBackPhoneticLanguage };
 }
 
 /** The deck's empty slots, in the order the deck editor arranged them. */
@@ -415,6 +433,7 @@ export type DeckSlotInput = {
   position: number;
   kind: FieldKind;
   speech: string | null;
+  phoneticLanguage?: string | null;
 };
 
 /**
@@ -909,6 +928,8 @@ export type DeckInput = {
   newCardLayout?: CardLayout;
   /** Which of its mandatory fields a new card starts reading aloud, and in what. */
   newCardSpeech?: CardSpeech;
+  /** Which of them a new card gets transcribed, and in what. */
+  newCardPhoneticLanguages?: PhoneticLanguages;
   /** Which way generated pictures lean here — a default, overridable per run. */
   imageQuality?: PictureQuality;
 };
@@ -918,6 +939,7 @@ function deckValues(input: DeckInput) {
   const scheduling = input.scheduling ?? DEFAULT_SCHEDULING;
   const layout = input.newCardLayout ?? DEFAULT_CARD_LAYOUT;
   const speech = input.newCardSpeech ?? NO_SPEECH;
+  const phoneticLanguages = input.newCardPhoneticLanguages ?? NO_PHONETIC_LANGUAGES;
   const languages = input.languages ?? NO_LANGUAGES;
 
   return {
@@ -945,6 +967,8 @@ function deckValues(input: DeckInput) {
     // `new_` in front. A spread would drop both without a word.
     newFrontSpeech: speech.frontSpeech,
     newBackSpeech: speech.backSpeech,
+    newFrontPhoneticLanguage: phoneticLanguages.front,
+    newBackPhoneticLanguage: phoneticLanguages.back,
     // Named columns again, for the reason spelled out above `fsrsWeights`:
     // `front` and `back` are not column names, and a spread would drop them
     // in silence.
@@ -994,6 +1018,11 @@ export type CardFieldInput = {
   speech?: string | null;
   /** Its pronunciation in IPA, or null for none. */
   phonetic?: string | null;
+  /**
+   * A new card only: which language the deck's template asks this field to be
+   * transcribed in at save time. Not a column — nothing stores it on a card.
+   */
+  phoneticLanguage?: string | null;
 };
 
 /**

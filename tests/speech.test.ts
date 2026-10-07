@@ -12,7 +12,12 @@ import {
   speechVoice,
 } from '@/lib/speech';
 
-import { keptSpeech, phoneticMenu, speechMenu } from '@/components/speech-menu';
+import {
+  keptSpeech,
+  PHONETIC_DEFAULT_LABELS,
+  phoneticMenu,
+  speechMenu,
+} from '@/components/speech-menu';
 
 import { check, group } from './harness';
 
@@ -271,3 +276,31 @@ const hasIpa = phonetic('answer', { front: ['pl'], back: 'pt-PT' }, null, '/kuˈ
 check('z zapisem: dwie pozycje', hasIpa.actions.length, 2);
 hasIpa.actions[1]?.onPress();
 check('druga go usuwa', hasIpa.cleared(), true);
+
+group('Trybik talii: domyslny zapis fonetyczny');
+
+// The same choice of one language as reading aloud, under its own labels —
+// and the labels are the only difference, which is why it is the same menu.
+const ipaDefault = speechMenu({
+  scope: 'answer',
+  languages: { front: ['pl'], back: 'pt-PT' },
+  current: null,
+  set: () => {},
+  show: () => {},
+  labels: PHONETIC_DEFAULT_LABELS,
+});
+
+check('mowi o zapisie, nie o czytaniu', ipaDefault[0]?.label, PHONETIC_DEFAULT_LABELS.on);
+
+const ipaDefaultOn = speechMenu({
+  scope: 'answer',
+  languages: { front: ['pl'], back: 'pt-PT' },
+  current: 'pt-PT',
+  set: () => {},
+  show: () => {},
+  labels: PHONETIC_DEFAULT_LABELS,
+});
+
+check('wlaczony daje sie wylaczyc', ipaDefaultOn.map((action) => action.label), [
+  PHONETIC_DEFAULT_LABELS.off,
+]);

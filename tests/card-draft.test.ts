@@ -24,6 +24,7 @@ const field = (
   id: null,
   speech,
   phonetic: null,
+  phoneticLanguage: null,
   hideValue: false,
   hideMedia: false,
   field: 'text',

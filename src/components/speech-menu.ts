@@ -33,15 +33,50 @@ export type SpeechMenu = {
   set: (code: string | null) => void;
   /** Swaps what the open sheet is showing. */
   show: (sheet: { title: string; actions: SheetAction[] }) => void;
+  /**
+   * What the entries say. Reading aloud by default; the deck editor passes
+   * its own for the template's transcription language, which is the same
+   * choice of one language among the deck's — see `PHONETIC_DEFAULT_LABELS`.
+   */
+  labels?: LanguageMenuLabels;
 };
 
-export function speechMenu({ scope, languages, current, set, show }: SpeechMenu): SheetAction[] {
+export type LanguageMenuLabels = { on: string; other: string; off: string; title: string };
+
+const SPEECH_LABELS: LanguageMenuLabels = {
+  on: 'Czytaj na głos',
+  other: 'Czytaj w innym języku',
+  off: 'Nie czytaj na głos',
+  title: 'Język czytania',
+};
+
+/**
+ * The template's transcription entries in the deck editor. A deck has no
+ * words to transcribe, so what it sets is the **language** a new card will be
+ * transcribed in when it is saved — one language among the declared ones,
+ * exactly the choice reading aloud makes.
+ */
+export const PHONETIC_DEFAULT_LABELS: LanguageMenuLabels = {
+  on: 'Dopisuj zapis fonetyczny',
+  other: 'Dopisuj zapis w innym języku',
+  off: 'Nie dopisuj zapisu fonetycznego',
+  title: 'Język zapisu',
+};
+
+export function speechMenu({
+  scope,
+  languages,
+  current,
+  set,
+  show,
+  labels = SPEECH_LABELS,
+}: SpeechMenu): SheetAction[] {
   const candidates = speechCandidates(scope, languages);
   const only = soleCandidate(candidates);
 
   const openList = () =>
     show({
-      title: 'Język czytania',
+      title: labels.title,
       actions: candidates.map((code) => ({
         label: languageLabel(code),
         onPress: () => set(code),
@@ -51,7 +86,7 @@ export function speechMenu({ scope, languages, current, set, show }: SpeechMenu)
   if (!current) {
     return [
       {
-        label: 'Czytaj na głos',
+        label: labels.on,
         disabled: candidates.length === 0,
         hint:
           candidates.length === 0 ? 'Talia nie mówi, w jakich językach są jej karty.' : undefined,
@@ -67,9 +102,9 @@ export function speechMenu({ scope, languages, current, set, show }: SpeechMenu)
     // one this field speaks. Without that, the only way back would be turning
     // the voice off and on again.
     ...(candidates.some((code) => code !== current)
-      ? [{ label: 'Czytaj w innym języku', keepOpen: true, onPress: openList }]
+      ? [{ label: labels.other, keepOpen: true, onPress: openList }]
       : []),
-    { label: 'Nie czytaj na głos', onPress: () => set(null) },
+    { label: labels.off, onPress: () => set(null) },
   ];
 }
 

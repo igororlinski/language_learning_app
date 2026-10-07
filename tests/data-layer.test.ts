@@ -44,6 +44,7 @@ import {
   getDeckSlots,
   newCardFields,
   newCardLayout,
+  newCardPhoneticLanguages,
   newCardSpeech,
   otherDecksQuery,
   rollbackCard,
@@ -94,6 +95,7 @@ import migration0017 from '../drizzle/0017_adorable_morph.sql';
 import migration0018 from '../drizzle/0018_naive_violations.sql';
 import migration0019 from '../drizzle/0019_brainy_ben_urich.sql';
 import migration0020 from '../drizzle/0020_mean_reavers.sql';
+import migration0021 from '../drizzle/0021_tiny_hobgoblin.sql';
 
 for (const migration of [
   migration0000,
@@ -117,6 +119,7 @@ for (const migration of [
   migration0018,
   migration0019,
   migration0020,
+  migration0021,
 ]) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
@@ -486,6 +489,7 @@ check('puste pole trafia na wolna strone', newCardFields(oddDeck.id), [
     mnemonic: null,
     speech: null,
     phonetic: null,
+    phoneticLanguage: null,
   },
 ]);
 
@@ -1672,3 +1676,39 @@ updateDeck(spokenDeck.id, {
 
 check('zmiana domyslnej nie rusza karty', getCard(bornSpeaking.id)?.backSpeech, 'pt-PT');
 check('ale nastepna rodzi sie cicha', newCardSpeech(spokenDeck.id).backSpeech, null);
+
+group('Talia mowi, w czym nowa karta dostaje zapis fonetyczny');
+
+/**
+ * The template holds no words, so what it stores is a **language** — "this
+ * field gets transcribed, in that" — for the card editor to act on at save.
+ * Checked the way the voices are: written by the deck editor, read back.
+ */
+const ipaDeck = createDeck({
+  name: 'Z zapisem',
+  newPerDay: 10,
+  reviewsPerDay: 10,
+  languages: { front: ['pl'], back: 'pt-PT' },
+  newCardPhoneticLanguages: { front: null, back: 'pt-PT' },
+});
+
+syncDeckSlots(ipaDeck.id, [
+  { side: 'back', position: 1, kind: 'text', speech: null, phoneticLanguage: 'pt-PT' },
+  { side: 'back', position: 2, kind: 'text', speech: null },
+]);
+
+check('talia pamieta jezyk zapisu odpowiedzi', newCardPhoneticLanguages(ipaDeck.id), {
+  front: null,
+  back: 'pt-PT',
+});
+check('slot niesie swoj jezyk zapisu', newCardFields(ipaDeck.id)[0]?.phoneticLanguage, 'pt-PT');
+check('slot bez zdania nie ma zadnego', newCardFields(ipaDeck.id)[1]?.phoneticLanguage, null);
+// A language is not a transcription: a new card starts with none until saved.
+check('a zapisu jeszcze nie ma', newCardFields(ipaDeck.id)[0]?.phonetic, null);
+
+// A save of the deck that says nothing about it clears it — the same contract
+// as every other default the deck form writes.
+updateDeck(ipaDeck.id, { name: 'Z zapisem', newPerDay: 10, reviewsPerDay: 10 });
+
+check('formularz bez zdania zeruje domyslna', newCardPhoneticLanguages(ipaDeck.id).back, null);
+check('nieznana talia nie ma zadnej', newCardPhoneticLanguages(9999), { front: null, back: null });

@@ -76,6 +76,7 @@ const moved: Row[] = [
     mnemonic: null,
     speech: null,
     phonetic: null,
+    phoneticLanguage: null,
     hideValue: false,
     hideMedia: false,
   },
@@ -107,6 +108,7 @@ check('pole dodatkowe zostaje z przodu', read.fields, [
     hideMedia: false,
     speech: null,
     phonetic: null,
+    phoneticLanguage: null,
   },
 ]);
 
