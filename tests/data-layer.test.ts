@@ -1311,29 +1311,29 @@ group('Domyslna jakosc obrazow w talii');
  * sends has to come back. A default that silently reverted would look exactly
  * like a user who never changed it.
  */
-check('nowa talia rysuje dokladnie', deckPictureQuality(langDeck.id), 'accurate');
+check('nowa talia rysuje szybko', deckPictureQuality(langDeck.id), 'fast');
 
 updateDeck(langDeck.id, {
   name: 'Angielski',
   newPerDay: 50,
   reviewsPerDay: 50,
-  imageQuality: 'fast',
+  imageQuality: 'accurate',
 });
 
-check('wybrana jakosc wraca z bazy', deckPictureQuality(langDeck.id), 'fast');
+check('wybrana jakosc wraca z bazy', deckPictureQuality(langDeck.id), 'accurate');
 
 // A save that says nothing about pictures must not quietly undo the choice…
 updateDeck(langDeck.id, {
   name: 'Angielski po zmianie',
   newPerDay: 50,
   reviewsPerDay: 50,
-  imageQuality: 'fast',
+  imageQuality: 'accurate',
 });
 
-check('i przezywa zapis reszty formularza', deckPictureQuality(langDeck.id), 'fast');
+check('i przezywa zapis reszty formularza', deckPictureQuality(langDeck.id), 'accurate');
 
 // …and a deck that never existed answers with the default rather than throwing.
-check('nieznana talia oddaje domyslna', deckPictureQuality(9999), 'accurate');
+check('nieznana talia oddaje domyslna', deckPictureQuality(9999), 'fast');
 
 // One language named twice is one language, or a future reader would be told
 // the question is in two.

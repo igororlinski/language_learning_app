@@ -197,3 +197,27 @@ const usage = await withStub(
 );
 
 check('zuzycie pytane pod /usage', usage.sent?.url, 'https://w.example.dev/usage');
+
+group('Generator, ktory nie odpowiada');
+
+/** A `fetch` that never answers on its own and fails only when aborted, like the real one. */
+async function hanging(timeoutMs: number) {
+  const real = globalThis.fetch;
+
+  globalThis.fetch = ((_url: string, init: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new Error('Aborted')));
+    })) as typeof fetch;
+
+  try {
+    await postToWorker('/image', { prompt: 'x' }, 'https://w.example.dev', timeoutMs);
+    return 'odpowiedzial';
+  } catch (error) {
+    return error instanceof AiError ? error.failure : String(error);
+  } finally {
+    globalThis.fetch = real;
+  }
+}
+
+// Without a limit the spinner turned for good; now the wait ends with a sentence.
+check('zawieszone zadanie konczy sie po limicie czasu', await hanging(20), 'timeout');

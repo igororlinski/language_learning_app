@@ -80,8 +80,14 @@ export type FieldKind = (typeof FIELD_KINDS)[number];
 export const PICTURE_QUALITIES = ['accurate', 'fast'] as const;
 export type PictureQuality = (typeof PICTURE_QUALITIES)[number];
 
-/** Careful, because the wait is paid once in the editor and never in review. */
-export const DEFAULT_PICTURE_QUALITY: PictureQuality = 'accurate';
+/**
+ * Quick, since 2026-10-07. It used to be careful, on the argument that the
+ * wait is paid once in the editor and never in review — but a careful round of
+ * three pictures is ~21 s against ~4 s, at almost twice the neurons, and the
+ * wait was the thing actually complained about. A deck that wants careful
+ * pictures says so in its editor; the gear overrides either for one run.
+ */
+export const DEFAULT_PICTURE_QUALITY: PictureQuality = 'fast';
 
 export const decks = sqliteTable('decks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -162,9 +168,14 @@ export const decks = sqliteTable('decks', {
    * and a deck of long sentences wants something different from a deck of
    * single words.
    */
+  //
+  // The SQL default stays the literal it was migrated with (0017), not
+  // `DEFAULT_PICTURE_QUALITY`: changing a column default in SQLite means
+  // drizzle-kit rebuilding the whole table, and nothing relies on it — every
+  // deck is written with its quality named (`deckValues`).
   imageQuality: text('image_quality', { enum: PICTURE_QUALITIES })
     .notNull()
-    .default(DEFAULT_PICTURE_QUALITY),
+    .default('accurate'),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .$defaultFn(() => new Date()),

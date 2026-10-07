@@ -58,7 +58,7 @@ import {
 } from '@/lib/media-files';
 import * as Speech from 'expo-speech';
 import { AiError } from '@/lib/ai-worker';
-import { generateImage, generatePicture as pictureFromScene } from '@/lib/ai-image';
+import { generateImage, generatePictures as picturesFromScene } from '@/lib/ai-image';
 import { requestMnemonics } from '@/lib/ai-mnemonic';
 import {
   buildScenePrompt,
@@ -813,18 +813,17 @@ export default function CardEditorScreen() {
   /**
    * Three drawings of one association, saved and ready to be compared.
    *
-   * They are drawn in parallel because they are independent and the wait is
-   * otherwise three times as long. All of them land on disk before any is
-   * chosen — the ones that lose are deleted the moment one wins, and deleted
-   * just the same when the sheet is dismissed, so a discarded round leaves
-   * nothing behind.
+   * They are asked for in one request and drawn in parallel by the Worker,
+   * because they are independent and the wait is otherwise three times as
+   * long. All of them land on disk before any is chosen — the ones that lose
+   * are deleted the moment one wins, and deleted just the same when the sheet
+   * is dismissed, so a discarded round leaves nothing behind.
    *
    * Each file is written into `imported` the instant it exists rather than
-   * once the batch is done, and the round survives a drawing that fails.
-   * Those two go together: waiting for all three meant that one refusal left
-   * whichever siblings had already been saved on the disk with nothing
-   * pointing at them — not the row, not the cleanup that runs when the edit is
-   * abandoned, nothing. They were paid for and then leaked.
+   * once the batch is done: a save that fails half-way through would otherwise
+   * leave the siblings already on disk with nothing pointing at them — not the
+   * row, not the cleanup that runs when the edit is abandoned, nothing. They
+   * were paid for and then leaked.
    */
   const drawMnemonic = async (key: string, association: Mnemonic, quality: PictureQuality) => {
     const kind = 'mnemonic' as const;
@@ -832,28 +831,17 @@ export default function CardEditorScreen() {
     try {
       setGenerating({ key, label: 'Rysuję trzy obrazy…' });
 
-      const drawings = await Promise.allSettled(
-        [0, 1, 2].map(async () => {
-          const base64 = await pictureFromScene(buildScenePrompt(association.prompt), quality);
-          const fileName = await saveGeneratedImage(kind, base64);
+      // One request for all three, so the Worker counts them in one write. It
+      // also keeps "two pictures beat an error message" on its side: whatever
+      // it drew comes back, and only a round that drew nothing is a failure.
+      const pictures = await picturesFromScene(buildScenePrompt(association.prompt), quality, 3);
+      const drawn: string[] = [];
 
-          imported.current = [...imported.current, { kind, fileName }];
+      for (const base64 of pictures) {
+        const fileName = await saveGeneratedImage(kind, base64);
 
-          return fileName;
-        })
-      );
-
-      const drawn = drawings
-        .filter((drawing) => drawing.status === 'fulfilled')
-        .map((drawing) => drawing.value);
-
-      // Two pictures beat an error message, for the same reason two
-      // associations do (`parseMnemonicList`). Only a round that drew nothing
-      // at all has failed, and then the first refusal is what explains it.
-      if (drawn.length === 0) {
-        const refused = drawings.find((drawing) => drawing.status === 'rejected');
-
-        throw refused ? refused.reason : new AiError('provider');
+        imported.current = [...imported.current, { kind, fileName }];
+        drawn.push(fileName);
       }
 
       setChoosing({ step: 'picture', key, association, files: drawn });

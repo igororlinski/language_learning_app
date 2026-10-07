@@ -222,6 +222,9 @@ const MAX_TERM = 200;
 /** The image model's ceiling. The app asks for fewer; see its STEPS. */
 const MAX_STEPS = 8;
 
+/** Pictures per request — a mnemonic's round of three, and not one more. */
+const MAX_COUNT = 3;
+
 /**
  * The square every picture comes back as. Schnell draws 1024x1024 without being
  * asked; the FLUX 2 models want to be told, and telling them the same number is
@@ -822,9 +825,10 @@ const dayIn = (timeZone) =>
 /**
  * Adds to a daily counter, keyed by its own reset day, and never throws.
  *
- * With one user the calls are sequential, so a read-modify-write loses nothing;
- * a genuinely shared Worker would want an atomic store (a Durable Object) here
- * instead. A usage number that fails to record is worth far less than the
+ * A read-modify-write, so two requests landing at once lose one of the two
+ * additions. One phone no longer does that — a mnemonic's three pictures come
+ * in one request and are added once — but a genuinely shared Worker would want
+ * an atomic store (a Durable Object) here instead. A usage number that fails to record is worth far less than the
  * generation the user asked for, so a KV hiccup is swallowed, not surfaced.
  */
 async function addUsage(env, metric, day, amount) {
@@ -941,31 +945,69 @@ async function handleImage(request, env) {
     ? [named]
     : QUALITY_MODELS[Object.hasOwn(QUALITY_MODELS, quality) ? quality : DEFAULT_QUALITY];
 
+  // A mnemonic wants three pictures of one scene, and asks for them in one
+  // request rather than three. That is what makes the usage counter honest:
+  // three requests at once each read the same old total and each wrote it back
+  // plus one picture, so a round of three was billed as one (2026-10-06). Here
+  // the three are drawn side by side and counted in a single write.
+  const wanted = Number(body?.count);
+  const count = Number.isFinite(wanted)
+    ? Math.min(Math.max(Math.trunc(wanted), 1), MAX_COUNT)
+    : 1;
+
+  const attempts = await Promise.all(
+    Array.from({ length: count }, () => drawOne(env, chain, prompt, steps))
+  );
+
+  const drawn = attempts.filter((attempt) => attempt.image);
+
+  // Billed to the UTC day, like Cloudflare's own allowance. Awaited so the
+  // write lands before the response, but swallowed inside `addUsage` so it
+  // can never cost the pictures the user just paid for.
+  await addUsage(
+    env,
+    'neurons',
+    dayIn('UTC'),
+    drawn.reduce((sum, attempt) => sum + imageNeurons(attempt.name, steps), 0)
+  );
+
+  // Two pictures beat an error message: only a round that drew nothing at all
+  // has failed, and then the first refusal is what explains it.
+  if (drawn.length === 0) return attempts[0].refusal;
+
+  return ok({
+    images: drawn.map((attempt) => attempt.image),
+    // One picture, the shape this endpoint had before `count` — an app built
+    // before 2026-10-07 reads only this.
+    image: drawn[0].image,
+    // Which model drew it, the way `/mnemonic` says who wrote the association:
+    // the app ignores the field, and from a terminal it is the only way to know
+    // that what you asked for is what you got.
+    source: IMAGE_MODELS[drawn[0].name],
+  });
+}
+
+/**
+ * One picture down the chain of models: the first one that draws wins.
+ *
+ * Hands back `{ image, name }`, or `{ refusal }` with the last model's failure
+ * — a model answering without a picture has failed exactly as much as one that
+ * threw, because the app writes this straight into a file, and `undefined`
+ * inside a success envelope must never be one of the shapes it can get.
+ */
+async function drawOne(env, chain, prompt, steps) {
   let refusal = null;
 
   for (const name of chain) {
     const attempt = await run(env, IMAGE_MODELS[name], imageInput(name, prompt, steps));
     const image = attempt.result?.image;
 
-    // Which model drew it, the way `/mnemonic` says who wrote the association:
-    // the app ignores the field, and from a terminal it is the only way to know
-    // that what you asked for is what you got.
-    if (typeof image === 'string' && image.length > 0) {
-      // Billed to the UTC day, like Cloudflare's own allowance. Awaited so the
-      // write lands before the response, but swallowed inside `addUsage` so it
-      // can never cost the picture the user just paid for.
-      await addUsage(env, 'neurons', dayIn('UTC'), imageNeurons(name, steps));
+    if (typeof image === 'string' && image.length > 0) return { image, name };
 
-      return ok({ image, source: IMAGE_MODELS[name] });
-    }
-
-    // A model answering without a picture has failed exactly as much as one
-    // that threw — the app writes this straight into a file, so `undefined`
-    // inside a success envelope must never be one of the shapes it can get.
     refusal = attempt.failure ?? failed('The model returned no image.', 502);
   }
 
-  return refusal;
+  return { refusal };
 }
 
 async function handleMnemonic(request, env) {

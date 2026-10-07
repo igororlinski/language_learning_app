@@ -3,7 +3,7 @@
  * step count — which is a spending decision rather than a tuning detail, so it
  * gets an assertion instead of a silent default.
  */
-import { buildPrompt, generateImage, generatePicture } from '@/lib/ai-image';
+import { buildPrompt, generateImage, generatePicture, generatePictures } from '@/lib/ai-image';
 
 import { withStub } from './ai-worker.test';
 import { check, group } from './harness';
@@ -93,5 +93,41 @@ check(
 check(
   'pusty prompt sceny tez nie',
   await refusal(() => generatePicture('   ', 'accurate', 'https://w.example.dev')),
+  'empty-prompt'
+);
+
+group('Trzy obrazy w jednym zadaniu');
+
+// One request for a mnemonic's round, so the Worker counts the three pictures
+// in one write instead of three racing ones that each counted a single picture.
+const round = await withStub(
+  { status: 200, body: { success: true, result: { images: ['A', 'B', 'C'], image: 'A' } } },
+  async () => (await generatePictures('scena', 'fast', 3, 'https://w.example.dev')).join(',')
+);
+
+check('wszystkie obrazy wracaja', round.outcome, 'A,B,C');
+check(
+  'liczba obrazow jedzie w zadaniu',
+  (JSON.parse(String(round.sent?.init.body)) as { count?: unknown }).count,
+  3
+);
+
+// The Worker hands back whatever it drew; two pictures are still a round.
+const partial = await withStub(
+  { status: 200, body: { success: true, result: { images: ['A', '', 7, 'C'] } } },
+  async () => (await generatePictures('scena', 'fast', 3, 'https://w.example.dev')).join(',')
+);
+
+check('niepelna runda oddaje to, co powstalo', partial.outcome, 'A,C');
+
+const none = await withStub(
+  { status: 200, body: { success: true, result: { images: [] } } },
+  () => generatePictures('scena', 'fast', 3, 'https://w.example.dev')
+);
+
+check('runda bez obrazu to blad, nie pusta lista', none.outcome, 'malformed');
+check(
+  'pusty prompt rundy nie idzie nigdzie',
+  await refusal(() => generatePictures('  ', 'fast', 3, 'https://w.example.dev')),
   'empty-prompt'
 );

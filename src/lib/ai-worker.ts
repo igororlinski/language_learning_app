@@ -42,6 +42,7 @@ export type AiFailure =
   | 'rate-limited'
   | 'provider'
   | 'network'
+  | 'timeout'
   | 'malformed';
 
 const MESSAGES: Record<AiFailure, string> = {
@@ -53,6 +54,7 @@ const MESSAGES: Record<AiFailure, string> = {
   'rate-limited': 'Dzienny darmowy limit się wyczerpał. Spróbuj jutro.',
   provider: 'Nie udało się.',
   network: 'Brak połączenia z generatorem.',
+  timeout: 'Generator nie odpowiedział w porę. Spróbuj jeszcze raz.',
   malformed: 'Generator odpowiedział czymś, czego nie rozumiem.',
 };
 
@@ -121,19 +123,34 @@ export function resultFromResponse(body: unknown): Record<string, unknown> {
 }
 
 /**
+ * How long one errand may take before the app stops waiting for it.
+ *
+ * Without a limit a request that never answered left the spinner turning for
+ * good, and nothing on the screen could end it. A careful round of three
+ * pictures measured ~21 s (2026-09-08), and one that falls back to the second
+ * model takes about twice that, so a minute lets every honest answer through.
+ *
+ * Giving up here does not stop the Worker: what it was drawing is still drawn
+ * and still counted against the day's allowance. It only stops the wait.
+ */
+const REQUEST_TIMEOUT_MS = 60_000;
+
+/**
  * Posts one errand to the Worker and hands back its `result`.
  *
  * Everything that can go wrong comes back as an `AiError` with something
  * sayable in it — these calls are made from event handlers, where the error
  * boundary cannot reach.
  *
- * The address is a parameter with a default so the tests can drive both the
- * configured and the unconfigured case; every screen calls it without one.
+ * The address and the time limit are parameters with defaults so the tests can
+ * drive both the configured and the unconfigured case, and a request that never
+ * answers; every screen calls it without them.
  */
 export async function postToWorker(
   path: string,
   body: Record<string, unknown>,
-  workerUrl: string = WORKER_URL
+  workerUrl: string = WORKER_URL,
+  timeoutMs: number = REQUEST_TIMEOUT_MS
 ): Promise<Record<string, unknown>> {
   const base = workerUrl.trim().replace(/\/+$/, '');
 
@@ -143,21 +160,35 @@ export async function postToWorker(
 
   if (APP_SECRET) headers['X-App-Secret'] = APP_SECRET;
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   let response: Response;
+  let parsed: unknown;
 
   try {
-    response = await fetch(`${base}${path}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
-  } catch (error) {
-    throw new AiError('network', error instanceof Error ? error.message : undefined);
-  }
+    try {
+      response = await fetch(`${base}${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (controller.signal.aborted) throw new AiError('timeout');
 
-  // Read the body first either way: a failing status still carries the Worker's
-  // explanation, and that explanation is the only diagnosis available on a phone.
-  const parsed: unknown = await response.json().catch(() => null);
+      throw new AiError('network', error instanceof Error ? error.message : undefined);
+    }
+
+    // Read the body first either way: a failing status still carries the Worker's
+    // explanation, and that explanation is the only diagnosis available on a phone.
+    // Still under the same limit — three pictures are most of a megabyte.
+    parsed = await response.json().catch(() => null);
+
+    if (controller.signal.aborted) throw new AiError('timeout');
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!response.ok) {
     const detail =

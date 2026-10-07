@@ -82,6 +82,41 @@ export async function generatePicture(
   return image;
 }
 
+/**
+ * Asks for several pictures of one prompt in a single request — a mnemonic's
+ * round of three.
+ *
+ * One request rather than three parallel ones because the Worker's usage
+ * counter is a read-modify-write: three at once each read the same total and
+ * each wrote back one picture's worth, so a round was billed as a single
+ * picture. Drawn together, they are counted together.
+ *
+ * Hands back however many were drawn — the Worker answers with what it has and
+ * fails only a round that drew nothing at all.
+ */
+export async function generatePictures(
+  prompt: string,
+  quality: PictureQuality = 'fast',
+  count: number,
+  workerUrl?: string
+): Promise<string[]> {
+  if (!prompt.trim()) throw new AiError('empty-prompt');
+
+  const result = await postToWorker(
+    '/image',
+    { prompt: prompt.slice(0, MAX_PROMPT), steps: STEPS, quality, count },
+    workerUrl
+  );
+
+  const images = Array.isArray(result.images)
+    ? result.images.filter((image): image is string => typeof image === 'string' && image.length > 0)
+    : [];
+
+  if (images.length === 0) throw new AiError('malformed');
+
+  return images;
+}
+
 /** One picture of one word — what an `ai-image` field asks for. */
 export function generateImage(
   term: string,
