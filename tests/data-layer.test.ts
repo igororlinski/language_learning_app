@@ -7,6 +7,7 @@
  * surrounding query, or a scheduling rule drifting between JS and SQL.
  */
 import { eq } from 'drizzle-orm';
+import { openDatabaseSync } from 'expo-sqlite';
 
 import { db, sqliteDb } from '@/db/client';
 import {
@@ -46,6 +47,9 @@ import {
   newCardLayout,
   newCardPhoneticLanguages,
   newCardSpeech,
+  deckTemplates,
+  syncDeckTemplates,
+  DEFAULT_TEMPLATE_NAME,
   otherDecksQuery,
   rollbackCard,
   saveCardFields,
@@ -96,8 +100,9 @@ import migration0018 from '../drizzle/0018_naive_violations.sql';
 import migration0019 from '../drizzle/0019_brainy_ben_urich.sql';
 import migration0020 from '../drizzle/0020_mean_reavers.sql';
 import migration0021 from '../drizzle/0021_tiny_hobgoblin.sql';
+import migration0022 from '../drizzle/0022_daily_valkyrie.sql';
 
-for (const migration of [
+const MIGRATIONS = [
   migration0000,
   migration0001,
   migration0002,
@@ -120,7 +125,18 @@ for (const migration of [
   migration0019,
   migration0020,
   migration0021,
-]) {
+  migration0022,
+];
+
+/** Runs migrations the way the app's migrator does: statement by statement. */
+const applyMigration = (run: (sql: string) => void, migration: string) => {
+  for (const statement of migration.split('--> statement-breakpoint')) {
+    const trimmed = statement.trim();
+    if (trimmed) run(trimmed);
+  }
+};
+
+for (const migration of MIGRATIONS) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
     if (trimmed) sqliteDb.execSync(trimmed);
@@ -1706,9 +1722,146 @@ check('slot bez zdania nie ma zadnego', newCardFields(ipaDeck.id)[1]?.phoneticLa
 // A language is not a transcription: a new card starts with none until saved.
 check('a zapisu jeszcze nie ma', newCardFields(ipaDeck.id)[0]?.phonetic, null);
 
-// A save of the deck that says nothing about it clears it — the same contract
-// as every other default the deck form writes.
+// Since templates moved to their own table, a deck save that says nothing
+// about them leaves them alone — the deck editor saves its templates apart.
 updateDeck(ipaDeck.id, { name: 'Z zapisem', newPerDay: 10, reviewsPerDay: 10 });
 
-check('formularz bez zdania zeruje domyslna', newCardPhoneticLanguages(ipaDeck.id).back, null);
+check('zapis talii bez zdania o szablonie go nie rusza', newCardPhoneticLanguages(ipaDeck.id).back, 'pt-PT');
 check('nieznana talia nie ma zadnej', newCardPhoneticLanguages(9999), { front: null, back: null });
+
+group('Kilka szablonow nowej karty w jednej talii');
+
+/**
+ * A deck can start a new card more than one way. Each template carries its
+ * own layout, voices, transcription languages and empty slots; the first one
+ * is the default, and asking for a template by id gets exactly that one.
+ */
+const manyDeck = createDeck({
+  name: 'Szablony',
+  newPerDay: 10,
+  reviewsPerDay: 10,
+  languages: { front: ['pl'], back: 'pt-PT' },
+});
+
+check('nowa talia ma jeden szablon', deckTemplates(manyDeck.id).length, 1);
+check('nazwany domyslnie', deckTemplates(manyDeck.id)[0]?.name, DEFAULT_TEMPLATE_NAME);
+
+syncDeckTemplates(manyDeck.id, [
+  {
+    name: 'Slowko',
+    layout: { frontSide: 'front', frontPosition: 0, backSide: 'back', backPosition: 0 },
+    speech: { frontSpeech: null, backSpeech: 'pt-PT' },
+    phoneticLanguages: { front: null, back: 'pt-PT' },
+    slots: [{ side: 'back', position: 1, kind: 'text', speech: 'pt-PT' }],
+  },
+  {
+    name: '  Zdanie  ',
+    layout: { frontSide: 'back', frontPosition: 1, backSide: 'front', backPosition: 0 },
+    speech: { frontSpeech: 'pl', backSpeech: null },
+    phoneticLanguages: { front: null, back: null },
+    slots: [
+      { side: 'front', position: 1, kind: 'audio', speech: null },
+      { side: 'back', position: 0, kind: 'text', speech: null, phoneticLanguage: 'pl' },
+    ],
+  },
+]);
+
+const [wordTemplate, sentenceTemplate] = deckTemplates(manyDeck.id);
+
+check('dwa szablony w kolejnosci edytora', deckTemplates(manyDeck.id).map((t) => t.name), [
+  'Slowko',
+  'Zdanie',
+]);
+
+// No id is the deck's first; an id is that template, whole.
+check('bez wyboru pierwszy jest domyslny', newCardSpeech(manyDeck.id).backSpeech, 'pt-PT');
+check('drugi ma swoj uklad', newCardLayout(manyDeck.id, sentenceTemplate.id), {
+  frontSide: 'back',
+  frontPosition: 1,
+  backSide: 'front',
+  backPosition: 0,
+});
+check('swoje glosy', newCardSpeech(manyDeck.id, sentenceTemplate.id), {
+  frontSpeech: 'pl',
+  backSpeech: null,
+});
+check('swoje jezyki zapisu', newCardPhoneticLanguages(manyDeck.id, wordTemplate.id), {
+  front: null,
+  back: 'pt-PT',
+});
+check(
+  'i swoje puste pola',
+  newCardFields(manyDeck.id, sentenceTemplate.id).map((field) => field.kind),
+  ['text', 'audio']
+);
+check('pierwszy swoje', newCardFields(manyDeck.id, wordTemplate.id).length, 1);
+
+// A card made from the second template reads as that template says.
+const fromSentence = createCard(
+  manyDeck.id,
+  'okno',
+  'a janela',
+  now,
+  newCardFields(manyDeck.id, sentenceTemplate.id),
+  newCardLayout(manyDeck.id, sentenceTemplate.id),
+  newCardSpeech(manyDeck.id, sentenceTemplate.id)
+);
+
+check('karta z drugiego szablonu ma jego uklad', getCard(fromSentence.id)?.frontSide, 'back');
+check('i jego pola', getCardFields(fromSentence.id).length, 2);
+
+// Replacing the list replaces it, slots included, and a deck is never left
+// without a template.
+syncDeckTemplates(manyDeck.id, []);
+
+check('pusta lista zostawia jeden domyslny', deckTemplates(manyDeck.id).length, 1);
+check('bez pustych pol po starych', newCardFields(manyDeck.id).length, 0);
+// A template decides how a card starts and nothing after that.
+check('karta nie traci pol razem z szablonem', getCardFields(fromSentence.id).length, 2);
+
+// A stale id — a template deleted meanwhile — falls back to the deck's first
+// rather than to nothing.
+check(
+  'nieistniejacy szablon to pierwszy szablon talii',
+  newCardLayout(manyDeck.id, sentenceTemplate.id),
+  { frontSide: 'front', frontPosition: 0, backSide: 'back', backPosition: 0 }
+);
+
+group('Migracja 0022 przenosi uklad talii do szablonu');
+
+/**
+ * The one migration here that moves data rather than shape, so it gets its
+ * own database: everything up to 0021, a deck laid out the old way, then 0022.
+ */
+const legacy = openDatabaseSync(':memory:');
+
+for (const migration of MIGRATIONS.slice(0, -1)) applyMigration((sql) => legacy.execSync(sql), migration);
+
+legacy.execSync(`
+  INSERT INTO decks (id, name, created_at, new_front_side, new_front_position, new_back_side,
+    new_back_position, new_front_speech, new_back_speech, new_back_phonetic_language)
+  VALUES (7, 'Stara', 0, 'back', 2, 'front', 0, 'pl', 'pt-PT', 'pt-PT');
+  INSERT INTO deck_field_slots (deck_id, side, position, kind, speech)
+  VALUES (7, 'back', 1, 'text', 'pt-PT'), (7, 'front', 1, 'audio', NULL);
+`);
+
+applyMigration((sql) => legacy.execSync(sql), MIGRATIONS[MIGRATIONS.length - 1]);
+
+/** Rows of a query on the legacy database. */
+const legacyRows = (sql: string) =>
+  legacy.prepareSync(sql).executeSync<Record<string, unknown>>().getAllSync();
+
+const migrated = legacyRows('SELECT * FROM card_templates WHERE deck_id = 7');
+
+check('kazda talia dostaje jeden szablon', migrated.length, 1);
+check('nazwany Podstawowy', migrated[0]?.name, 'Podstawowy');
+check('z jej ukladem', [migrated[0]?.front_side, migrated[0]?.front_position], ['back', 2]);
+check('glosami', [migrated[0]?.front_speech, migrated[0]?.back_speech], ['pl', 'pt-PT']);
+check('i jezykiem zapisu', migrated[0]?.back_phonetic_language, 'pt-PT');
+check(
+  'puste pola trafiaja do niego',
+  legacyRows('SELECT template_id FROM deck_field_slots WHERE deck_id = 7').map(
+    (row) => row.template_id
+  ),
+  [migrated[0]?.id, migrated[0]?.id]
+);

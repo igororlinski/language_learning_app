@@ -196,7 +196,43 @@ export const decks = sqliteTable('decks', {
 export const IMAGE_STATUSES = ['none', 'generating', 'ready', 'failed'] as const;
 export type ImageStatus = (typeof IMAGE_STATUSES)[number];
 
-/** One empty field a new card in this deck starts with. */
+/**
+ * One way a new card in a deck can start — a deck has as many as it likes,
+ * and the card editor switches between them while a new card is being made.
+ *
+ * Each carries everything the deck used to carry once (migration 0022 moved
+ * it here): where the two mandatory fields sit, what they start out reading
+ * aloud in, which language each gets transcribed in at save, and — through
+ * `deck_field_slots.template_id` — the empty extra fields. The columns on
+ * `decks` that held this before are **dead**, like `cards.image_*`: dropping a
+ * column in SQLite means rebuilding the table, and nothing reads them.
+ *
+ * A template decides how a card *starts* and nothing after that: the card
+ * remembers no template, and editing or deleting one never touches a card.
+ */
+export const cardTemplates = sqliteTable(
+  'card_templates',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    deckId: integer('deck_id')
+      .notNull()
+      .references(() => decks.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** Order among the deck's templates; the first one is the default. */
+    position: integer('position').notNull().default(0),
+    frontSide: text('front_side', { enum: FIELD_SIDES }).notNull().default('front'),
+    frontPosition: integer('front_position').notNull().default(0),
+    backSide: text('back_side', { enum: FIELD_SIDES }).notNull().default('back'),
+    backPosition: integer('back_position').notNull().default(0),
+    frontSpeech: text('front_speech'),
+    backSpeech: text('back_speech'),
+    frontPhoneticLanguage: text('front_phonetic_language'),
+    backPhoneticLanguage: text('back_phonetic_language'),
+  },
+  (table) => [index('card_templates_deck_id_idx').on(table.deckId)]
+);
+
+/** One empty field a new card made from a template starts with. */
 export const deckFieldSlots = sqliteTable(
   'deck_field_slots',
   {
@@ -211,6 +247,14 @@ export const deckFieldSlots = sqliteTable(
     speech: text('speech'),
     /** Which language a card made from this slot transcribes it in, if any. */
     phoneticLanguage: text('phonetic_language'),
+    /**
+     * The template this slot belongs to. Nullable only because SQLite cannot
+     * add a NOT NULL column to a table that has rows; migration 0022 fills it
+     * for every slot there was, and every slot written since names one.
+     */
+    templateId: integer('template_id').references(() => cardTemplates.id, {
+      onDelete: 'cascade',
+    }),
   },
   (table) => [index('deck_field_slots_deck_id_idx').on(table.deckId)]
 );
@@ -430,6 +474,7 @@ export const reviewLogs = sqliteTable(
 export type Deck = typeof decks.$inferSelect;
 export type CardField = typeof cardFields.$inferSelect;
 export type DeckFieldSlot = typeof deckFieldSlots.$inferSelect;
+export type CardTemplate = typeof cardTemplates.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type FsrsStateRow = typeof fsrsState.$inferSelect;
 export type ReviewLog = typeof reviewLogs.$inferSelect;

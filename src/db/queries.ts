@@ -39,6 +39,7 @@ import {
   cardFields,
   cards,
   cardTags,
+  cardTemplates,
   deckFieldSlots,
   decks,
   DEFAULT_NEW_CARD_ORDER,
@@ -48,6 +49,7 @@ import {
   reviewLogs,
   tags,
   type CardField,
+  type CardTemplate,
   type DeckFieldSlot,
   type FieldKind,
   type FieldSide,
@@ -346,20 +348,50 @@ export function getCardFields(cardId: number): CardField[] {
     .all();
 }
 
+/* -------------------------------------------------------------- templates */
+
 /**
- * Where a new card in this deck puts its two mandatory fields. Only a brand new
- * card ever reads this; from then on the layout is the card's own and the deck
- * has no say over it.
+ * The ways a new card in this deck can start, in the deck editor's order — the
+ * first one is the default. Every deck has at least one: `createDeck` makes it,
+ * and migration 0022 made one for every deck there was.
  */
-export function newCardLayout(deckId: number): CardLayout {
-  const deck = getDeck(deckId);
-  if (!deck) return DEFAULT_CARD_LAYOUT;
+export function deckTemplates(deckId: number): CardTemplate[] {
+  return db
+    .select()
+    .from(cardTemplates)
+    .where(eq(cardTemplates.deckId, deckId))
+    .orderBy(asc(cardTemplates.position), asc(cardTemplates.id))
+    .all();
+}
+
+/**
+ * The template a new card starts from: the one asked for, or the deck's first.
+ * Undefined only for a deck that does not exist.
+ */
+function resolveTemplate(deckId: number, templateId?: number | null): CardTemplate | undefined {
+  if (templateId != null) {
+    const asked = db.select().from(cardTemplates).where(eq(cardTemplates.id, templateId)).get();
+
+    if (asked) return asked;
+  }
+
+  return deckTemplates(deckId)[0];
+}
+
+/**
+ * Where a new card puts its two mandatory fields. Only a brand new card ever
+ * reads this; from then on the layout is the card's own and neither the deck
+ * nor the template has any say over it.
+ */
+export function newCardLayout(deckId: number, templateId?: number | null): CardLayout {
+  const template = resolveTemplate(deckId, templateId);
+  if (!template) return DEFAULT_CARD_LAYOUT;
 
   return {
-    frontSide: deck.newFrontSide,
-    frontPosition: deck.newFrontPosition,
-    backSide: deck.newBackSide,
-    backPosition: deck.newBackPosition,
+    frontSide: template.frontSide,
+    frontPosition: template.frontPosition,
+    backSide: template.backSide,
+    backPosition: template.backPosition,
   };
 }
 
@@ -373,8 +405,8 @@ export function newCardLayout(deckId: number): CardLayout {
  * setting it on each card by hand is a chore nobody keeps up. The language
  * travels; the words arrive later.
  */
-export function newCardFields(deckId: number): CardFieldInput[] {
-  return getDeckSlots(deckId).map((slot) => ({
+export function newCardFields(deckId: number, templateId?: number | null): CardFieldInput[] {
+  return getDeckSlots(deckId, templateId).map((slot) => ({
     id: null,
     side: slot.side,
     position: slot.position,
@@ -396,29 +428,36 @@ export function newCardFields(deckId: number): CardFieldInput[] {
  * **template**, and this is not part of a shape. Only a brand new card reads
  * either; from then on both belong to the card.
  */
-export function newCardSpeech(deckId: number): CardSpeech {
-  const deck = getDeck(deckId);
+export function newCardSpeech(deckId: number, templateId?: number | null): CardSpeech {
+  const template = resolveTemplate(deckId, templateId);
 
-  if (!deck) return NO_SPEECH;
+  if (!template) return NO_SPEECH;
 
-  return { frontSpeech: deck.newFrontSpeech, backSpeech: deck.newBackSpeech };
+  return { frontSpeech: template.frontSpeech, backSpeech: template.backSpeech };
 }
 
 /** Which language a new card's mandatory fields are transcribed in, if any. */
-export function newCardPhoneticLanguages(deckId: number): PhoneticLanguages {
-  const deck = getDeck(deckId);
+export function newCardPhoneticLanguages(
+  deckId: number,
+  templateId?: number | null
+): PhoneticLanguages {
+  const template = resolveTemplate(deckId, templateId);
 
-  if (!deck) return NO_PHONETIC_LANGUAGES;
+  if (!template) return NO_PHONETIC_LANGUAGES;
 
-  return { front: deck.newFrontPhoneticLanguage, back: deck.newBackPhoneticLanguage };
+  return { front: template.frontPhoneticLanguage, back: template.backPhoneticLanguage };
 }
 
-/** The deck's empty slots, in the order the deck editor arranged them. */
-export function getDeckSlots(deckId: number): DeckFieldSlot[] {
+/** A template's empty slots, in the order the deck editor arranged them. */
+export function getDeckSlots(deckId: number, templateId?: number | null): DeckFieldSlot[] {
+  const template = resolveTemplate(deckId, templateId);
+
+  if (!template) return [];
+
   return db
     .select()
     .from(deckFieldSlots)
-    .where(eq(deckFieldSlots.deckId, deckId))
+    .where(eq(deckFieldSlots.templateId, template.id))
     .orderBy(asc(deckFieldSlots.position), asc(deckFieldSlots.id))
     .all();
 }
@@ -436,17 +475,104 @@ export type DeckSlotInput = {
   phoneticLanguage?: string | null;
 };
 
-/**
- * Replaces the deck's slots with the list the editor holds. They carry nothing
- * worth preserving, so this is a delete-and-insert rather than a diff.
- */
-export function syncDeckSlots(deckId: number, slots: DeckSlotInput[]) {
-  return db.transaction((tx) => {
-    tx.delete(deckFieldSlots).where(eq(deckFieldSlots.deckId, deckId)).run();
+/** Everything one template holds, as the deck editor hands it over. */
+export type TemplateInput = {
+  name: string;
+  layout: CardLayout;
+  speech: CardSpeech;
+  phoneticLanguages: PhoneticLanguages;
+  slots: DeckSlotInput[];
+};
 
-    for (const slot of slots) {
-      tx.insert(deckFieldSlots).values({ deckId, ...slot }).run();
-    }
+/** The name a deck's first template gets when nobody has named it. */
+export const DEFAULT_TEMPLATE_NAME = 'Podstawowy';
+
+/** A template's own columns, named one by one — pitfall 11. */
+function templateValues(input: Omit<TemplateInput, 'name' | 'slots'>) {
+  return {
+    frontSide: input.layout.frontSide,
+    frontPosition: input.layout.frontPosition,
+    backSide: input.layout.backSide,
+    backPosition: input.layout.backPosition,
+    frontSpeech: input.speech.frontSpeech,
+    backSpeech: input.speech.backSpeech,
+    frontPhoneticLanguage: input.phoneticLanguages.front,
+    backPhoneticLanguage: input.phoneticLanguages.back,
+  };
+}
+
+function insertSlots(tx: Tx, deckId: number, templateId: number, slots: DeckSlotInput[]) {
+  for (const slot of slots) {
+    tx.insert(deckFieldSlots)
+      .values({
+        deckId,
+        templateId,
+        side: slot.side,
+        position: slot.position,
+        kind: slot.kind,
+        speech: slot.speech,
+        phoneticLanguage: slot.phoneticLanguage ?? null,
+      })
+      .run();
+  }
+}
+
+/**
+ * Replaces a deck's templates with the list the deck editor holds, slots and
+ * all. Delete-and-insert rather than a diff, for the reason the slots always
+ * were: nothing points at a template — a card remembers none — so there is
+ * nothing an id has to survive for.
+ *
+ * A deck is never left without one: an empty list writes the default.
+ */
+export function syncDeckTemplates(deckId: number, templates: TemplateInput[]) {
+  const list: TemplateInput[] =
+    templates.length > 0
+      ? templates
+      : [
+          {
+            name: DEFAULT_TEMPLATE_NAME,
+            layout: DEFAULT_CARD_LAYOUT,
+            speech: NO_SPEECH,
+            phoneticLanguages: NO_PHONETIC_LANGUAGES,
+            slots: [],
+          },
+        ];
+
+  return db.transaction((tx) => {
+    // The slots go with their templates (ON DELETE CASCADE).
+    tx.delete(cardTemplates).where(eq(cardTemplates.deckId, deckId)).run();
+
+    list.forEach((template, position) => {
+      const row = tx
+        .insert(cardTemplates)
+        .values({
+          deckId,
+          name: template.name.trim() || DEFAULT_TEMPLATE_NAME,
+          position,
+          ...templateValues(template),
+        })
+        .returning()
+        .get();
+
+      insertSlots(tx, deckId, row.id, template.slots);
+    });
+  });
+}
+
+/**
+ * Replaces one template's slots — the deck's first, unless another is named.
+ * What the deck editor did before a deck could have several, and still the
+ * shortest way to set up a deck with one.
+ */
+export function syncDeckSlots(deckId: number, slots: DeckSlotInput[], templateId?: number | null) {
+  const template = resolveTemplate(deckId, templateId);
+
+  if (!template) return;
+
+  return db.transaction((tx) => {
+    tx.delete(deckFieldSlots).where(eq(deckFieldSlots.templateId, template.id)).run();
+    insertSlots(tx, deckId, template.id, slots);
   });
 }
 
@@ -924,7 +1050,12 @@ export type DeckInput = {
   scheduling?: DeckScheduling;
   /** What the question and the answer are written in. Declarative only. */
   languages?: DeckLanguages;
-  /** The layout every new card in this deck starts from. */
+  /**
+   * The deck's **first** template, for a caller that deals in one: a deck
+   * created with these gets them, and an update that names any of them
+   * rewrites that template (the rest default). The deck editor sends the whole
+   * list through `syncDeckTemplates` instead.
+   */
   newCardLayout?: CardLayout;
   /** Which of its mandatory fields a new card starts reading aloud, and in what. */
   newCardSpeech?: CardSpeech;
@@ -937,9 +1068,6 @@ export type DeckInput = {
 /** The columns a deck form writes, with the queue options defaulted. */
 function deckValues(input: DeckInput) {
   const scheduling = input.scheduling ?? DEFAULT_SCHEDULING;
-  const layout = input.newCardLayout ?? DEFAULT_CARD_LAYOUT;
-  const speech = input.newCardSpeech ?? NO_SPEECH;
-  const phoneticLanguages = input.newCardPhoneticLanguages ?? NO_PHONETIC_LANGUAGES;
   const languages = input.languages ?? NO_LANGUAGES;
 
   return {
@@ -958,17 +1086,8 @@ function deckValues(input: DeckInput) {
     // ignores a key that names no column — which is how a whole optimiser run
     // used to vanish on save, with neither `tsc` nor a test noticing.
     fsrsWeights: weightsJson(scheduling.weights),
-    newFrontSide: layout.frontSide,
-    newFrontPosition: layout.frontPosition,
-    newBackSide: layout.backSide,
-    newBackPosition: layout.backPosition,
-    // Named, not spread: `CardSpeech` calls them `frontSpeech`/`backSpeech`
-    // because that is what they are on a card, and the deck's columns carry
-    // `new_` in front. A spread would drop both without a word.
-    newFrontSpeech: speech.frontSpeech,
-    newBackSpeech: speech.backSpeech,
-    newFrontPhoneticLanguage: phoneticLanguages.front,
-    newBackPhoneticLanguage: phoneticLanguages.back,
+    // The deck's `new_*` columns are no longer written: what a new card starts
+    // as lives in `card_templates` since migration 0022.
     // Named columns again, for the reason spelled out above `fsrsWeights`:
     // `front` and `back` are not column names, and a spread would drop them
     // in silence.
@@ -978,12 +1097,61 @@ function deckValues(input: DeckInput) {
   };
 }
 
+/** The first-template part of a `DeckInput`, with everything left out defaulted. */
+function firstTemplateValues(input: DeckInput) {
+  return templateValues({
+    layout: input.newCardLayout ?? DEFAULT_CARD_LAYOUT,
+    speech: input.newCardSpeech ?? NO_SPEECH,
+    phoneticLanguages: input.newCardPhoneticLanguages ?? NO_PHONETIC_LANGUAGES,
+  });
+}
+
+/** Whether a `DeckInput` says anything about the first template at all. */
+const namesTemplate = (input: DeckInput) =>
+  input.newCardLayout !== undefined ||
+  input.newCardSpeech !== undefined ||
+  input.newCardPhoneticLanguages !== undefined;
+
+/** Creates the deck together with its first template — no deck is without one. */
 export function createDeck(input: DeckInput) {
-  return db.insert(decks).values(deckValues(input)).returning().get();
+  return db.transaction((tx) => {
+    const deck = tx.insert(decks).values(deckValues(input)).returning().get();
+
+    tx.insert(cardTemplates)
+      .values({
+        deckId: deck.id,
+        name: DEFAULT_TEMPLATE_NAME,
+        position: 0,
+        ...firstTemplateValues(input),
+      })
+      .run();
+
+    return deck;
+  });
 }
 
 export function updateDeck(deckId: number, patch: DeckInput) {
-  return db.update(decks).set(deckValues(patch)).where(eq(decks.id, deckId)).run();
+  return db.transaction((tx) => {
+    tx.update(decks).set(deckValues(patch)).where(eq(decks.id, deckId)).run();
+
+    // Only when asked: the deck editor saves its templates on their own, and an
+    // update that says nothing about them must not reset the first one.
+    if (!namesTemplate(patch)) return;
+
+    const first = tx
+      .select()
+      .from(cardTemplates)
+      .where(eq(cardTemplates.deckId, deckId))
+      .orderBy(asc(cardTemplates.position), asc(cardTemplates.id))
+      .get();
+
+    if (first) {
+      tx.update(cardTemplates)
+        .set(firstTemplateValues(patch))
+        .where(eq(cardTemplates.id, first.id))
+        .run();
+    }
+  });
 }
 
 export function deleteDeck(deckId: number) {

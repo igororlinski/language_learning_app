@@ -27,6 +27,8 @@ import {
   getCard,
   deckLanguages,
   deckPictureQuality,
+  deckTemplates,
+  DEFAULT_TEMPLATE_NAME,
   getCardFields,
   getCardTagNames,
   newCardFields,
@@ -143,6 +145,14 @@ export default function CardEditorScreen() {
 
   // An edited card knows its own deck; only a brand new one relies on the param.
   const deckId = existing?.deckId ?? Number(deckIdParam);
+
+  /**
+   * The ways the deck lets a new card start, and the one this card is starting
+   * from — the deck's first until the user picks another. An edited card has
+   * none: it remembers no template, and its layout is its own.
+   */
+  const templateList = useMemo(() => (cardId ? [] : deckTemplates(deckId)), [cardId, deckId]);
+  const [templateId, setTemplateId] = useState<number | null>(() => templateList[0]?.id ?? null);
 
   // Fields belong to the card. A new one starts from the deck's default layout,
   // an existing one from its own — after that the deck has no say.
@@ -1254,6 +1264,61 @@ export default function CardEditorScreen() {
     [navigation, signature]
   );
 
+  /**
+   * Starts this new card over from another of the deck's templates.
+   *
+   * The question and the answer stay — they are what was typed, and every
+   * template has both — and so do their transcriptions. The extra fields are
+   * the template's to give, so they are replaced; anything typed or attached
+   * into them would be lost, which is the one case worth a question.
+   */
+  const switchTemplate = (nextId: number) => {
+    if (nextId === templateId) return;
+
+    const apply = () => {
+      const untouched = signature === saved.current;
+      const speech = newCardSpeech(deckId, nextId);
+      const nextRows = buildRows(newCardLayout(deckId, nextId), newCardFields(deckId, nextId));
+
+      setTemplateId(nextId);
+      setRows(nextRows);
+      setFrontSpeech(speech.frontSpeech);
+      setBackSpeech(speech.backSpeech);
+
+      // A form nobody has touched is still untouched after a switch: picking a
+      // template is not an edit worth asking about on the way out.
+      if (untouched) {
+        saved.current = draftSignature(
+          front,
+          back,
+          nextRows,
+          cardTags,
+          { front: speech.frontSpeech, back: speech.backSpeech },
+          { front: frontPhonetic, back: backPhonetic }
+        );
+      }
+    };
+
+    const filled = rows.some(
+      (row) => row.kind === 'extra' && (row.value.trim() || row.mediaPath || row.mnemonic)
+    );
+
+    if (!filled) {
+      apply();
+      return;
+    }
+
+    Alert.alert(
+      'Zmienić szablon?',
+      'Pola dodatkowe zostaną zastąpione polami szablonu.',
+      [
+        { text: 'Anuluj', style: 'cancel' },
+        { text: 'Zmień', style: 'destructive', onPress: apply },
+      ],
+      { cancelable: true }
+    );
+  };
+
   const questionInput = useRef<TextInput>(null);
   // Only the question is required: plenty of cards are a prompt with a picture
   // or a recording for an answer, and some are a prompt with nothing at all.
@@ -1265,8 +1330,8 @@ export default function CardEditorScreen() {
    * ever decides how a card starts.
    */
   const phoneticTemplate = useMemo(
-    () => (cardId ? { front: null, back: null } : newCardPhoneticLanguages(deckId)),
-    [cardId, deckId]
+    () => (cardId ? { front: null, back: null } : newCardPhoneticLanguages(deckId, templateId)),
+    [cardId, deckId, templateId]
   );
 
   /** A save waiting on the transcriptions the deck's template asked for. */
@@ -1414,7 +1479,9 @@ export default function CardEditorScreen() {
     // way: it survives leaving the screen, and it means the two mandatory
     // fields and the empty slots reset together instead of one of them
     // quietly keeping a setting the other had dropped.
-    const template = newCardSpeech(deckId);
+    // The template the user picked stays picked for the batch: a run of cards
+    // typed in one go is usually a run of one kind of card.
+    const template = newCardSpeech(deckId, templateId);
 
     setFrontSpeech(template.frontSpeech);
     setBackSpeech(template.backSpeech);
@@ -1424,7 +1491,10 @@ export default function CardEditorScreen() {
     // The tags stay on for the next card: a batch typed in one go is usually
     // one batch of tags too, and taking them off is one tap.
     // The next card in the batch starts from the deck's default layout again.
-    const nextRows = buildRows(newCardLayout(deckId), newCardFields(deckId));
+    const nextRows = buildRows(
+      newCardLayout(deckId, templateId),
+      newCardFields(deckId, templateId)
+    );
     setRows(nextRows);
 
     // The form the next card starts from is what "saved" means from here on —
@@ -2031,6 +2101,39 @@ export default function CardEditorScreen() {
             </ThemedText>
           </Pressable>
         </View>
+
+        {/* Which of the deck's templates this new card starts from. Only when
+            there is a choice: one template is just the deck's layout. */}
+        {templateList.length > 1 ? (
+          <View style={styles.tags}>
+            {templateList.map((template) => {
+              const picked = template.id === templateId;
+
+              return (
+                <Pressable
+                  key={template.id}
+                  onPress={() => switchTemplate(template.id)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: picked }}
+                  accessibilityLabel={`Szablon ${template.name}`}
+                  style={({ pressed }) => [
+                    styles.tag,
+                    {
+                      borderColor: picked ? theme.accent : theme.border,
+                      backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+                    },
+                  ]}>
+                  <ThemedText
+                    type="small"
+                    style={{ color: picked ? theme.accent : theme.textSecondary }}
+                    numberOfLines={1}>
+                    {template.name || DEFAULT_TEMPLATE_NAME}
+                  </ThemedText>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
 
         {/* The card on the screen a review shows it on, front first, from the
             unsaved form — see `src/app/card-preview.tsx`. */}
