@@ -24,6 +24,7 @@ import m0019 from './0019_brainy_ben_urich.sql';
 import m0020 from './0020_mean_reavers.sql';
 import m0021 from './0021_tiny_hobgoblin.sql';
 import m0022 from './0022_daily_valkyrie.sql';
+import m0023 from './0023_same_white_queen.sql';
 
   export default {
     journal,
@@ -50,7 +51,8 @@ m0018,
 m0019,
 m0020,
 m0021,
-m0022
+m0022,
+m0023
     }
   }
   

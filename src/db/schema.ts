@@ -67,8 +67,8 @@ export type FieldKind = (typeof FIELD_KINDS)[number];
 /**
  * How much care a generated picture is drawn with.
  *
- * An outcome, not a model: which model draws a careful picture is settled in the
- * Worker, where changing it costs a deploy instead of a new build on a phone.
+ * An outcome, not a model: which model draws a careful picture is settled in
+ * one place, `QUALITY_MODELS` in `src/lib/ai-image.ts`.
  * The difference is about five times the wait and whether the subject fills the
  * frame — see `src/lib/ai-image.ts`.
  *
@@ -469,6 +469,37 @@ export const reviewLogs = sqliteTable(
     reviewedAt: integer('reviewed_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [index('review_logs_card_id_idx').on(table.cardId)]
+);
+
+/**
+ * Choices that belong to the app rather than to any deck — today, which model
+ * writes associations and transcriptions (`src/lib/ai-transport.ts`).
+ *
+ * Key-value rather than a column per setting so the next such choice is a row,
+ * not a migration. Values are text; each key's reader parses its own and falls
+ * back to the default on anything it does not recognise.
+ */
+export const appSettings = sqliteTable('app_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+});
+
+/**
+ * What this phone has spent today against each free AI allowance — counted
+ * here because the keys are the user's own and the phone is the only thing
+ * that sees every request made with them (`src/lib/ai-usage.ts`).
+ *
+ * `day` is the provider's own day (`YYYY-MM-DD`): Cloudflare's neurons reset at
+ * midnight UTC, Google's requests at midnight Pacific.
+ */
+export const aiUsage = sqliteTable(
+  'ai_usage',
+  {
+    metric: text('metric').notNull(),
+    day: text('day').notNull(),
+    amount: real('amount').notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.metric, table.day] })]
 );
 
 export type Deck = typeof decks.$inferSelect;

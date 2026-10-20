@@ -21,6 +21,7 @@ import { TextField } from '@/components/text-field';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
   allTagsQuery,
+  appSettingsQuery,
   cardMediaFiles,
   createCard,
   deleteCard,
@@ -36,6 +37,7 @@ import {
   newCardPhoneticLanguages,
   newCardSpeech,
   setCardTagNames,
+  textSourceFrom,
   updateCard,
 } from '@/db/queries';
 import type { FieldKind, FieldSide, PictureQuality } from '@/db/schema';
@@ -59,7 +61,9 @@ import {
   saveGeneratedImage,
 } from '@/lib/media-files';
 import * as Speech from 'expo-speech';
-import { AiError } from '@/lib/ai-worker';
+import { drawBlocker, NO_KEYS, textBlocker } from '@/lib/ai-keys';
+import { useAiKeys } from '@/lib/ai-keys-store';
+import { AiError } from '@/lib/ai-transport';
 import { generateImage, generatePictures as picturesFromScene } from '@/lib/ai-image';
 import { requestPhonetic } from '@/lib/ai-phonetic';
 import { requestMnemonics } from '@/lib/ai-mnemonic';
@@ -203,6 +207,16 @@ export default function CardEditorScreen() {
   );
   const [taggingOpen, setTaggingOpen] = useState(false);
   const { data: knownTags } = useLiveQuery(allTagsQuery(), []);
+
+  // The user's own AI keys and chosen text model, both followed live: adding a
+  // key on "Ustawienia AI" re-enables the buttons here without a reload. A
+  // fresh install has no keys, and every AI action stays greyed out — with the
+  // reason under it — until it does.
+  const aiKeys = useAiKeys() ?? NO_KEYS;
+  const { data: settingsRows } = useLiveQuery(appSettingsQuery());
+  const textSource = textSourceFrom(settingsRows);
+  const textBlocked = textBlocker(aiKeys, textSource);
+  const drawBlocked = drawBlocker(aiKeys);
   const [adding, setAdding] = useState(false);
 
   // Rows added here have no database id yet, so they need a key of their own to
@@ -221,12 +235,6 @@ export default function CardEditorScreen() {
 
   const [choosing, setChoosing] = useState<Choosing | null>(null);
 
-  // Bumped whenever a generation finishes, so the usage bar in the choice sheet
-  // refetches and shows what the round just spent. It is only ever read by that
-  // bar; the sheet mounts it, so a run that happened before the sheet opened is
-  // already reflected by the bar's own fetch on mount.
-  const [usageToken, setUsageToken] = useState(0);
-  const refreshUsage = () => setUsageToken((n) => n + 1);
 
   /** Whether the "regenerate in…" list under the caret is open. */
   const [pickingLanguage, setPickingLanguage] = useState(false);
@@ -390,7 +398,7 @@ export default function CardEditorScreen() {
     setGenerating({ key, label: 'Piszę zapis fonetyczny…' });
 
     try {
-      set(await requestPhonetic(text, language));
+      set(await requestPhonetic(text, language, textSource, aiKeys));
     } catch (error) {
       // Thrown from a handler, where the error boundary cannot reach it.
       Alert.alert(
@@ -401,7 +409,6 @@ export default function CardEditorScreen() {
       );
     } finally {
       setGenerating(null);
-      refreshUsage();
     }
   };
 
@@ -427,6 +434,7 @@ export default function CardEditorScreen() {
       make: (code) => void makePhonetic(key, text, code, set),
       clear: () => set(null),
       show: showMenu,
+      blocked: textBlocked,
     });
 
   /**
@@ -523,7 +531,7 @@ export default function CardEditorScreen() {
       // for is one step further on. It needs both texts to work from, so a
       // field added before the card has any waits for its button instead —
       // which is exactly when that button is disabled anyway.
-      if (front.trim() && back.trim()) {
+      if (front.trim() && back.trim() && !textBlocked) {
         unconfirmed.current = key;
         void proposeMnemonic(key);
       }
@@ -640,7 +648,7 @@ export default function CardEditorScreen() {
     setGenerating({ key, label: 'Robię obraz…' });
 
     try {
-      const base64 = await generateImage(term);
+      const base64 = await generateImage(term, 'fast', aiKeys);
       const fileName = await saveGeneratedImage(kind, base64);
 
       imported.current = [...imported.current, { kind, fileName }];
@@ -666,7 +674,6 @@ export default function CardEditorScreen() {
       Alert.alert('Nie zrobiono obrazu', message, [{ text: 'OK' }], { cancelable: true });
     } finally {
       setGenerating(null);
-      refreshUsage();
     }
   };
 
@@ -714,21 +721,25 @@ export default function CardEditorScreen() {
    *
    * Restricting is done by sending that language as the whole ranking rather
    * than by a new instruction: the prompt already works down the list it is
-   * given, so a list of one is a list it cannot leave. Nothing in the Worker
+   * given, so a list of one is a list it cannot leave. Nothing in the prompt
    * had to learn about this.
    */
   const askForOptions = (language: string | null): Promise<Mnemonic[]> =>
-    requestMnemonics({
-      term: back,
-      // English names, not codes and not the Polish labels: the prompt in the
-      // Worker is written in English, and "Portuguese (European)" is worth
-      // more to the model than „portugalski" or `pt-PT`.
-      termLanguage: languages.back ? languageEnglish(languages.back) : '',
-      meaning: front,
-      // In the deck's order, which is the learner's ranking of how readily
-      // each language comes to mind — the model works down it.
-      meaningLanguages: (language ? [language] : languages.front).map(languageEnglish),
-    });
+    requestMnemonics(
+      {
+        term: back,
+        // English names, not codes and not the Polish labels: the prompt is
+        // written in English, and "Portuguese (European)" is worth
+        // more to the model than „portugalski" or `pt-PT`.
+        termLanguage: languages.back ? languageEnglish(languages.back) : '',
+        meaning: front,
+        // In the deck's order, which is the learner's ranking of how readily
+        // each language comes to mind — the model works down it.
+        meaningLanguages: (language ? [language] : languages.front).map(languageEnglish),
+      },
+      textSource,
+      aiKeys
+    );
 
   const proposeMnemonic = async (key: string) => {
     try {
@@ -742,7 +753,6 @@ export default function CardEditorScreen() {
       withdrawUnconfirmed(key);
     } finally {
       setGenerating(null);
-      refreshUsage();
     }
   };
 
@@ -779,7 +789,6 @@ export default function CardEditorScreen() {
       failedMnemonic(error);
     } finally {
       setGenerating(null);
-      refreshUsage();
     }
   };
 
@@ -900,7 +909,7 @@ export default function CardEditorScreen() {
   /**
    * Three drawings of one association, saved and ready to be compared.
    *
-   * They are asked for in one request and drawn in parallel by the Worker,
+   * They are drawn in parallel, on the user's own Cloudflare account,
    * because they are independent and the wait is otherwise three times as
    * long. All of them land on disk before any is chosen — the ones that lose
    * are deleted the moment one wins, and deleted just the same when the sheet
@@ -918,10 +927,15 @@ export default function CardEditorScreen() {
     try {
       setGenerating({ key, label: 'Rysuję trzy obrazy…' });
 
-      // One request for all three, so the Worker counts them in one write. It
-      // also keeps "two pictures beat an error message" on its side: whatever
-      // it drew comes back, and only a round that drew nothing is a failure.
-      const pictures = await picturesFromScene(buildScenePrompt(association.prompt), quality, 3);
+      // All three side by side, so the wait is one picture's. Two pictures
+      // beat an error message: whatever was drawn comes back, and only a round
+      // that drew nothing at all is a failure.
+      const pictures = await picturesFromScene(
+        buildScenePrompt(association.prompt),
+        quality,
+        3,
+        aiKeys
+      );
       const drawn: string[] = [];
 
       for (const base64 of pictures) {
@@ -936,7 +950,6 @@ export default function CardEditorScreen() {
       failedMnemonic(error);
     } finally {
       setGenerating(null);
-      refreshUsage();
     }
   };
 
@@ -1021,7 +1034,10 @@ export default function CardEditorScreen() {
     // A field set to "same associations only" is finished here: the sentence
     // is the whole field, and `mnemonic` is the one kind that shows without a
     // file precisely because its text is worth reading on its own.
-    if (withPicture(key)) void drawMnemonic(key, association, qualityOf(key));
+    //
+    // So is one with no way to draw: without a Cloudflare key the sentence is
+    // kept rather than lost to a refusal it could not have avoided.
+    if (withPicture(key) && !drawBlocked) void drawMnemonic(key, association, qualityOf(key));
     else applyMnemonic(key, association, null);
   };
 
@@ -1155,8 +1171,8 @@ export default function CardEditorScreen() {
           setWordModes((current) => ({ ...current, [key]: showsWord(key, row) }));
           void proposeMnemonic(key);
         },
-        disabled: !ready,
-        hint: ready ? undefined : 'Najpierw wpisz pytanie i odpowiedź.',
+        disabled: !ready || textBlocked !== null,
+        hint: textBlocked ?? (ready ? undefined : 'Najpierw wpisz pytanie i odpowiedź.'),
       },
       // Redrawing skips the model call, so a good idea badly drawn costs three
       // pictures to fix instead of a whole new association. Offered without a
@@ -1173,6 +1189,8 @@ export default function CardEditorScreen() {
             {
               label: row.mediaPath ? 'Inne obrazy' : 'Dorysuj obraz',
               keepOpen: true,
+              disabled: drawBlocked !== null,
+              hint: drawBlocked ?? undefined,
               onPress: () => {
                 setWordModes((current) => ({ ...current, [key]: showsWord(key, row) }));
                 showMenu({
@@ -1354,11 +1372,15 @@ export default function CardEditorScreen() {
 
     const jobs: Promise<void>[] = [];
 
+    // No key yet: the template's wish waits, quietly, rather than turning every
+    // save into an alert about a setting on another screen.
+    if (textBlocked) return { filledFront, filledBack, filledRows, failure: null };
+
     if (phoneticTemplate.front && front.trim() && !frontPhonetic) {
       const language = phoneticTemplate.front;
 
       jobs.push(
-        requestPhonetic(front, language).then((ipa) => {
+        requestPhonetic(front, language, textSource, aiKeys).then((ipa) => {
           filledFront = ipa;
         })
       );
@@ -1368,7 +1390,7 @@ export default function CardEditorScreen() {
       const language = phoneticTemplate.back;
 
       jobs.push(
-        requestPhonetic(back, language).then((ipa) => {
+        requestPhonetic(back, language, textSource, aiKeys).then((ipa) => {
           filledBack = ipa;
         })
       );
@@ -1382,7 +1404,7 @@ export default function CardEditorScreen() {
       const { key } = row;
 
       jobs.push(
-        requestPhonetic(row.value, row.phoneticLanguage).then((ipa) => {
+        requestPhonetic(row.value, row.phoneticLanguage, textSource, aiKeys).then((ipa) => {
           filledRows = filledRows.map((item) =>
             item.kind === 'extra' && item.key === key ? { ...item, phonetic: ipa } : item
           );
@@ -1398,8 +1420,6 @@ export default function CardEditorScreen() {
 
     const settled = await Promise.allSettled(jobs);
     const refused = settled.find((result) => result.status === 'rejected');
-
-    refreshUsage();
 
     return { filledFront, filledBack, filledRows, failure: refused ? refused.reason : null };
   };
@@ -1548,7 +1568,8 @@ export default function CardEditorScreen() {
    * written and when, in the same words the deck editor labels the field with.
    */
   const pendingPhonetic = (language: string | null) =>
-    language ? (
+    // Nothing will be written without a key, so nothing is promised either.
+    language && !textBlocked ? (
       <ThemedText
         type="small"
         themeColor="textSecondary"
@@ -1814,7 +1835,11 @@ export default function CardEditorScreen() {
             {/* Only until there is one, and never during a run. Afterwards
                 making another is one of the options, not the thing the field
                 is for. */}
-            {made || running ? null : (
+            {made || running ? null : textBlocked ? (
+              <ThemedText type="small" themeColor="textSecondary" style={styles.blockedHint}>
+                {textBlocked}
+              </ThemedText>
+            ) : (
               <Pressable
                 onPress={() => void proposeMnemonic(row.key)}
                 disabled={busy || !ready}
@@ -1939,33 +1964,42 @@ export default function CardEditorScreen() {
           {row.mediaPath ? (
             <MediaView kind={kind} fileName={row.mediaPath} label={row.value} />
           ) : null}
+          {drawBlocked ? (
+            <ThemedText type="small" themeColor="textSecondary">
+              {drawBlocked}
+            </ThemedText>
+          ) : null}
           <View style={styles.rowActions}>
             {/* Which of the card's two texts the picture comes from is the whole
                 choice here, so it is the button rather than a setting. Pressing
                 one again replaces the picture. */}
             <Pressable
               onPress={() => void generatePicture(row.key, kind, 'front')}
-              disabled={busy || front.trim().length === 0}
+              disabled={busy || front.trim().length === 0 || drawBlocked !== null}
               hitSlop={12}
               accessibilityRole="button"
-              accessibilityState={{ disabled: busy || front.trim().length === 0 }}
+              accessibilityState={{
+                disabled: busy || front.trim().length === 0 || drawBlocked !== null,
+              }}
               accessibilityLabel={`Zrób obraz z pytania: ${rowInfo.label}`}>
               <ThemedText
                 type="small"
-                style={{ color: theme.accent, opacity: front.trim() ? 1 : 0.4 }}>
+                style={{ color: theme.accent, opacity: front.trim() && !drawBlocked ? 1 : 0.4 }}>
                 {row.mediaPath ? 'Znowu z pytania' : 'Z pytania'}
               </ThemedText>
             </Pressable>
             <Pressable
               onPress={() => void generatePicture(row.key, kind, 'back')}
-              disabled={busy || back.trim().length === 0}
+              disabled={busy || back.trim().length === 0 || drawBlocked !== null}
               hitSlop={12}
               accessibilityRole="button"
-              accessibilityState={{ disabled: busy || back.trim().length === 0 }}
+              accessibilityState={{
+                disabled: busy || back.trim().length === 0 || drawBlocked !== null,
+              }}
               accessibilityLabel={`Zrób obraz z odpowiedzi: ${rowInfo.label}`}>
               <ThemedText
                 type="small"
-                style={{ color: theme.accent, opacity: back.trim() ? 1 : 0.4 }}>
+                style={{ color: theme.accent, opacity: back.trim() && !drawBlocked ? 1 : 0.4 }}>
                 {row.mediaPath ? 'Znowu z odpowiedzi' : 'Z odpowiedzi'}
               </ThemedText>
             </Pressable>
@@ -2211,6 +2245,8 @@ export default function CardEditorScreen() {
         onClose={() => setAdding(false)}
         onAdd={addField}
         defaultQuality={deckQuality}
+        mnemonicBlocked={textBlocked}
+        pictureBlocked={drawBlocked}
       />
 
       <ActionSheet
@@ -2237,10 +2273,10 @@ export default function CardEditorScreen() {
               : undefined
         }
         toolbar={associationToolbar}
-        // The same budget readout as the "Limity AI" screen, here where it is
-        // being spent. Keyed to `usageToken` so it refreshes after every round;
-        // it shows nothing when the Worker is not counting yet.
-        note={<AiUsageBar refreshToken={usageToken} />}
+        // The same budget readout as the "Ustawienia AI" screen, here where it is
+        // being spent. It reads the counters from the database, so it moves the
+        // moment a round is recorded.
+        note={<AiUsageBar />}
         choices={
           choosing?.step === 'association'
             ? (round?.options ?? []).map((option, index) => ({
@@ -2359,6 +2395,10 @@ const styles = StyleSheet.create({
   pending: {
     fontStyle: 'italic',
     opacity: 0.7,
+  },
+  /** What is missing before the association can be asked for, in place of its button. */
+  blockedHint: {
+    flexShrink: 1,
   },
   /**
    * A control, not a decoration. As a small grey glyph it read as a label and

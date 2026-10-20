@@ -3,8 +3,10 @@
  * one line between slashes — whatever wrapping the model put around it.
  */
 import { parsePhonetic, requestPhonetic } from '@/lib/ai-phonetic';
+import { NO_KEYS } from '@/lib/ai-keys';
+import { CLOUD_TEXT } from '@/lib/ai-transport';
 
-import { withStub } from './ai-worker.test';
+import { bodyOf, withStub } from './ai-transport.test';
 import { check, group } from './harness';
 
 group('Odczyt zapisu fonetycznego');
@@ -27,30 +29,48 @@ check('pusty JSON tez', parsePhonetic('{"ipa": ""}'), null);
 
 group('O co prosi zadanie o zapis fonetyczny');
 
-const asked = await withStub(
-  { status: 200, body: { success: true, result: { text: '{"ipa": "/kuˈmeɾ/"}' } } },
-  () => requestPhonetic('  comer ', 'pt-PT', 'https://w.example.dev')
+const KEYS = { ...NO_KEYS, gemini: 'GKEY' };
+
+const geminiSays = (text: string) => ({
+  status: 200,
+  body: { candidates: [{ content: { parts: [{ text }] } }] },
+});
+
+const asked = await withStub(geminiSays('{"ipa": "/kuˈmeɾ/"}'), () =>
+  requestPhonetic('  comer ', 'pt-PT', CLOUD_TEXT, KEYS)
 );
 
 check('zapis wraca do wolajacego', asked.outcome, '/kuˈmeɾ/');
-check('idzie na wlasna sciezke', asked.sent?.url, 'https://w.example.dev/phonetic');
 
-const askedBody = JSON.parse(String(asked.sent?.init.body)) as { text?: unknown; language?: unknown };
+const sent = bodyOf(asked.sent) as {
+  contents?: { parts?: { text?: string }[] }[];
+  generationConfig?: { temperature?: number };
+};
 
-check('tekst jedzie przyciety', askedBody.text, 'comer');
 // The region matters: European and Brazilian Portuguese transcribe differently.
-check('a jezyk jako angielska nazwa z regionem', askedBody.language, 'Portuguese (European)');
+check(
+  'tekst przyciety, jezyk jako angielska nazwa z regionem',
+  sent.contents?.[0]?.parts?.[0]?.text,
+  'Language: Portuguese (European)\nText: comer'
+);
+// One right answer and nothing to gain from a wild one.
+check('niska temperatura', sent.generationConfig?.temperature, 0.2);
 
-const garbled = await withStub(
-  { status: 200, body: { success: true, result: { text: '' } } },
-  () => requestPhonetic('comer', 'pt-PT', 'https://w.example.dev')
+const garbled = await withStub(geminiSays(' '), () =>
+  requestPhonetic('comer', 'pt-PT', CLOUD_TEXT, KEYS)
 );
 
 check('pusta odpowiedz modelu to blad', garbled.outcome, 'malformed');
 
-const blank = await withStub({ status: 200, body: {} }, () =>
-  requestPhonetic('   ', 'pt-PT', 'https://w.example.dev')
+const blank = await withStub(geminiSays('/x/'), () =>
+  requestPhonetic('   ', 'pt-PT', CLOUD_TEXT, KEYS)
 );
 
 check('pusty tekst nie idzie nigdzie', blank.outcome, 'empty-prompt');
 check('i niczego nie wysyla', blank.sent, null);
+
+const noKey = await withStub(geminiSays('/x/'), () =>
+  requestPhonetic('comer', 'pt-PT', CLOUD_TEXT, NO_KEYS)
+);
+
+check('bez klucza tez nie', noKey.outcome, 'no-text-key');

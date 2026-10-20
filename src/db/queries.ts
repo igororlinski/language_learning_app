@@ -2,6 +2,8 @@ import { and, asc, desc, eq, inArray, lt, lte, ne, or, sql, type SQLWrapper } fr
 
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
 import { isMediaKind, type MediaKind } from '@/lib/media';
+import { parseTextSource, type TextSource } from '@/lib/ai-transport';
+import type { UsageMetric } from '@/lib/ai-usage';
 import { DEFAULT_SCHEDULING, parseWeights, type DeckScheduling } from '@/lib/fsrs-options';
 import {
   languageJson,
@@ -36,6 +38,8 @@ import {
 
 import { db } from './client';
 import {
+  aiUsage,
+  appSettings,
   cardFields,
   cards,
   cardTags,
@@ -626,6 +630,80 @@ export function cardsMediaFiles(cardIds: number[]): MediaFile[] {
       .where(inArray(cardFields.cardId, cardIds))
       .all()
   );
+}
+
+/* ------------------------------------------------------------- app settings */
+
+const TEXT_PROVIDER_KEY = 'ai.text-provider';
+const LMSTUDIO_MODEL_KEY = 'ai.lmstudio-model';
+
+/** Every app-wide setting, for `useLiveQuery` on the settings screen. */
+export function appSettingsQuery() {
+  return db.select().from(appSettings);
+}
+
+/** Who writes associations and transcriptions, out of the settings rows. */
+export function textSourceFrom(rows: readonly { key: string; value: string }[]): TextSource {
+  const value = (key: string) => rows.find((row) => row.key === key)?.value;
+
+  return parseTextSource(value(TEXT_PROVIDER_KEY), value(LMSTUDIO_MODEL_KEY));
+}
+
+/**
+ * The same, read at the moment of asking. The card editor calls this right
+ * before each request rather than holding a copy, so a change made on the
+ * settings screen applies to the very next one.
+ */
+export function getTextSource(): TextSource {
+  return textSourceFrom(appSettingsQuery().all());
+}
+
+/**
+ * Stores the choice. A model is kept only alongside LM Studio, and an empty one
+ * is a missing row rather than an empty string — one way to say "none".
+ */
+export function setTextSource(source: TextSource): void {
+  const upsert = (key: string, value: string) =>
+    db
+      .insert(appSettings)
+      .values({ key, value })
+      .onConflictDoUpdate({ target: appSettings.key, set: { value } })
+      .run();
+
+  db.transaction(() => {
+    upsert(TEXT_PROVIDER_KEY, source.provider);
+
+    const model = source.provider === 'lmstudio' ? source.model?.trim() : '';
+
+    if (model) upsert(LMSTUDIO_MODEL_KEY, model);
+    else db.delete(appSettings).where(eq(appSettings.key, LMSTUDIO_MODEL_KEY)).run();
+  });
+}
+
+/** Every stored usage counter, for the meters (`usageFrom` picks today's). */
+export function aiUsageQuery() {
+  return db.select().from(aiUsage);
+}
+
+/**
+ * Adds to today's counter for one metric — the sink `recordSpend` writes to.
+ * Older days of the same metric are dropped in the same transaction: a counter
+ * only ever matters for the day it resets on, so nothing piles up.
+ */
+export function addAiUsage(metric: UsageMetric, day: string, amount: number): void {
+  db.transaction(() => {
+    db.delete(aiUsage)
+      .where(and(eq(aiUsage.metric, metric), ne(aiUsage.day, day)))
+      .run();
+
+    db.insert(aiUsage)
+      .values({ metric, day, amount })
+      .onConflictDoUpdate({
+        target: [aiUsage.metric, aiUsage.day],
+        set: { amount: sql`${aiUsage.amount} + ${amount}` },
+      })
+      .run();
+  });
 }
 
 /** Every tag ever created, for the picker in the card editor. */

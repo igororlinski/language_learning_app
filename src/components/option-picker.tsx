@@ -16,6 +16,12 @@ export type PickerOption<T extends string | number> = {
    * is a different sort of thing, or it stops meaning anything.
    */
   highlight?: boolean;
+  /**
+   * Greyed out and not pickable. The hint should then say what is missing —
+   * the same rule as `SheetAction`: an option that vanishes looks like a
+   * feature that does not exist.
+   */
+  disabled?: boolean;
 };
 
 export type OptionPickerProps<T extends string | number> = {
@@ -53,13 +59,15 @@ export function OptionPicker<T extends string | number>({
       <View style={styles.options}>
         {options.map((option) => {
           const selected = option.value === value;
+          const disabled = option.disabled === true;
 
           return (
             <Pressable
               key={option.value}
               onPress={() => onChange(option.value)}
+              disabled={disabled}
               accessibilityRole="radio"
-              accessibilityState={{ selected }}
+              accessibilityState={{ selected, disabled }}
               accessibilityLabel={option.label}
               accessibilityHint={option.hint}
               style={({ pressed }) => [
@@ -73,7 +81,7 @@ export function OptionPicker<T extends string | number>({
                       : theme.backgroundElement,
                   borderColor: selected ? theme.accent : theme.border,
                   borderWidth: selected ? 1 : StyleSheet.hairlineWidth,
-                  opacity: pressed ? 0.75 : 1,
+                  opacity: disabled ? 0.5 : pressed ? 0.75 : 1,
                 },
               ]}>
               <View style={styles.optionText}>

@@ -1,8 +1,11 @@
-import { AiError, postToWorker } from '@/lib/ai-worker';
+import type { AiKeys } from '@/lib/ai-keys';
+import { MNEMONIC_SHAPE, mnemonicPrompt } from '@/lib/ai-prompts';
+import { writeText } from '@/lib/ai-text';
+import { AiError, type TextSource } from '@/lib/ai-transport';
 import { parseMnemonicList, type Mnemonic } from '@/lib/mnemonic';
 
 /**
- * Asking the Worker for one keyword-method association.
+ * Asking a language model for keyword-method associations.
  *
  * What goes out is four short strings: the foreign word being learned, what it
  * means in the learner's own language, and what each of those languages is —
@@ -11,9 +14,17 @@ import { parseMnemonicList, type Mnemonic } from '@/lib/mnemonic';
  * word in the language the learner already speaks, and the model cannot know
  * which that is by looking at two words.
  *
- * Sending them empty is allowed and is the fallback, not the plan: the Worker's
- * prompt then says "unknown" and the model guesses from the words themselves.
+ * Sending them empty is allowed and is the fallback, not the plan: the prompt
+ * then says "unknown" and the model guesses from the words themselves.
  */
+/** A word plus its language. Longer than this is not a flashcard term. */
+const MAX_TERM = 200;
+const MAX_LANGUAGE = 32;
+/** More known languages than this is a list, not a ranking. */
+const MAX_LANGUAGES = 6;
+
+const clip = (value: string, max: number) => value.trim().slice(0, max);
+
 export type MnemonicRequest = {
   /** The word being learned — the answer side of the card. */
   term: string;
@@ -40,28 +51,34 @@ export type MnemonicRequest = {
  * its most useful when it is allowed to miss twice, and picking between three
  * sound-alikes costs one call, one wait and no extra neurons — they arrive in
  * a single answer, not three.
+ *
+ * `source` is who writes them — the setting on the "Ustawienia AI" screen —
+ * and `keys` are the user's own.
  */
 export async function requestMnemonics(
   request: MnemonicRequest,
-  workerUrl?: string
+  source: TextSource,
+  keys: AiKeys
 ): Promise<Mnemonic[]> {
   // Both halves are the input. A sound-alike needs a word to sound like, and a
   // scene needs a meaning to be about — so this is refused before the network,
   // with the same failure an empty picture prompt gets.
-  if (!request.term.trim() || !request.meaning.trim()) throw new AiError('empty-prompt');
+  const term = clip(request.term, MAX_TERM);
+  const meaning = clip(request.meaning, MAX_TERM);
 
-  const result = await postToWorker(
-    '/mnemonic',
-    {
-      term: request.term,
-      termLanguage: request.termLanguage,
-      meaning: request.meaning,
-      meaningLanguages: request.meaningLanguages,
-    },
-    workerUrl
-  );
+  if (!term || !meaning) throw new AiError('empty-prompt');
 
-  const text = typeof result.text === 'string' ? result.text : '';
+  const prompt = mnemonicPrompt({
+    term,
+    termLanguage: clip(request.termLanguage, MAX_LANGUAGE),
+    meaning,
+    meaningLanguages: request.meaningLanguages
+      .map((name) => clip(name, MAX_LANGUAGE))
+      .filter(Boolean)
+      .slice(0, MAX_LANGUAGES),
+  });
+
+  const text = await writeText(prompt, MNEMONIC_SHAPE, source, keys);
   const mnemonics = parseMnemonicList(text);
 
   // The model answered, but not with an association. Its own words go into the

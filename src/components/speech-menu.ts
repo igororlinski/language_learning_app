@@ -152,6 +152,11 @@ export type PhoneticMenu = {
   make: (code: string) => void;
   clear: () => void;
   show: (sheet: { title: string; actions: SheetAction[] }) => void;
+  /**
+   * Why no model can be asked right now — no key yet — or null. Said before
+   * anything else, because adding a key is the one step that unlocks the rest.
+   */
+  blocked?: string | null;
 };
 
 export function phoneticMenu({
@@ -163,6 +168,7 @@ export function phoneticMenu({
   make,
   clear,
   show,
+  blocked = null,
 }: PhoneticMenu): SheetAction[] {
   const candidates = speechCandidates(scope, languages);
   const known = speech && candidates.includes(speech) ? speech : soleCandidate(candidates);
@@ -178,8 +184,9 @@ export function phoneticMenu({
           })),
         });
 
-  const hint =
-    candidates.length === 0
+  const hint = blocked
+    ? blocked
+    : candidates.length === 0
       ? 'Talia nie mówi, w jakich językach są jej karty.'
       : !hasText
         ? 'Najpierw wpisz tekst.'

@@ -1,45 +1,35 @@
-import { useEffect, useState } from 'react';
+import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
 import { StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { budgetColor, Spacing } from '@/constants/theme';
-import { fetchUsage, type AiBudget, type AiUsage } from '@/lib/ai-worker';
+import { aiUsageQuery, appSettingsQuery, textSourceFrom } from '@/db/queries';
+import { useNow } from '@/hooks/use-now';
+import { usageFrom, type AiBudget } from '@/lib/ai-usage';
 
 /**
  * A quiet one-line readout of today's remaining AI budget, for the one place it
- * is actually spent — the mnemonic flow. It fetches on mount and again whenever
- * `refreshToken` changes, so the screen can refresh it after each generation by
- * bumping the number.
+ * is actually spent — the mnemonic flow.
  *
- * It renders nothing until it has real, tracked figures. A sheet whose job is
- * choosing an association must not sprout a spinner or an error for a number off
- * to the side, and a Worker with no usage store (`tracking: false`) has nothing
- * to show here — the full "Limity AI" screen is where that absence is explained.
+ * It reads the counters the phone keeps itself (`src/lib/ai-usage.ts`), live
+ * from the database, so it moves the moment a round is recorded — no request,
+ * no spinner, nothing to fail in a sheet whose job is choosing.
  */
-export function AiUsageBar({ refreshToken = 0 }: { refreshToken?: number }) {
-  const [usage, setUsage] = useState<AiUsage | null>(null);
+export function AiUsageBar() {
+  const now = useNow();
+  const { data: rows } = useLiveQuery(aiUsageQuery());
+  const usage = usageFrom(rows, new Date(now));
 
-  useEffect(() => {
-    let alive = true;
-
-    fetchUsage()
-      .then((next) => alive && setUsage(next))
-      // A failed side figure is not worth a word: the generation itself already
-      // reports its own failures loudly. Drop back to showing nothing.
-      .catch(() => alive && setUsage(null));
-
-    return () => {
-      alive = false;
-    };
-  }, [refreshToken]);
-
-  if (!usage || !usage.tracking) return null;
+  // With LM Studio writing the associations, the Gemini allowance is not what
+  // this sheet is spending — naming it would answer the wrong question.
+  const { data: settings } = useLiveQuery(appSettingsQuery());
+  const local = textSourceFrom(settings).provider === 'lmstudio';
 
   return (
     <View style={styles.bar}>
       <ThemedText type="small" themeColor="textSecondary" style={styles.text}>
         Zostało dziś: obrazy <Percent budget={usage.images} /> · skojarzenia{' '}
-        <Percent budget={usage.text} />
+        {local ? 'LM Studio' : <Percent budget={usage.text} />}
       </ThemedText>
     </View>
   );

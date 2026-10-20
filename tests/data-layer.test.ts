@@ -56,9 +56,13 @@ import {
   syncDeckSlots,
   updateCard,
   updateDeck,
+  addAiUsage,
+  aiUsageQuery,
+  getTextSource,
+  setTextSource,
   type MediaCopier,
 } from '@/db/queries';
-import { decks, fsrsState, reviewLogs } from '@/db/schema';
+import { appSettings, decks, fsrsState, reviewLogs } from '@/db/schema';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { sortCards } from '@/lib/card-sort';
 import { filterCards } from '@/lib/search';
@@ -101,6 +105,7 @@ import migration0019 from '../drizzle/0019_brainy_ben_urich.sql';
 import migration0020 from '../drizzle/0020_mean_reavers.sql';
 import migration0021 from '../drizzle/0021_tiny_hobgoblin.sql';
 import migration0022 from '../drizzle/0022_daily_valkyrie.sql';
+import migration0023 from '../drizzle/0023_same_white_queen.sql';
 
 const MIGRATIONS = [
   migration0000,
@@ -126,6 +131,7 @@ const MIGRATIONS = [
   migration0020,
   migration0021,
   migration0022,
+  migration0023,
 ];
 
 /** Runs migrations the way the app's migrator does: statement by statement. */
@@ -1835,7 +1841,12 @@ group('Migracja 0022 przenosi uklad talii do szablonu');
  */
 const legacy = openDatabaseSync(':memory:');
 
-for (const migration of MIGRATIONS.slice(0, -1)) applyMigration((sql) => legacy.execSync(sql), migration);
+// By index, not "the last one": later migrations must not slide under this test.
+const TEMPLATES_MIGRATION = MIGRATIONS.indexOf(migration0022);
+
+for (const migration of MIGRATIONS.slice(0, TEMPLATES_MIGRATION)) {
+  applyMigration((sql) => legacy.execSync(sql), migration);
+}
 
 legacy.execSync(`
   INSERT INTO decks (id, name, created_at, new_front_side, new_front_position, new_back_side,
@@ -1845,7 +1856,7 @@ legacy.execSync(`
   VALUES (7, 'back', 1, 'text', 'pt-PT'), (7, 'front', 1, 'audio', NULL);
 `);
 
-applyMigration((sql) => legacy.execSync(sql), MIGRATIONS[MIGRATIONS.length - 1]);
+applyMigration((sql) => legacy.execSync(sql), migration0022);
 
 /** Rows of a query on the legacy database. */
 const legacyRows = (sql: string) =>
@@ -1864,4 +1875,54 @@ check(
     (row) => row.template_id
   ),
   [migrated[0]?.id, migrated[0]?.id]
+);
+
+group('Kto pisze skojarzenia: zapis ustawienia');
+
+// What the settings screen saves is what the card editor reads back — the
+// round trip pitfall 11 asks of every mapping.
+check('bez zapisu to chmura', getTextSource(), { provider: 'cloud', model: null });
+
+setTextSource({ provider: 'lmstudio', model: 'qwen3-14b' });
+check('LM Studio z modelem wraca z bazy', getTextSource(), {
+  provider: 'lmstudio',
+  model: 'qwen3-14b',
+});
+
+setTextSource({ provider: 'lmstudio', model: null });
+check('model mozna odpiac', getTextSource(), { provider: 'lmstudio', model: null });
+
+setTextSource({ provider: 'lmstudio', model: 'gemma-3-12b' });
+setTextSource({ provider: 'cloud', model: 'gemma-3-12b' });
+check('powrot do chmury', getTextSource(), { provider: 'cloud', model: null });
+check(
+  'i nie zostawia osieroconego modelu',
+  db.select().from(appSettings).all().map((row) => row.key),
+  ['ai.text-provider']
+);
+
+group('Licznik zuzycia AI na telefonie');
+
+addAiUsage('neurons', '2026-10-20', 57.6);
+addAiUsage('neurons', '2026-10-20', 104);
+addAiUsage('gemini', '2026-10-19', 1);
+
+check(
+  'wydatki tego samego dnia sie sumuja',
+  aiUsageQuery()
+    .all()
+    .find((row) => row.metric === 'neurons')?.amount,
+  161.6
+);
+
+// A counter only matters for the day it resets on, so nothing piles up.
+addAiUsage('neurons', '2026-10-21', 10);
+
+check(
+  'nowa doba wypiera stara, ale tylko swojej miary',
+  aiUsageQuery()
+    .all()
+    .map((row) => `${row.metric}:${row.day}:${row.amount}`)
+    .sort(),
+  ['gemini:2026-10-19:1', 'neurons:2026-10-21:10']
 );

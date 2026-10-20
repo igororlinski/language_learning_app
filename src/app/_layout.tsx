@@ -10,7 +10,14 @@ import migrations from '@drizzle/migrations';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { db } from '@/db/client';
+import { addAiUsage } from '@/db/queries';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { setSpendSink } from '@/lib/ai-usage';
+
+// What the AI modules spend lands in the database, where the meters read it.
+// Set at load rather than in an effect: nothing can spend before a screen has
+// rendered, and by then the migrations below have run.
+setSpendSink(addAiUsage);
 
 /**
  * The catch-all: anything thrown outside a screen that has its own boundary
@@ -47,7 +54,7 @@ export default function RootLayout() {
               on this Stack's options to correct it.
             */}
             <Stack.Screen name="index" options={{ headerShown: false }} />
-            <Stack.Screen name="ai-limits" options={{ title: 'Limity AI' }} />
+            <Stack.Screen name="ai-limits" options={{ title: 'Ustawienia AI' }} />
             <Stack.Screen name="deck/[deckId]/index" options={{ title: 'Talia' }} />
             <Stack.Screen
               name="deck/[deckId]/review"

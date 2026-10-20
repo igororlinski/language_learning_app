@@ -1,9 +1,12 @@
 import type { PictureQuality } from '@/db/schema';
-import { AiError, postToWorker } from '@/lib/ai-worker';
+import { hasCloudflare, type AiKeys } from '@/lib/ai-keys';
+import { AiError, runCloudflare } from '@/lib/ai-transport';
+import { recordSpend } from '@/lib/ai-usage';
 
 /**
- * Turning words into a picture, through our own Worker — see `ai-worker.ts` for
- * the address, the absence of a key and the ways a call can fail.
+ * Turning words into a picture, with FLUX on Workers AI — on the user's own
+ * Cloudflare account since 2026-10-20 (`ai-keys.ts`), where it used to be the
+ * Worker's binding on ours.
  *
  * A picture is generated **once**, on a button in the card editor, and never
  * again — a review must never cost money or need a network.
@@ -21,8 +24,8 @@ import { AiError, postToWorker } from '@/lib/ai-worker';
  * Four rather than the model's ceiling of eight because **schnell is a distilled
  * model, built to generate in one to four steps**. Asked for the same prompt at
  * 8, 4, 2 and 1 steps, it showed no visible degradation down to at least two;
- * the extra steps were buying nothing and costing 40% more. Raising this above
- * `MAX_STEPS` in the Worker needs a redeploy — the Worker clamps what it gets.
+ * the extra steps were buying nothing and costing 40% more. The model's own
+ * ceiling is eight.
  */
 const STEPS = 4;
 
@@ -53,77 +56,162 @@ export function buildPrompt(term: string): string {
   return prompt.slice(0, MAX_PROMPT);
 }
 
+
 /**
- * Asks for one picture and hands back the base64 image.
+ * The image models, by the short name the rest of this file uses.
  *
- * The prompt is passed whole rather than built here, so a mnemonic can send the
- * scene its own model invented instead of a bare word.
+ * **Measured 2026-09-08** against the 10 000 neurons that are free each day —
+ * per 1024x1024 picture, and per association, which draws three at once:
+ *
+ *   schnell     57,6   →   173 per association   ~57 a day
+ *   klein-4b   104,0   →   312 per association   ~32 a day
+ *
+ * Two more were tried and dropped, which is worth more than their names:
+ * **`flux-2-dev` cost ~8000 neurons for one picture** — four fifths of a day —
+ * where the pricing page predicted 150, and `flux-2-klein-9b` is priced in the
+ * same order of magnitude. A new image model goes in here only after one call
+ * has been measured on the Cloudflare dashboard, never from the price list.
  */
-export async function generatePicture(
-  prompt: string,
-  quality: PictureQuality = 'fast',
-  workerUrl?: string
-): Promise<string> {
-  if (!prompt.trim()) throw new AiError('empty-prompt');
+const IMAGE_MODELS = {
+  schnell: '@cf/black-forest-labs/flux-1-schnell',
+  'klein-4b': '@cf/black-forest-labs/flux-2-klein-4b',
+} as const;
 
-  const result = await postToWorker(
-    '/image',
-    // `steps` reaches only the quick model, which is the one whose whole price
-    // is how many you ask for. Sent regardless, because which model answers is
-    // decided on the other side and may yet be a third one.
-    { prompt: prompt.slice(0, MAX_PROMPT), steps: STEPS, quality },
-    workerUrl
-  );
+type ImageModel = keyof typeof IMAGE_MODELS;
 
-  const image = result.image;
+/**
+ * The two speeds the user chooses between, and why each is a list.
+ *
+ * Measured 2026-09-08 on the same scene, three pictures in parallel: schnell
+ * 3,9 s, klein-4b 20,8 s. Quick is five times faster; careful fills the frame
+ * instead of leaving a doodle in a field of white.
+ *
+ * The second entry is what happens when the first refuses, and it is not
+ * theoretical: schnell turned down "a young military cadet sitting on a wooden
+ * chair" as NSFW (`8007`) — one of the examples our own mnemonic prompt
+ * teaches — where klein drew it without complaint. A slow picture beats a
+ * baffling refusal, so quick falls back to careful and careful to quick.
+ */
+const QUALITY_MODELS: Record<PictureQuality, ImageModel[]> = {
+  fast: ['schnell', 'klein-4b'],
+  accurate: ['klein-4b', 'schnell'],
+};
 
-  if (typeof image !== 'string' || image.length === 0) throw new AiError('malformed');
+/**
+ * The square every picture comes back as. Schnell draws 1024x1024 without being
+ * asked; the FLUX 2 models want to be told. It is also what the neuron price is
+ * quoted against — four 512x512 tiles.
+ */
+const IMAGE_SIZE = 1024;
 
-  return image;
+/** What one picture cost, by the model that drew it. Measured 2026-09-08. */
+const imageNeurons = (model: ImageModel) => (model === 'schnell' ? 19.2 + 9.6 * STEPS : 104);
+
+/**
+ * What each model wants on its input — which is not the same thing twice.
+ *
+ * `schnell` takes plain JSON and prices itself by `steps`. The FLUX 2 models
+ * take a **multipart form** and refuse anything else (`5006: required
+ * properties at '/' are 'multipart'`), because they also accept reference
+ * images to work from; even a bare prompt has to arrive through that door.
+ */
+function imageInput(model: ImageModel, prompt: string): unknown {
+  if (model === 'schnell') return { prompt, steps: STEPS };
+
+  const form = new FormData();
+
+  form.append('prompt', prompt);
+  form.append('width', String(IMAGE_SIZE));
+  form.append('height', String(IMAGE_SIZE));
+
+  return form;
 }
 
 /**
- * Asks for several pictures of one prompt in a single request — a mnemonic's
- * round of three.
+ * One picture down the chain of models: the first one that draws wins.
  *
- * One request rather than three parallel ones because the Worker's usage
- * counter is a read-modify-write: three at once each read the same total and
- * each wrote back one picture's worth, so a round was billed as a single
- * picture. Drawn together, they are counted together.
+ * A model answering without a picture has failed exactly as much as one that
+ * refused, because the caller writes this straight into a file.
+ */
+async function drawOne(
+  keys: AiKeys,
+  chain: ImageModel[],
+  prompt: string
+): Promise<{ image: string; model: ImageModel } | { error: AiError }> {
+  let error = new AiError('malformed');
+
+  for (const model of chain) {
+    try {
+      const result = await runCloudflare(
+        keys.cloudflareAccount,
+        keys.cloudflareToken,
+        IMAGE_MODELS[model],
+        imageInput(model, prompt)
+      );
+      const image = result.image;
+
+      if (typeof image === 'string' && image.length > 0) return { image, model };
+
+      error = new AiError('malformed', 'brak obrazu w odpowiedzi');
+    } catch (failure) {
+      error = failure instanceof AiError ? failure : new AiError('network');
+    }
+  }
+
+  return { error };
+}
+
+/**
+ * Several pictures of one prompt — a mnemonic's round of three — drawn side by
+ * side, so the wait is one picture's, not three.
  *
- * Hands back however many were drawn — the Worker answers with what it has and
- * fails only a round that drew nothing at all.
+ * Hands back however many were drawn: two pictures beat an error message, and
+ * only a round that drew nothing at all has failed — with the first refusal,
+ * which is what explains it. What was drawn is counted against today's neurons.
  */
 export async function generatePictures(
   prompt: string,
-  quality: PictureQuality = 'fast',
+  quality: PictureQuality,
   count: number,
-  workerUrl?: string
+  keys: AiKeys
 ): Promise<string[]> {
   if (!prompt.trim()) throw new AiError('empty-prompt');
+  if (!hasCloudflare(keys)) throw new AiError('no-image-key');
 
-  const result = await postToWorker(
-    '/image',
-    { prompt: prompt.slice(0, MAX_PROMPT), steps: STEPS, quality, count },
-    workerUrl
+  const chain = QUALITY_MODELS[quality] ?? QUALITY_MODELS.fast;
+  const text = prompt.slice(0, MAX_PROMPT);
+
+  const attempts = await Promise.all(
+    Array.from({ length: Math.max(1, count) }, () => drawOne(keys, chain, text))
   );
 
-  const images = Array.isArray(result.images)
-    ? result.images.filter((image): image is string => typeof image === 'string' && image.length > 0)
-    : [];
+  const drawn = attempts.filter(
+    (attempt): attempt is { image: string; model: ImageModel } => 'image' in attempt
+  );
 
-  if (images.length === 0) throw new AiError('malformed');
+  recordSpend('neurons', drawn.reduce((sum, attempt) => sum + imageNeurons(attempt.model), 0));
 
-  return images;
+  if (drawn.length === 0) throw (attempts[0] as { error: AiError }).error;
+
+  return drawn.map((attempt) => attempt.image);
+}
+
+/** One picture, as base64. The prompt is passed whole, so a mnemonic can send its scene. */
+export async function generatePicture(
+  prompt: string,
+  quality: PictureQuality,
+  keys: AiKeys
+): Promise<string> {
+  return (await generatePictures(prompt, quality, 1, keys))[0];
 }
 
 /** One picture of one word — what an `ai-image` field asks for. */
-export function generateImage(
+export async function generateImage(
   term: string,
-  quality: PictureQuality = 'fast',
-  workerUrl?: string
+  quality: PictureQuality,
+  keys: AiKeys
 ): Promise<string> {
   if (!term.trim()) throw new AiError('empty-prompt');
 
-  return generatePicture(buildPrompt(term), quality, workerUrl);
+  return generatePicture(buildPrompt(term), quality, keys);
 }

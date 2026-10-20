@@ -1,4 +1,7 @@
-import { AiError, postToWorker } from '@/lib/ai-worker';
+import type { AiKeys } from '@/lib/ai-keys';
+import { PHONETIC_SHAPE, phoneticPrompt } from '@/lib/ai-prompts';
+import { writeText } from '@/lib/ai-text';
+import { AiError, type TextSource } from '@/lib/ai-transport';
 import { languageEnglish } from '@/lib/languages';
 import { MAX_SPEECH_LENGTH } from '@/lib/speech';
 
@@ -6,7 +9,7 @@ import { MAX_SPEECH_LENGTH } from '@/lib/speech';
  * A text's pronunciation, written out in IPA — `/kuˈmeɾ/` under `comer`.
  *
  * Made the way an association is made: in the card editor, on request, by a
- * language model behind our own Worker, and then **stored on the card**. The
+ * language model on the user's own keys, and then **stored on the card**. The
  * review screen only ever reads what was saved, because a review must never
  * need a network. The phone's own speech engine can say a word but cannot spell
  * out how it said it, so this is the one part of pronunciation that has to come
@@ -24,19 +27,21 @@ import { MAX_SPEECH_LENGTH } from '@/lib/speech';
 export async function requestPhonetic(
   text: string,
   language: string,
-  workerUrl?: string
+  source: TextSource,
+  keys: AiKeys
 ): Promise<string> {
   const said = text.trim().replace(/\s+/g, ' ').slice(0, MAX_SPEECH_LENGTH);
 
   if (!said) throw new AiError('empty-prompt');
 
-  const result = await postToWorker(
-    '/phonetic',
-    { text: said, language: languageEnglish(language) },
-    workerUrl
+  const answer = await writeText(
+    phoneticPrompt({ text: said, language: languageEnglish(language) }),
+    PHONETIC_SHAPE,
+    source,
+    keys
   );
 
-  const phonetic = parsePhonetic(typeof result.text === 'string' ? result.text : '');
+  const phonetic = parsePhonetic(answer);
 
   if (!phonetic) throw new AiError('malformed');
 

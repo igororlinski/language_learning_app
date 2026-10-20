@@ -1,12 +1,27 @@
 /**
- * What a picture request carries: the decoration around the subject, and the
- * step count — which is a spending decision rather than a tuning detail, so it
- * gets an assertion instead of a silent default.
+ * What a picture request carries: the decoration around the subject, the step
+ * count — a spending decision rather than a tuning detail — and which model on
+ * the user's own Cloudflare account is asked first.
  */
 import { buildPrompt, generateImage, generatePicture, generatePictures } from '@/lib/ai-image';
+import { NO_KEYS } from '@/lib/ai-keys';
+import { setSpendSink } from '@/lib/ai-usage';
 
-import { withStub } from './ai-worker.test';
+import { bodyOf, headersOf, withStub } from './ai-transport.test';
 import { check, group } from './harness';
+
+const KEYS = { ...NO_KEYS, cloudflareAccount: 'ACC', cloudflareToken: 'CFT' };
+const RUN = 'https://api.cloudflare.com/client/v4/accounts/ACC/ai/run/';
+const SCHNELL = `${RUN}@cf/black-forest-labs/flux-1-schnell`;
+const KLEIN = `${RUN}@cf/black-forest-labs/flux-2-klein-4b`;
+
+const drew = (image: string) => ({ status: 200, body: { success: true, result: { image } } });
+
+let spent = 0;
+
+setSpendSink((metric, _day, amount) => {
+  if (metric === 'neurons') spent += amount;
+});
 
 group('Prompt do generatora obrazu');
 
@@ -19,115 +34,101 @@ check('i jest scisniete ze spacji', prompt.includes('to   break'), false);
 check('prompt zabrania tekstu na obrazie', prompt.includes('No text'), true);
 check('mieści się w limicie Cloudflare', buildPrompt('x'.repeat(5000)).length <= 2048, true);
 
-group('O co prosi zadanie o obraz');
+group('Szybki obraz na koncie uzytkownika');
 
-const made = await withStub({ status: 200, body: { success: true, result: { image: 'BASE64' } } }, () =>
-  generateImage('dog', 'fast', 'https://w.example.dev')
-);
+const made = await withStub(drew('BASE64'), () => generateImage('dog', 'fast', KEYS));
 
 check('obraz wraca do wolajacego', made.outcome, 'BASE64');
-check('idzie na sciezke obrazu', made.sent?.url, 'https://w.example.dev/image');
-
-const body = JSON.parse(String(made.sent?.init.body)) as {
-  prompt?: unknown;
-  steps?: unknown;
-  quality?: unknown;
-  model?: unknown;
-};
-
-// The Worker builds nothing for pictures: it forwards the prompt as given, so
-// the whole decorated prompt has to leave the app.
-check('w ciele jedzie gotowy prompt', body.prompt, buildPrompt('dog'));
-
+check('szybki to schnell', made.sent?.url, SCHNELL);
+check('z tokenem uzytkownika', headersOf(made.sent).Authorization, 'Bearer CFT');
+check('w ciele jedzie gotowy prompt', bodyOf(made.sent).prompt, buildPrompt('dog'));
 // Steps are most of what a quick picture costs — see the comment on STEPS.
-check('i liczba krokow', body.steps, 4);
+check('i liczba krokow', bodyOf(made.sent).steps, 4);
+check('policzony jak szybki obraz', Math.round(spent * 10) / 10, 57.6);
 
-group('Dokładny albo szybki — wybór użytkownika');
+group('Dokladny obraz');
 
-check('pole ai-image prosi o szybki obraz', body.quality, 'fast');
+spent = 0;
 
-// The app names an outcome and never a model: which model draws a careful
-// picture is settled in the Worker, where changing it is a deploy rather than a
-// new build on somebody's phone.
-check('i nie nazywa modelu', 'model' in body, false);
+const careful = await withStub(drew('B'), () => generatePicture('scena', 'accurate', KEYS));
 
-const careful = await withStub(
-  { status: 200, body: { success: true, result: { image: 'BASE64' } } },
-  () => generatePicture('scena ze skojarzenia', 'accurate', 'https://w.example.dev')
-);
-
-const carefulBody = JSON.parse(String(careful.sent?.init.body)) as { quality?: unknown };
-
-check('wybrana jakosc jedzie w zadaniu', carefulBody.quality, 'accurate');
-
-// Nothing in the app may get slower by accident: the careful picture is the
-// one the user asked for, never the one a default handed them.
-const byDefault = await withStub(
-  { status: 200, body: { success: true, result: { image: 'BASE64' } } },
-  () => generatePicture('scena', undefined, 'https://w.example.dev')
-);
-
+check('dokladny to klein', careful.sent?.url, KLEIN);
+// FLUX 2 refuses JSON: a multipart form or nothing.
+check('jako formularz', careful.sent?.init.body instanceof FormData, true);
 check(
-  'bez wyboru zostaje szybki',
-  (JSON.parse(String(byDefault.sent?.init.body)) as { quality?: unknown }).quality,
-  'fast'
+  'z promptem i rozmiarem',
+  [
+    (careful.sent?.init.body as FormData).get('prompt'),
+    (careful.sent?.init.body as FormData).get('width'),
+  ],
+  ['scena', '1024']
 );
+check('policzony jak dokladny', spent, 104);
+
+group('Odmowa pierwszego modelu');
+
+// schnell refused "a young military cadet sitting on a wooden chair" as NSFW,
+// one of our own prompt's examples; klein drew it.
+const rescued = await withStub(
+  (url) =>
+    url === SCHNELL
+      ? { status: 400, body: { success: false, errors: [{ message: '8007: NSFW' }] } }
+      : drew('FROM-KLEIN'),
+  () => generatePicture('a cadet on a chair', 'fast', KEYS)
+);
+
+check('drugi model ratuje obraz', rescued.outcome, 'FROM-KLEIN');
+check('w kolejnosci szybki, potem dokladny', rescued.calls.map((call) => call.url), [SCHNELL, KLEIN]);
+
+group('Trzy obrazy naraz');
+
+spent = 0;
+
+let n = 0;
+const round = await withStub(
+  () => drew(String.fromCharCode(65 + n++)),
+  async () => (await generatePictures('scena', 'fast', 3, KEYS)).join(',')
+);
+
+check('trzy zadania obok siebie', round.calls.length, 3);
+check('wszystkie obrazy wracaja', round.outcome, 'A,B,C');
+check('i wszystkie sa policzone', Math.round(spent * 10) / 10, 172.8);
+
+// Two pictures beat an error message.
+let m = 0;
+const partial = await withStub(
+  () =>
+    m++ === 1
+      ? { status: 400, body: { success: false, errors: [{ message: 'no' }] } }
+      : drew('X'),
+  async () => (await generatePictures('scena', 'accurate', 2, KEYS)).length
+);
+
+check('niepelna runda oddaje to, co powstalo', partial.outcome, '2');
+
+const nothing = await withStub(
+  { status: 400, body: { success: false, errors: [{ message: 'refused' }] } },
+  () => generatePictures('scena', 'fast', 3, KEYS)
+);
+
+check('runda bez obrazu to blad, nie pusta lista', nothing.outcome, 'provider');
 
 group('Czego zadanie o obraz nie sprobuje');
 
-/** The failure a call rejects with, without ever reaching the network. */
-async function refusal(call: () => Promise<unknown>) {
-  try {
-    await call();
-    return 'nie odmowil';
-  } catch (error) {
-    return error instanceof Error ? (error as { failure?: string }).failure ?? error.message : String(error);
-  }
-}
+const noKey = await withStub(drew('X'), () => generatePictures('scena', 'fast', 3, NO_KEYS));
 
-check(
-  'puste haslo nie idzie nigdzie',
-  await refusal(() => generateImage('   ', 'fast', 'https://w.example.dev')),
-  'empty-prompt'
-);
-check(
-  'pusty prompt sceny tez nie',
-  await refusal(() => generatePicture('   ', 'accurate', 'https://w.example.dev')),
-  'empty-prompt'
+check('bez klucza Cloudflare nic nie wychodzi', noKey.calls.length, 0);
+check('a odmowa mowi, czego brak', noKey.outcome, 'no-image-key');
+
+const tokenOnly = await withStub(drew('X'), () =>
+  generatePicture('scena', 'fast', { ...NO_KEYS, cloudflareToken: 'CFT' })
 );
 
-group('Trzy obrazy w jednym zadaniu');
+check('token bez ID konta to tez brak klucza', tokenOnly.outcome, 'no-image-key');
 
-// One request for a mnemonic's round, so the Worker counts the three pictures
-// in one write instead of three racing ones that each counted a single picture.
-const round = await withStub(
-  { status: 200, body: { success: true, result: { images: ['A', 'B', 'C'], image: 'A' } } },
-  async () => (await generatePictures('scena', 'fast', 3, 'https://w.example.dev')).join(',')
-);
+const blank = await withStub(drew('X'), () => generateImage('   ', 'fast', KEYS));
 
-check('wszystkie obrazy wracaja', round.outcome, 'A,B,C');
-check(
-  'liczba obrazow jedzie w zadaniu',
-  (JSON.parse(String(round.sent?.init.body)) as { count?: unknown }).count,
-  3
-);
+check('puste haslo nie idzie nigdzie', blank.outcome, 'empty-prompt');
+check('i niczego nie wysyla', blank.calls.length, 0);
 
-// The Worker hands back whatever it drew; two pictures are still a round.
-const partial = await withStub(
-  { status: 200, body: { success: true, result: { images: ['A', '', 7, 'C'] } } },
-  async () => (await generatePictures('scena', 'fast', 3, 'https://w.example.dev')).join(',')
-);
-
-check('niepelna runda oddaje to, co powstalo', partial.outcome, 'A,C');
-
-const none = await withStub(
-  { status: 200, body: { success: true, result: { images: [] } } },
-  () => generatePictures('scena', 'fast', 3, 'https://w.example.dev')
-);
-
-check('runda bez obrazu to blad, nie pusta lista', none.outcome, 'malformed');
-check(
-  'pusty prompt rundy nie idzie nigdzie',
-  await refusal(() => generatePictures('  ', 'fast', 3, 'https://w.example.dev')),
-  'empty-prompt'
-);
+setSpendSink(null);

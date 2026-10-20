@@ -1,11 +1,13 @@
 /**
  * Reading what a language model said, and refusing what it did not say.
  *
- * The prompt that produces these answers lives in the Worker, where it can be
- * rewritten by a redeploy. What is pinned down here is everything that has to
+ * The prompt that produces these answers lives in `src/lib/ai-prompts.ts`.
+ * What is pinned down here is everything that has to
  * hold no matter which model is behind it or how it decides to wrap its JSON.
  */
 import { requestMnemonics } from '@/lib/ai-mnemonic';
+import { NO_KEYS } from '@/lib/ai-keys';
+import { CLOUD_TEXT } from '@/lib/ai-transport';
 import {
   buildScenePrompt,
   mnemonicJson,
@@ -14,7 +16,7 @@ import {
   parseMnemonicText,
 } from '@/lib/mnemonic';
 
-import { withStub } from './ai-worker.test';
+import { bodyOf, withStub } from './ai-transport.test';
 import { check, group } from './harness';
 
 group('Odczyt skojarzenia od modelu');
@@ -172,37 +174,56 @@ check('null tez', parseMnemonicColumn(null), null);
 
 group('Zadanie o skojarzenie');
 
-const asked = await withStub(
-  { status: 200, body: { success: true, result: { text: good } } },
-  () =>
-    requestMnemonics(
-      {
-        term: 'comer',
-        termLanguage: 'Portuguese (European)',
-        meaning: 'jeść',
-        meaningLanguages: ['polski'],
-      },
-      'https://w.example.dev'
-    ).then((mnemonics) => mnemonics[0]?.keyword)
+const KEYS = { ...NO_KEYS, gemini: 'GKEY' };
+
+/** What Gemini answers: the model's text inside its candidate. */
+const geminiSays = (text: string) => ({
+  status: 200,
+  body: { candidates: [{ content: { parts: [{ text }] } }] },
+});
+
+const asked = await withStub(geminiSays(good), () =>
+  requestMnemonics(
+    {
+      term: ' comer ',
+      termLanguage: 'Portuguese (European)',
+      meaning: 'jeść',
+      meaningLanguages: ['Polish', '  ', 'English'],
+    },
+    CLOUD_TEXT,
+    KEYS
+  ).then((mnemonics) => mnemonics[0]?.keyword)
 );
 
-check('idzie na wlasna sciezke', asked.sent?.url, 'https://w.example.dev/mnemonic');
+check('idzie do Gemini', asked.sent?.url.includes('generativelanguage.googleapis.com'), true);
 check('i wraca skojarzeniem', asked.outcome, 'komar');
 
-const sent = JSON.parse(String(asked.sent?.init.body)) as Record<string, unknown>;
+const contents = (bodyOf(asked.sent) as { contents?: { parts?: { text?: string }[] }[] }).contents ?? [];
+const question = contents[contents.length - 1]?.parts?.[0]?.text;
 
 // The languages are what make the trick possible: a sound-alike has to be a
 // word in the language the learner already speaks, and the model cannot know
-// which that is by looking at two words.
-check('slowo uczone jedzie jako term', sent.term, 'comer');
-check('znaczenie jako meaning', sent.meaning, 'jeść');
-// One language for the word being learned: it has one pronunciation, and both
-// the voice that reads it and the sound a keyword must imitate follow from it.
-check('z jednym jezykiem slowa', sent.termLanguage, 'Portuguese (European)');
+// which that is by looking at two words. The ranking is an instruction, not a
+// set: the model works down it, so blanks drop out and the order stays.
+check(
+  'ostatnie pytanie niesie slowo, znaczenie i ranking jezykow',
+  question,
+  'FOREIGN (Portuguese (European)): comer\nMEANING: jeść\nKNOWN:\n1. Polish\n2. English'
+);
 
-// …and a ranking for the learner's own languages, in the deck's order. The list
-// is an instruction, not a set: the model works down it.
-check('i rankingiem jezykow znaczenia', JSON.stringify(sent.meaningLanguages), '["polski"]');
+// LM Studio gets the very same prompt — one set of words, never two copies.
+const local = await withStub(
+  { status: 200, body: { choices: [{ message: { content: good } }] } },
+  () =>
+    requestMnemonics(
+      { term: 'comer', termLanguage: '', meaning: 'jeść', meaningLanguages: [] },
+      { provider: 'lmstudio', model: 'qwen3-14b' },
+      { ...NO_KEYS, lmStudioUrl: 'http://pc:1234' }
+    ).then((mnemonics) => mnemonics[0]?.keyword)
+);
+
+check('LM Studio pytane wprost', local.sent?.url, 'http://pc:1234/v1/chat/completions');
+check('a odpowiedz czyta sie tak samo', local.outcome, 'komar');
 
 /** The failure a request rejects with. */
 async function refusalOf(call: () => Promise<unknown>) {
@@ -219,7 +240,8 @@ check(
   await refusalOf(() =>
     requestMnemonics(
       { term: '  ', termLanguage: '', meaning: 'jeść', meaningLanguages: [] },
-      'https://w.example.dev'
+      CLOUD_TEXT,
+      KEYS
     )
   ),
   'empty-prompt'
@@ -229,7 +251,8 @@ check(
   await refusalOf(() =>
     requestMnemonics(
       { term: 'comer', termLanguage: '', meaning: '   ', meaningLanguages: [] },
-      'https://w.example.dev'
+      CLOUD_TEXT,
+      KEYS
     )
   ),
   'empty-prompt'
@@ -240,10 +263,11 @@ check(
 check(
   'odpowiedz nie bedaca skojarzeniem to blad',
   (
-    await withStub({ status: 200, body: { success: true, result: { text: 'nie umiem' } } }, () =>
+    await withStub(geminiSays('nie umiem'), () =>
       requestMnemonics(
         { term: 'comer', termLanguage: '', meaning: 'jeść', meaningLanguages: [] },
-        'https://w.example.dev'
+        CLOUD_TEXT,
+        KEYS
       )
     )
   ).outcome,

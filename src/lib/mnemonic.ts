@@ -8,8 +8,7 @@
  * picture hands back the sound and the meaning together.
  *
  * The association itself is invented by a language model, prompted in
- * `worker/src/index.js` — the prompt lives there because it gets rewritten every
- * time its output is judged, and a redeploy is cheaper than a new app build.
+ * `src/lib/ai-prompts.ts` (until 2026-10-20 it lived in the Worker).
  * What lives here is everything that has to be right no matter what the model
  * says: reading its answer, refusing a broken one, and turning the scene into a
  * picture prompt.

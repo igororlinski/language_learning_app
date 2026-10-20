@@ -53,7 +53,7 @@ export const QueueColors = {
 /**
  * The colour a "how much is left" meter takes at a given remaining percent:
  * green with room to spare, amber as it tightens, red when nearly gone. Shared
- * by the full "Limity AI" screen and the compact bar in the mnemonic flow so
+ * by the full "Ustawienia AI" screen and the compact bar in the mnemonic flow so
  * the two can never disagree about what a number means.
  */
 export const budgetColor = (pctLeft: number): string =>
