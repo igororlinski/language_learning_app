@@ -467,6 +467,13 @@ export const reviewLogs = sqliteTable(
     scheduledDays: real('scheduled_days').notNull(),
     learningSteps: integer('learning_steps').notNull().default(0),
     reviewedAt: integer('reviewed_at', { mode: 'timestamp_ms' }).notNull(),
+    /**
+     * How long the card was on screen before this answer, capped at
+     * `MAX_ANSWER_MS` (migration 0024, 2026-10-23). NULL for every answer
+     * given before the column existed — nobody was timing them, and a guess
+     * would make the study-time statistic lie about the past.
+     */
+    durationMs: integer('duration_ms'),
   },
   (table) => [index('review_logs_card_id_idx').on(table.cardId)]
 );

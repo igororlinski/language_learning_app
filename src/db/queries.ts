@@ -1,4 +1,17 @@
-import { and, asc, desc, eq, inArray, lt, lte, ne, or, sql, type SQLWrapper } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  lt,
+  lte,
+  ne,
+  or,
+  sql,
+  type SQLWrapper,
+} from 'drizzle-orm';
 
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
 import { isMediaKind, type MediaKind } from '@/lib/media';
@@ -1159,6 +1172,76 @@ export function getCard(cardId: number) {
   return db.select().from(cards).where(eq(cards.id, cardId)).get();
 }
 
+/* ------------------------------------------------------------- statistics */
+
+/**
+ * The reads behind "Statystyki". They only fetch: what a statistic means is
+ * decided in `src/lib/stats.ts`, where it has tests. `deckId` null is every
+ * deck.
+ */
+
+/** Every deck by name, for the deck picker on the statistics screen. */
+export function deckNamesQuery() {
+  return db.select({ id: decks.id, name: decks.name }).from(decks).orderBy(asc(decks.name));
+}
+
+/**
+ * Every answer, with the retention its card's deck aims at — the deck the card
+ * is in **now**, the same rule "done today" follows after a move.
+ *
+ * Reset cards keep their answers: `resetCards` clears the schedule, not the
+ * history, and what was remembered was remembered.
+ */
+export function statsLogsQuery(deckId: number | null) {
+  return db
+    .select({
+      cardId: reviewLogs.cardId,
+      rating: reviewLogs.rating,
+      state: reviewLogs.state,
+      reviewedAt: reviewLogs.reviewedAt,
+      durationMs: reviewLogs.durationMs,
+      targetRetention: decks.desiredRetention,
+    })
+    .from(reviewLogs)
+    .innerJoin(cards, eq(cards.id, reviewLogs.cardId))
+    .innerJoin(decks, eq(decks.id, cards.deckId))
+    .where(deckId == null ? undefined : eq(cards.deckId, deckId));
+}
+
+/** Every card's current schedule, for the forecast and the card states. */
+export function statsCardsQuery(deckId: number | null) {
+  return db
+    .select({
+      cardId: fsrsState.cardId,
+      state: fsrsState.state,
+      due: fsrsState.due,
+      scheduledDays: fsrsState.scheduledDays,
+    })
+    .from(fsrsState)
+    .innerJoin(cards, eq(cards.id, fsrsState.cardId))
+    .where(deckId == null ? undefined : eq(cards.deckId, deckId));
+}
+
+/**
+ * Cards that show the learner an association: a `mnemonic` field with
+ * something in it, and not both halves hidden. A field nobody sees during
+ * review cannot help anybody remember, so it does not count.
+ */
+export function mnemonicCardsQuery(deckId: number | null) {
+  return db
+    .selectDistinct({ cardId: cardFields.cardId })
+    .from(cardFields)
+    .innerJoin(cards, eq(cards.id, cardFields.cardId))
+    .where(
+      and(
+        eq(cardFields.kind, 'mnemonic'),
+        or(ne(cardFields.value, ''), isNotNull(cardFields.mediaPath)),
+        or(eq(cardFields.hideValue, false), eq(cardFields.hideMedia, false)),
+        deckId == null ? undefined : eq(cards.deckId, deckId)
+      )
+    );
+}
+
 /* -------------------------------------------------------------- mutations */
 
 export type DeckInput = {
@@ -1581,11 +1664,26 @@ export function resetCards(cardIds: number[], now = new Date()) {
 }
 
 /**
+ * The longest an answer is allowed to count for. A card left on screen while
+ * the phone sat on the table is not ten minutes of study; Anki caps it at a
+ * minute too ("maximum answer seconds"), so the two read alike.
+ */
+export const MAX_ANSWER_MS = 60_000;
+
+/**
  * Runs the card through FSRS and persists both the new state and the review
  * log. Re-reads the state inside the transaction so a stale in-memory copy
  * can never overwrite a newer one.
+ *
+ * `durationMs` is how long the card was on screen; it is clipped to
+ * `MAX_ANSWER_MS`, and left NULL when the caller did not time the answer.
  */
-export function gradeCard(cardId: number, grade: Grade, now = new Date()) {
+export function gradeCard(
+  cardId: number,
+  grade: Grade,
+  now = new Date(),
+  durationMs: number | null = null
+) {
   return db.transaction((tx) => {
     const row = tx.select().from(fsrsState).where(eq(fsrsState.cardId, cardId)).get();
     if (!row) throw new Error(`Brak stanu FSRS dla karty ${cardId}`);
@@ -1624,6 +1722,10 @@ export function gradeCard(cardId: number, grade: Grade, now = new Date()) {
         scheduledDays: log.scheduled_days,
         learningSteps: log.learning_steps,
         reviewedAt: log.review,
+        durationMs:
+          durationMs == null || !Number.isFinite(durationMs)
+            ? null
+            : Math.round(Math.min(Math.max(durationMs, 0), MAX_ANSWER_MS)),
       })
       .run();
 

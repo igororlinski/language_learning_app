@@ -48,6 +48,7 @@ const emptyCounts = (): GradeCounts => ({
 
 const emptySession = () => ({
   queue: [] as ReviewCard[],
+  shownAt: Date.now(),
   revealed: false,
   answered: 0,
   gradeCounts: emptyCounts(),
@@ -62,6 +63,13 @@ type ReviewStore = {
    */
   scheduling: DeckScheduling | undefined;
   queue: ReviewCard[];
+  /**
+   * When the card on top of the queue appeared — what an answer's duration is
+   * measured from. Restarted whenever a different card (or the same card,
+   * after the editor was open on it) comes up, so time spent editing is not
+   * time spent answering.
+   */
+  shownAt: number;
   revealed: boolean;
   /** Total answers given, including repeats of the same card. */
   answered: number;
@@ -104,24 +112,25 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
     const lines = getCardLines(current.cardId);
 
     if (!lines) {
-      set({ queue: queue.slice(1), revealed: false });
+      set({ queue: queue.slice(1), revealed: false, shownAt: Date.now() });
       return;
     }
 
     set({
       queue: [{ ...current, frontLines: lines.front, backLines: lines.back }, ...queue.slice(1)],
+      shownAt: Date.now(),
     });
   },
 
   reveal: () => set({ revealed: true }),
 
   answer: (grade) => {
-    const { queue, answered, gradeCounts, history } = get();
+    const { queue, shownAt, answered, gradeCounts, history } = get();
     const current = queue[0];
     if (!current) return;
 
     const now = new Date();
-    const next = gradeCard(current.cardId, grade, now);
+    const next = gradeCard(current.cardId, grade, now, now.getTime() - shownAt);
 
     const rest = queue.slice(1);
     const dueIn = next.due.getTime() - now.getTime();
@@ -131,6 +140,7 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
 
     set({
       queue: replayed ? [...rest, { ...current, fsrs: next }] : rest,
+      shownAt: now.getTime(),
       revealed: false,
       answered: answered + 1,
       gradeCounts: { ...gradeCounts, [grade]: gradeCounts[grade] + 1 },
@@ -153,8 +163,10 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
     const rest = step.replayed ? queue.slice(0, -1) : queue;
 
     set({
-      // Back to the front side, as if the card had never been revealed.
+      // Back to the front side, as if the card had never been revealed — and
+      // timed afresh: the answer being redone is a new answer.
       queue: [step.card, ...rest],
+      shownAt: Date.now(),
       revealed: false,
       answered: answered - 1,
       gradeCounts: { ...gradeCounts, [step.grade]: gradeCounts[step.grade] - 1 },

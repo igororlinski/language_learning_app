@@ -169,6 +169,13 @@
       "when": 1792486771061,
       "tag": "0023_same_white_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1792750741271,
+      "tag": "0024_wooden_greymalkin",
+      "breakpoints": true
     }
   ]
 }

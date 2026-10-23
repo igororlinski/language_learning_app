@@ -163,7 +163,10 @@ export default function DecksScreen() {
         <SideMenu
           visible={appMenuOpen}
           onClose={() => setAppMenuOpen(false)}
-          items={[{ label: 'Ustawienia AI', onPress: () => router.push('/ai-limits') }]}
+          items={[
+            { label: 'Ustawienia AI', onPress: () => router.push('/ai-limits') },
+            { label: 'Statystyki', onPress: () => router.push('/stats') },
+          ]}
         />
       </View>
 

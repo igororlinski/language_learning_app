@@ -19,6 +19,7 @@ import './ai-phonetic.test';
 import './mnemonic.test';
 import './sounds-like.test';
 import './ai-temperature.test';
+import './stats.test';
 import './languages.test';
 import './speech.test';
 import './tags.test';

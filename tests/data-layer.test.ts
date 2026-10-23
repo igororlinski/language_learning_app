@@ -60,6 +60,10 @@ import {
   aiUsageQuery,
   getTextSource,
   getTextTemperatures,
+  MAX_ANSWER_MS,
+  mnemonicCardsQuery,
+  statsCardsQuery,
+  statsLogsQuery,
   setTextSource,
   setTextTemperature,
   type MediaCopier,
@@ -108,6 +112,7 @@ import migration0020 from '../drizzle/0020_mean_reavers.sql';
 import migration0021 from '../drizzle/0021_tiny_hobgoblin.sql';
 import migration0022 from '../drizzle/0022_daily_valkyrie.sql';
 import migration0023 from '../drizzle/0023_same_white_queen.sql';
+import migration0024 from '../drizzle/0024_wooden_greymalkin.sql';
 
 const MIGRATIONS = [
   migration0000,
@@ -134,6 +139,7 @@ const MIGRATIONS = [
   migration0021,
   migration0022,
   migration0023,
+  migration0024,
 ];
 
 /** Runs migrations the way the app's migrator does: statement by statement. */
@@ -1954,3 +1960,89 @@ check(
     .sort(),
   ['gemini:2026-10-19:1', 'neurons:2026-10-21:10']
 );
+
+group('Statystyki: co czytaja zapytania');
+
+const statsDeck = createDeck({ name: 'Statystyki', newPerDay: 100, reviewsPerDay: 100 });
+const otherStatsDeck = createDeck({ name: 'Inna do statystyk', newPerDay: 100, reviewsPerDay: 100 });
+const statsAt = new Date(2026, 9, 20, 10);
+const statsCard = createCard(statsDeck.id, 'okno', 'janela', statsAt);
+const otherStatsCard = createCard(otherStatsDeck.id, 'klucz', 'chave', statsAt);
+
+gradeCard(statsCard.id, Rating.Good, statsAt);
+gradeCard(otherStatsCard.id, Rating.Again, statsAt);
+
+const statsLogs = statsLogsQuery(statsDeck.id).all();
+
+check('odpowiedzi tylko z wybranej talii', statsLogs.map((row) => row.cardId), [statsCard.id]);
+check(
+  'z ocena, stanem sprzed odpowiedzi i celem talii',
+  {
+    rating: statsLogs[0]?.rating,
+    state: statsLogs[0]?.state,
+    target: statsLogs[0]?.targetRetention,
+  },
+  { rating: Rating.Good, state: State.New, target: statsDeck.desiredRetention }
+);
+check(
+  'bez talii — wszystkie',
+  statsLogsQuery(null)
+    .all()
+    .filter((row) => row.cardId === statsCard.id || row.cardId === otherStatsCard.id).length,
+  2
+);
+check('stan kart z wybranej talii', statsCardsQuery(statsDeck.id).all().length, 1);
+
+// Reset clears the schedule, not the history: what was remembered stays counted.
+resetCards([statsCard.id]);
+check('wyzerowana karta zachowuje odpowiedzi', statsLogsQuery(statsDeck.id).all().length, 1);
+
+const mnemonicField = (over: Record<string, unknown>) => ({
+  id: null,
+  side: 'back' as const,
+  position: 1,
+  kind: 'mnemonic' as const,
+  value: 'Żaneta otwiera okno.',
+  mediaPath: null,
+  mnemonic: null,
+  ...over,
+});
+
+check('bez pola skojarzenia nic', mnemonicCardsQuery(statsDeck.id).all(), []);
+
+saveCardFields(statsCard.id, [mnemonicField({})]);
+check(
+  'karta ze skojarzeniem',
+  mnemonicCardsQuery(statsDeck.id).all().map((row) => row.cardId),
+  [statsCard.id]
+);
+
+// A field nobody sees during review cannot help anybody remember.
+saveCardFields(statsCard.id, [mnemonicField({ hideValue: true, hideMedia: true })]);
+check('schowane w calosci sie nie liczy', mnemonicCardsQuery(statsDeck.id).all(), []);
+
+saveCardFields(statsCard.id, [mnemonicField({ value: '' })]);
+check('puste tez nie', mnemonicCardsQuery(statsDeck.id).all(), []);
+
+saveCardFields(statsCard.id, [mnemonicField({ value: '', mediaPath: 'zaneta.jpg' })]);
+check('sam obraz wystarczy', mnemonicCardsQuery(statsDeck.id).all().length, 1);
+
+group('Czas odpowiedzi');
+
+const timedDeck = createDeck({ name: 'Czas', newPerDay: 100, reviewsPerDay: 100 });
+const timedCard = createCard(timedDeck.id, 'kot', 'gato', statsAt);
+const lastDuration = () => statsLogsQuery(timedDeck.id).all().at(-1)?.durationMs;
+
+gradeCard(timedCard.id, Rating.Again, statsAt, 4321.6);
+check('czas odpowiedzi wraca z bazy', lastDuration(), 4322);
+
+// A card left on screen while the phone sat on the table is not study time.
+gradeCard(timedCard.id, Rating.Good, statsAt, 10 * 60_000);
+check('przyciety do minuty', lastDuration(), MAX_ANSWER_MS);
+
+// Nobody timed it: NULL, never a guess.
+gradeCard(timedCard.id, Rating.Good, statsAt);
+check('bez pomiaru NULL', lastDuration(), null);
+
+gradeCard(timedCard.id, Rating.Good, statsAt, -5);
+check('ujemny (zegar cofniety) to zero', lastDuration(), 0);
