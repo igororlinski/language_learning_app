@@ -2,6 +2,7 @@ import { and, asc, desc, eq, inArray, lt, lte, ne, or, sql, type SQLWrapper } fr
 
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
 import { isMediaKind, type MediaKind } from '@/lib/media';
+import { parseTemperature, type TextTemperatures } from '@/lib/ai-prompts';
 import { parseTextSource, type TextSource } from '@/lib/ai-transport';
 import type { UsageMetric } from '@/lib/ai-usage';
 import { DEFAULT_SCHEDULING, parseWeights, type DeckScheduling } from '@/lib/fsrs-options';
@@ -678,6 +679,48 @@ export function setTextSource(source: TextSource): void {
     if (model) upsert(LMSTUDIO_MODEL_KEY, model);
     else db.delete(appSettings).where(eq(appSettings.key, LMSTUDIO_MODEL_KEY)).run();
   });
+}
+
+const TEMPERATURE_KEYS: Record<keyof TextTemperatures, string> = {
+  mnemonic: 'ai.temperature.mnemonic',
+  phonetic: 'ai.temperature.phonetic',
+};
+
+/** The temperatures the user set, out of the settings rows; null is the default. */
+export function textTemperaturesFrom(
+  rows: readonly { key: string; value: string }[]
+): TextTemperatures {
+  const value = (key: string) => rows.find((row) => row.key === key)?.value;
+
+  return {
+    mnemonic: parseTemperature(value(TEMPERATURE_KEYS.mnemonic)),
+    phonetic: parseTemperature(value(TEMPERATURE_KEYS.phonetic)),
+  };
+}
+
+/** The same, read at the moment of asking. */
+export function getTextTemperatures(): TextTemperatures {
+  return textTemperaturesFrom(appSettingsQuery().all());
+}
+
+/**
+ * Stores one temperature. Null — "the default" — is a missing row, as with
+ * the LM Studio model: one way to say "none", and a default that moves with
+ * the provider instead of a number frozen on the day it was picked.
+ */
+export function setTextTemperature(kind: keyof TextTemperatures, temperature: number | null): void {
+  const key = TEMPERATURE_KEYS[kind];
+  const value = temperature == null ? null : parseTemperature(String(temperature));
+
+  if (value == null) {
+    db.delete(appSettings).where(eq(appSettings.key, key)).run();
+    return;
+  }
+
+  db.insert(appSettings)
+    .values({ key, value: String(value) })
+    .onConflictDoUpdate({ target: appSettings.key, set: { value: String(value) } })
+    .run();
 }
 
 /** Every stored usage counter, for the meters (`usageFrom` picks today's). */

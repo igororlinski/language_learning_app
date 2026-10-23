@@ -59,7 +59,9 @@ import {
   addAiUsage,
   aiUsageQuery,
   getTextSource,
+  getTextTemperatures,
   setTextSource,
+  setTextTemperature,
   type MediaCopier,
 } from '@/db/queries';
 import { appSettings, decks, fsrsState, reviewLogs } from '@/db/schema';
@@ -1897,6 +1899,32 @@ setTextSource({ provider: 'cloud', model: 'gemma-3-12b' });
 check('powrot do chmury', getTextSource(), { provider: 'cloud', model: null });
 check(
   'i nie zostawia osieroconego modelu',
+  db.select().from(appSettings).all().map((row) => row.key),
+  ['ai.text-provider']
+);
+
+// The same round trip for the temperatures: what the screen stores comes back.
+check('bez zapisu temperatury sa domyslne', getTextTemperatures(), {
+  mnemonic: null,
+  phonetic: null,
+});
+
+setTextTemperature('mnemonic', 0.7);
+setTextTemperature('phonetic', 0);
+check('temperatury wracaja z bazy, zero tez', getTextTemperatures(), {
+  mnemonic: 0.7,
+  phonetic: 0,
+});
+
+setTextTemperature('mnemonic', 1.1);
+check('zmiana nadpisuje', getTextTemperatures().mnemonic, 1.1);
+
+// "Domyślna" is a missing row, so the default can keep following the provider.
+setTextTemperature('mnemonic', null);
+setTextTemperature('phonetic', null);
+check('powrot do domyslnej', getTextTemperatures(), { mnemonic: null, phonetic: null });
+check(
+  'i nie zostawia wierszy',
   db.select().from(appSettings).all().map((row) => row.key),
   ['ai.text-provider']
 );

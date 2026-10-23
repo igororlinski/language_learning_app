@@ -56,6 +56,18 @@ check(
 // One right answer and nothing to gain from a wild one.
 check('niska temperatura', sent.generationConfig?.temperature, 0.2);
 
+// The user's own temperature from "Ustawienia AI" replaces the default.
+const warmer = await withStub(geminiSays('{"ipa": "/kuˈmeɾ/"}'), () =>
+  requestPhonetic('comer', 'pt-PT', CLOUD_TEXT, KEYS, 0.5)
+);
+
+check(
+  'temperatura uzytkownika zastepuje domyslna',
+  (bodyOf(warmer.sent) as { generationConfig?: { temperature?: number } }).generationConfig
+    ?.temperature,
+  0.5
+);
+
 const garbled = await withStub(geminiSays(' '), () =>
   requestPhonetic('comer', 'pt-PT', CLOUD_TEXT, KEYS)
 );

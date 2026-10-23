@@ -9,7 +9,14 @@ import { OptionPicker, type PickerOption } from '@/components/option-picker';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { budgetColor, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
-import { aiUsageQuery, appSettingsQuery, setTextSource, textSourceFrom } from '@/db/queries';
+import {
+  aiUsageQuery,
+  appSettingsQuery,
+  setTextSource,
+  setTextTemperature,
+  textSourceFrom,
+  textTemperaturesFrom,
+} from '@/db/queries';
 import { useNow } from '@/hooks/use-now';
 import { useTheme } from '@/hooks/use-theme';
 import {
@@ -21,13 +28,21 @@ import {
   type AiKeys,
 } from '@/lib/ai-keys';
 import { saveAiKeys, useAiKeys } from '@/lib/ai-keys-store';
+import {
+  formatTemperature,
+  LOCAL_MNEMONIC_SHAPE,
+  MNEMONIC_SHAPE,
+  PHONETIC_SHAPE,
+  TEMPERATURE_CHOICES,
+  type TextTemperatures,
+} from '@/lib/ai-prompts';
 import { checkLmStudio, type LmStudioStatus } from '@/lib/ai-text';
 import type { TextProvider } from '@/lib/ai-transport';
 import { usageFrom, type AiBudget } from '@/lib/ai-usage';
 
 /**
- * "Ustawienia AI": the user's own keys, who writes text, and how much of
- * today's free allowances this phone has spent.
+ * "Ustawienia AI": the user's own keys, who writes text and at what
+ * temperature, and how much of today's free allowances this phone has spent.
  *
  * A fresh install lands here with nothing filled in, and every AI action in the
  * card editor stays greyed out until it is (`src/lib/ai-keys.ts`). The keys go
@@ -42,6 +57,25 @@ export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
 
 /** The Dropdown's value for "whatever LM Studio offers first". */
 const FIRST_MODEL = '';
+
+/** The Dropdown's value for "the provider's own temperature". */
+const DEFAULT_TEMPERATURE = '';
+
+/**
+ * The temperature list, opening on "Domyślna (0,95)". The default names its
+ * number because it is the one thing a user changing it needs to know — and it
+ * depends on the provider, so it is worked out here rather than written down.
+ */
+const temperatureOptions = (fallback: number) => [
+  { value: DEFAULT_TEMPERATURE, label: `Domyślna (${formatTemperature(fallback)})` },
+  ...TEMPERATURE_CHOICES.map((t) => ({ value: String(t), label: formatTemperature(t) })),
+];
+
+const temperatureValue = (temperature: number | null) =>
+  temperature == null ? DEFAULT_TEMPERATURE : String(temperature);
+
+const chooseTemperature = (kind: keyof TextTemperatures) => (value: string) =>
+  setTextTemperature(kind, value === DEFAULT_TEMPERATURE ? null : Number(value));
 
 const sameKeys = (a: AiKeys, b: AiKeys) => JSON.stringify(cleanKeys(a)) === JSON.stringify(b);
 
@@ -73,6 +107,7 @@ export default function AiSettingsScreen() {
 
   const { data: settings } = useLiveQuery(appSettingsQuery());
   const source = textSourceFrom(settings);
+  const temperatures = textTemperaturesFrom(settings);
 
   const now = useNow();
   const { data: usageRows } = useLiveQuery(aiUsageQuery());
@@ -231,6 +266,30 @@ export default function AiSettingsScreen() {
             ) : null}
             <Button title="Sprawdź połączenie" variant="secondary" onPress={recheck} />
           </>
+        ) : null}
+
+        {cloudReady || hasLmStudio(keys) ? (
+          <View style={[styles.section, styles.cards]}>
+            <ThemedText type="smallBold" themeColor="textSecondary">
+              Temperatura
+            </ThemedText>
+            <Dropdown
+              label="Skojarzenia"
+              value={temperatureValue(temperatures.mnemonic)}
+              options={temperatureOptions(
+                source.provider === 'lmstudio'
+                  ? LOCAL_MNEMONIC_SHAPE.temperature
+                  : MNEMONIC_SHAPE.temperature
+              )}
+              onChange={chooseTemperature('mnemonic')}
+            />
+            <Dropdown
+              label="Zapis fonetyczny"
+              value={temperatureValue(temperatures.phonetic)}
+              options={temperatureOptions(PHONETIC_SHAPE.temperature)}
+              onChange={chooseTemperature('phonetic')}
+            />
+          </View>
         ) : null}
 
         {hasCloudflare(keys) || hasGemini(keys) ? (

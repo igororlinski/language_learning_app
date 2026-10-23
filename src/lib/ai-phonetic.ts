@@ -1,5 +1,5 @@
 import type { AiKeys } from '@/lib/ai-keys';
-import { PHONETIC_SHAPE, phoneticPrompt } from '@/lib/ai-prompts';
+import { PHONETIC_SHAPE, phoneticPrompt, withTemperature } from '@/lib/ai-prompts';
 import { writeText } from '@/lib/ai-text';
 import { AiError, type TextSource } from '@/lib/ai-transport';
 import { languageEnglish } from '@/lib/languages';
@@ -28,7 +28,8 @@ export async function requestPhonetic(
   text: string,
   language: string,
   source: TextSource,
-  keys: AiKeys
+  keys: AiKeys,
+  temperature: number | null = null
 ): Promise<string> {
   const said = text.trim().replace(/\s+/g, ' ').slice(0, MAX_SPEECH_LENGTH);
 
@@ -36,7 +37,7 @@ export async function requestPhonetic(
 
   const answer = await writeText(
     phoneticPrompt({ text: said, language: languageEnglish(language) }),
-    PHONETIC_SHAPE,
+    withTemperature(PHONETIC_SHAPE, temperature),
     source,
     keys
   );

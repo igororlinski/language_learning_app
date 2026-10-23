@@ -1,5 +1,10 @@
 import type { AiKeys } from '@/lib/ai-keys';
-import { LOCAL_MNEMONIC_SHAPE, MNEMONIC_SHAPE, mnemonicPrompt } from '@/lib/ai-prompts';
+import {
+  LOCAL_MNEMONIC_SHAPE,
+  MNEMONIC_SHAPE,
+  mnemonicPrompt,
+  withTemperature,
+} from '@/lib/ai-prompts';
 import { writeText } from '@/lib/ai-text';
 import { AiError, type TextSource } from '@/lib/ai-transport';
 import { languageByEnglish } from '@/lib/languages';
@@ -63,7 +68,8 @@ export type MnemonicRequest = {
  *   only work together: 8–11 good Polish keywords on nine words instead of
  *   1–2, each alone about 3. The sound is Polish spelling, so it goes only
  *   when that first language is Polish;
- * - **temperature 0.7**, which is what that shape was measured at.
+ * - **temperature 0.7**, which is what that shape was measured at — unless
+ *   the user set their own.
  *
  * The cost is the ranking: LM Studio no longer reaches into a second language
  * on its own. "Przegeneruj w: …" still asks in that one language — with no
@@ -96,12 +102,14 @@ function forLocalModel(languages: string[], term: string, request: MnemonicReque
  * a single answer, not three.
  *
  * `source` is who writes them — the setting on the "Ustawienia AI" screen —
- * and `keys` are the user's own.
+ * and `keys` are the user's own. `temperature` is the user's from the same
+ * screen; null keeps the provider's default.
  */
 export async function requestMnemonics(
   request: MnemonicRequest,
   source: TextSource,
-  keys: AiKeys
+  keys: AiKeys,
+  temperature: number | null = null
 ): Promise<Mnemonic[]> {
   // Both halves are the input. A sound-alike needs a word to sound like, and a
   // scene needs a meaning to be about — so this is refused before the network,
@@ -125,7 +133,8 @@ export async function requestMnemonics(
     sounds: local?.sounds,
   });
 
-  const text = await writeText(prompt, local ? LOCAL_MNEMONIC_SHAPE : MNEMONIC_SHAPE, source, keys);
+  const shape = withTemperature(local ? LOCAL_MNEMONIC_SHAPE : MNEMONIC_SHAPE, temperature);
+  const text = await writeText(prompt, shape, source, keys);
   const mnemonics = parseMnemonicList(text);
 
   // The model answered, but not with an association. Its own words go into the

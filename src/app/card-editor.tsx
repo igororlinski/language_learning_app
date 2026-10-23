@@ -38,6 +38,7 @@ import {
   newCardSpeech,
   setCardTagNames,
   textSourceFrom,
+  textTemperaturesFrom,
   updateCard,
 } from '@/db/queries';
 import type { FieldKind, FieldSide, PictureQuality } from '@/db/schema';
@@ -215,6 +216,7 @@ export default function CardEditorScreen() {
   const aiKeys = useAiKeys() ?? NO_KEYS;
   const { data: settingsRows } = useLiveQuery(appSettingsQuery());
   const textSource = textSourceFrom(settingsRows);
+  const temperatures = textTemperaturesFrom(settingsRows);
   const textBlocked = textBlocker(aiKeys, textSource);
   const drawBlocked = drawBlocker(aiKeys);
   const [adding, setAdding] = useState(false);
@@ -398,7 +400,7 @@ export default function CardEditorScreen() {
     setGenerating({ key, label: 'Piszę zapis fonetyczny…' });
 
     try {
-      set(await requestPhonetic(text, language, textSource, aiKeys));
+      set(await requestPhonetic(text, language, textSource, aiKeys, temperatures.phonetic));
     } catch (error) {
       // Thrown from a handler, where the error boundary cannot reach it.
       Alert.alert(
@@ -742,7 +744,8 @@ export default function CardEditorScreen() {
         termPhonetic: backPhonetic,
       },
       textSource,
-      aiKeys
+      aiKeys,
+      temperatures.mnemonic
     );
 
   const proposeMnemonic = async (key: string) => {
@@ -1384,7 +1387,7 @@ export default function CardEditorScreen() {
       const language = phoneticTemplate.front;
 
       jobs.push(
-        requestPhonetic(front, language, textSource, aiKeys).then((ipa) => {
+        requestPhonetic(front, language, textSource, aiKeys, temperatures.phonetic).then((ipa) => {
           filledFront = ipa;
         })
       );
@@ -1394,7 +1397,7 @@ export default function CardEditorScreen() {
       const language = phoneticTemplate.back;
 
       jobs.push(
-        requestPhonetic(back, language, textSource, aiKeys).then((ipa) => {
+        requestPhonetic(back, language, textSource, aiKeys, temperatures.phonetic).then((ipa) => {
           filledBack = ipa;
         })
       );
@@ -1408,7 +1411,13 @@ export default function CardEditorScreen() {
       const { key } = row;
 
       jobs.push(
-        requestPhonetic(row.value, row.phoneticLanguage, textSource, aiKeys).then((ipa) => {
+        requestPhonetic(
+          row.value,
+          row.phoneticLanguage,
+          textSource,
+          aiKeys,
+          temperatures.phonetic
+        ).then((ipa) => {
           filledRows = filledRows.map((item) =>
             item.kind === 'extra' && item.key === key ? { ...item, phonetic: ipa } : item
           );

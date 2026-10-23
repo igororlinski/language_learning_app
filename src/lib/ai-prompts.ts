@@ -130,6 +130,46 @@ export const MNEMONIC_SHAPE: Shape = {
  */
 export const LOCAL_MNEMONIC_SHAPE: Shape = { ...MNEMONIC_SHAPE, temperature: 0.7 };
 
+/* ------------------------------------------------- the user's temperature */
+
+/**
+ * The temperatures the user set on "Ustawienia AI", one per kind of request.
+ * Null is "the default" — and the default is not one number: associations are
+ * asked at 0.95 in the cloud and 0.7 on LM Studio, each for its own measured
+ * reason. A setting replaces whichever default would have applied.
+ */
+export type TextTemperatures = { mnemonic: number | null; phonetic: number | null };
+
+export const DEFAULT_TEMPERATURES: TextTemperatures = { mnemonic: null, phonetic: null };
+
+/**
+ * What the user may pick. Gemini takes 0–2 and Workers AI more, but above 1.5
+ * the answers stop being JSON often enough that the readers would throw most
+ * of them away — a setting that mostly produces errors is not a setting.
+ */
+export const TEMPERATURE_CHOICES: readonly number[] = Array.from({ length: 16 }, (_, i) => i / 10);
+
+const MAX_TEMPERATURE = 1.5;
+
+/** A stored temperature, or null for anything that is not a usable one. */
+export function parseTemperature(value: string | null | undefined): number | null {
+  if (value == null || value.trim() === '') return null;
+
+  const temperature = Number(value);
+
+  if (!Number.isFinite(temperature) || temperature < 0 || temperature > MAX_TEMPERATURE) return null;
+
+  return Math.round(temperature * 100) / 100;
+}
+
+/** The shape at the user's temperature, or untouched when they left the default. */
+export const withTemperature = (shape: Shape, temperature: number | null | undefined): Shape =>
+  temperature == null ? shape : { ...shape, temperature };
+
+/** `0,7`, `0,95`, `1,0` — the way a Polish screen writes it. */
+export const formatTemperature = (temperature: number): string =>
+  temperature.toFixed(Math.round(temperature * 100) % 10 === 0 ? 1 : 2).replace('.', ',');
+
 /** One language for the prompt, or an honest "unknown". */
 const languagePhrase = (name: string) => name || 'unknown';
 

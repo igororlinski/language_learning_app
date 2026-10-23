@@ -321,6 +321,31 @@ check(
 );
 check('i z dawna temperatura', cloudBody.generationConfig?.temperature, 0.95);
 
+group('Temperatura ustawiona przez uzytkownika');
+
+const cloudWarm = await withStub(geminiSays(good), () =>
+  requestMnemonics(chave, CLOUD_TEXT, KEYS, 1.2)
+);
+
+check(
+  'Gemini dostaje temperature uzytkownika',
+  (bodyOf(cloudWarm.sent) as { generationConfig?: { temperature?: number } }).generationConfig
+    ?.temperature,
+  1.2
+);
+
+const localCold = await withStub(
+  { status: 200, body: { choices: [{ message: { content: good } }] } },
+  () => requestMnemonics(chave, LM_SOURCE, LM_KEYS, 0)
+);
+
+// Zero is a temperature, not "unset": it must not fall back to 0.7.
+check(
+  'LM Studio tez, a zero to zero',
+  (bodyOf(localCold.sent) as { temperature?: number }).temperature,
+  0
+);
+
 /** The failure a request rejects with. */
 async function refusalOf(call: () => Promise<unknown>) {
   try {
