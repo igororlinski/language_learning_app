@@ -3,10 +3,11 @@ import { Modal, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/button';
+import { OptionPicker, type PickerOption } from '@/components/option-picker';
 import { SegmentedControl, type Segment } from '@/components/segmented-control';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
-import type { FieldKind, FieldSide } from '@/db/schema';
+import { DEFAULT_PICTURE_QUALITY, type FieldKind, type FieldSide, type PictureQuality } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
 
 const SIDES: Segment<FieldSide>[] = [
@@ -14,35 +15,187 @@ const SIDES: Segment<FieldSide>[] = [
   { value: 'back', label: 'Tył' },
 ];
 
-const KINDS: Segment<FieldKind>[] = [
+/**
+ * A list rather than a row of segments: the labels are Polish phrases, and a
+ * row of chips would truncate them on a phone.
+ *
+ * **"Obraz AI" was removed here on 2026-09-07.** It drew a picture from one of
+ * the card's texts, which "Skojarzenie" does as part of doing something much
+ * more useful — and once the association could be made without a picture at
+ * all, the two were the same field with different amounts of help. The kind
+ * still exists in the schema and fields already made with it still work; it is
+ * simply not offered any more.
+ *
+ * **"Wymowa" went the same way on 2026-09-09**, a day after it arrived. Reading
+ * a word out loud is not a field: it is something a text on the card *does*.
+ * Any text field — the question and the answer included — is now given a voice
+ * from its own gear, which puts the loudspeaker under the words it reads
+ * instead of on a line that says nothing about what it belongs to.
+ *
+ * The association sits apart and wears the warm background the card's own
+ * question and answer wear. It is not one more container for a file: it is the
+ * one field that invents its own contents, and the reason this app has a
+ * language model at all.
+ */
+const KINDS: PickerOption<FieldKind>[] = [
   { value: 'text', label: 'Tekst' },
   { value: 'audio', label: 'Dźwięk' },
   { value: 'image', label: 'Obraz' },
   { value: 'video', label: 'Wideo' },
+  {
+    value: 'mnemonic',
+    label: 'Skojarzenie',
+    hint: 'Słowo o podobnym brzmieniu do odpowiedzi i obrazek, który łączy je ze znaczeniem.',
+    highlight: true,
+  },
+];
+
+/** What an association is made of — asked as soon as the kind is chosen. */
+const MNEMONIC_MODES: PickerOption<'picture' | 'text'>[] = [
+  { value: 'picture', label: 'Obraz i skojarzenie' },
+  { value: 'text', label: 'Samo skojarzenie' },
+];
+
+/**
+ * How much of the association the card carries.
+ *
+ * The model invents both halves at once — the sound-alike word and a sentence
+ * putting it together with the meaning — so this costs nothing either way and
+ * is switchable later. The sentence explains the link; the word alone is what
+ * some people would rather see once they already know the link.
+ */
+const MNEMONIC_TEXTS: PickerOption<'sentence' | 'word'>[] = [
+  { value: 'sentence', label: 'Całe zdanie' },
+  { value: 'word', label: 'Sam wyraz' },
+];
+
+/**
+ * How carefully the picture is drawn — the one choice here with a price.
+ *
+ * The labels alone would not carry it: „dokładny" and „szybki" say nothing
+ * about five times the wait, and that is the whole trade. This is what option
+ * hints are for.
+ */
+const MNEMONIC_QUALITY: PickerOption<PictureQuality>[] = [
+  { value: 'accurate', label: 'Dokładny', hint: 'Wypełnia kadr. Kilkanaście sekund.' },
+  { value: 'fast', label: 'Szybki', hint: 'Mniejszy rysunek w kadrze. Kilka sekund.' },
 ];
 
 export type AddFieldSheetProps = {
   visible: boolean;
   onClose: () => void;
-  onAdd: (choice: { side: FieldSide; kind: FieldKind }) => void;
+  onAdd: (choice: {
+    side: FieldSide;
+    kind: FieldKind;
+    withPicture: boolean;
+    asWord: boolean;
+    quality: PictureQuality;
+  }) => void;
+  /**
+   * Whether picking the association also asks what it should be made of. The
+   * deck editor arranges empty slots for future cards and generates nothing,
+   * so there the question would have no answer worth keeping.
+   */
+  askMode?: boolean;
+  /**
+   * Which way the picture question opens — the deck's standing preference, so
+   * that the usual answer costs nothing and only the exception is a tap.
+   *
+   * The sheet returns to it every time it closes: a field drawn quickly "just
+   * this once" must not quietly become the answer for every field after it.
+   */
+  defaultQuality?: PictureQuality;
+  /**
+   * Why an association cannot be made right now — no key for a language model
+   * yet — or null when it can. The option then stays on the list, greyed out
+   * with this reason, rather than vanishing as if the feature did not exist.
+   * Only asked when `askMode` is on: an empty slot in a deck's template is
+   * generated by nobody, so it needs no key.
+   */
+  mnemonicBlocked?: string | null;
+  /** The same for the picture half: no Cloudflare key, no drawing. */
+  pictureBlocked?: string | null;
 };
 
 /**
  * The small menu behind the "+" button: which side the new field goes on and
  * what it holds. The kind is decided here and never again — a field is a text
  * box or a slot for one kind of file for its whole life, so the editors never
- * have to make sense of a half-converted one.
+ * have to make sense of a half-converted one. That includes how it gets filled:
+ * "Obraz" takes a file off the phone, "Skojarzenie" writes its own text and
+ * draws its own picture out of the card's two texts at once.
+ *
+ * Picking the association asks two more questions, on a second step of the
+ * same sheet: what it is made of, and how much of it the card carries. They
+ * come after "Dodaj pole" rather than under the list of kinds because they are
+ * not part of choosing a kind — they are the first two decisions about a field
+ * that already exists, and a sheet that grows by four rows the moment one of
+ * six options is touched is a sheet nobody can predict the size of.
+ *
+ * The step swaps the sheet's contents rather than opening a second Modal:
+ * replacing one Modal with another in the same frame drops the animation on
+ * Android, which is the same reason `ActionSheet` grew its `keepOpen`.
  */
-export function AddFieldSheet({ visible, onClose, onAdd }: AddFieldSheetProps) {
+export function AddFieldSheet({
+  visible,
+  onClose,
+  onAdd,
+  askMode = true,
+  defaultQuality = DEFAULT_PICTURE_QUALITY,
+  mnemonicBlocked = null,
+  pictureBlocked = null,
+}: AddFieldSheetProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
 
   const [side, setSide] = useState<FieldSide>('front');
   const [kind, setKind] = useState<FieldKind>('text');
+  const [mode, setMode] = useState<'picture' | 'text'>('picture');
+  const [text, setText] = useState<'sentence' | 'word'>('sentence');
+  const [drawing, setDrawing] = useState<PictureQuality>(defaultQuality);
+
+  /** Which half of the sheet is showing: the field, or the association's own two questions. */
+  const [asking, setAsking] = useState(false);
+
+  const kinds = askMode
+    ? KINDS.map((option) =>
+        option.value === 'mnemonic' && mnemonicBlocked
+          ? { ...option, hint: mnemonicBlocked, disabled: true }
+          : option
+      )
+    : KINDS;
+
+  const modes = MNEMONIC_MODES.map((option) =>
+    option.value === 'picture' && pictureBlocked
+      ? { ...option, hint: pictureBlocked, disabled: true }
+      : option
+  );
+
+  // Without a way to draw, the association is the sentence alone, whatever was
+  // picked the last time the sheet was open.
+  const madeOf = pictureBlocked ? 'text' : mode;
+
+  const close = () => {
+    setAsking(false);
+    setDrawing(defaultQuality);
+    onClose();
+  };
 
   const add = () => {
-    onClose();
-    onAdd({ side, kind });
+    // The association is the one kind with anything left to decide.
+    if (askMode && kind === 'mnemonic' && !asking) {
+      setAsking(true);
+      return;
+    }
+
+    close();
+    onAdd({
+      side,
+      kind,
+      withPicture: madeOf === 'picture',
+      asWord: text === 'word',
+      quality: drawing,
+    });
   };
 
   return (
@@ -51,8 +204,8 @@ export function AddFieldSheet({ visible, onClose, onAdd }: AddFieldSheetProps) {
       transparent
       animationType="fade"
       statusBarTranslucent
-      onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
+      onRequestClose={close}>
+      <Pressable style={styles.backdrop} onPress={close}>
         {/* Swallows taps so they do not reach the backdrop behind the sheet. */}
         <Pressable
           onPress={() => {}}
@@ -65,34 +218,57 @@ export function AddFieldSheet({ visible, onClose, onAdd }: AddFieldSheetProps) {
           ]}>
           <View style={[styles.grabber, { backgroundColor: theme.border }]} />
 
-          <ThemedText style={styles.title}>Nowe pole</ThemedText>
+          <ThemedText style={styles.title}>{asking ? 'Skojarzenie' : 'Nowe pole'}</ThemedText>
 
-          <View style={styles.choice}>
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              Strona karty
-            </ThemedText>
-            <SegmentedControl
-              value={side}
-              options={SIDES}
-              onChange={setSide}
-              accessibilityLabel="Strona nowego pola"
-            />
-          </View>
+          {asking ? (
+            <>
+              <OptionPicker
+                label="Co ma powstać"
+                value={madeOf}
+                options={modes}
+                onChange={setMode}
+              />
+              <OptionPicker
+                label="Skojarzenie jako"
+                value={text}
+                options={MNEMONIC_TEXTS}
+                onChange={setText}
+              />
 
-          <View style={styles.choice}>
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              Rodzaj pola
-            </ThemedText>
-            <SegmentedControl
-              value={kind}
-              options={KINDS}
-              onChange={setKind}
-              accessibilityLabel="Rodzaj nowego pola"
-            />
-          </View>
+              {/* Only when there is a picture to draw. A field made of the
+                  sentence alone has nothing to be quick or careful about. */}
+              {madeOf === 'picture' ? (
+                <OptionPicker
+                  label="Obraz"
+                  value={drawing}
+                  options={MNEMONIC_QUALITY}
+                  onChange={setDrawing}
+                />
+              ) : null}
 
-          <Button title="Dodaj pole" onPress={add} />
-          <Button title="Anuluj" variant="ghost" onPress={onClose} />
+              <Button title="Dodaj pole" onPress={add} />
+              <Button title="Wstecz" variant="ghost" onPress={() => setAsking(false)} />
+            </>
+          ) : (
+            <>
+              <View style={styles.choice}>
+                <ThemedText type="smallBold" themeColor="textSecondary">
+                  Strona karty
+                </ThemedText>
+                <SegmentedControl
+                  value={side}
+                  options={SIDES}
+                  onChange={setSide}
+                  accessibilityLabel="Strona nowego pola"
+                />
+              </View>
+
+              <OptionPicker label="Rodzaj pola" value={kind} options={kinds} onChange={setKind} />
+
+              <Button title={askMode && kind === 'mnemonic' ? 'Dalej' : 'Dodaj pole'} onPress={add} />
+              <Button title="Anuluj" variant="ghost" onPress={close} />
+            </>
+          )}
         </Pressable>
       </Pressable>
     </Modal>

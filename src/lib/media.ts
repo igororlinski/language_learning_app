@@ -7,9 +7,21 @@ import type { FieldKind } from '@/db/schema';
  */
 
 /** A field kind that holds a file rather than typed text. */
-export type MediaKind = Extract<FieldKind, 'audio' | 'image' | 'video'>;
+export type MediaKind = Extract<FieldKind, 'audio' | 'image' | 'video' | 'ai-image' | 'mnemonic'>;
 
-const MEDIA_KINDS: readonly FieldKind[] = ['audio', 'image', 'video'];
+const MEDIA_KINDS: readonly FieldKind[] = ['audio', 'image', 'video', 'ai-image', 'mnemonic'];
+
+/**
+ * The kinds whose file is generated rather than picked. They are media in every
+ * other respect — copied, deleted and rendered by the same code — so the only
+ * thing this decides is which fields offer a file picker and which offer a
+ * "generate" button.
+ */
+const GENERATED_KINDS: readonly FieldKind[] = ['ai-image', 'mnemonic'];
+
+export function isGeneratedKind(kind: FieldKind): kind is MediaKind {
+  return GENERATED_KINDS.includes(kind);
+}
 
 export function isMediaKind(kind: FieldKind): kind is MediaKind {
   return MEDIA_KINDS.includes(kind);
@@ -24,6 +36,8 @@ export const MEDIA_DIRECTORIES: Record<MediaKind, string> = {
   audio: 'card-audio',
   image: 'card-images',
   video: 'card-videos',
+  'ai-image': 'card-ai-images',
+  mnemonic: 'card-mnemonics',
 };
 
 /**
@@ -39,6 +53,10 @@ export const MEDIA_LIMITS: Record<MediaKind, number> = {
   audio: 5 * 1024 * 1024,
   image: 10 * 1024 * 1024,
   video: 25 * 1024 * 1024,
+  // Nothing picks these two, so the limit is a sanity check on what came back
+  // over the network rather than a guard against a careless choice.
+  'ai-image': 10 * 1024 * 1024,
+  mnemonic: 10 * 1024 * 1024,
 };
 
 /** What the system picker is asked for. */
@@ -46,6 +64,11 @@ export const MEDIA_MIME_TYPES: Record<MediaKind, string> = {
   audio: 'audio/*',
   image: 'image/*',
   video: 'video/*',
+  // Unused today — a generated field has no picker. They are here because the
+  // record covers every kind, and because letting a generated picture be
+  // replaced by a chosen one is the obvious next thing to want.
+  'ai-image': 'image/*',
+  mnemonic: 'image/*',
 };
 
 export function withinSizeLimit(kind: MediaKind, bytes: number | undefined): boolean {
@@ -72,6 +95,9 @@ const FALLBACK_EXTENSIONS: Record<MediaKind, string> = {
   audio: 'm4a',
   image: 'jpg',
   video: 'mp4',
+  // FLUX hands back JPEG, and nothing else writes these two.
+  'ai-image': 'jpg',
+  mnemonic: 'jpg',
 };
 
 /**
@@ -98,6 +124,8 @@ export const MEDIA_FALLBACK_LABELS: Record<MediaKind, string> = {
   audio: 'Nagranie',
   image: 'Obraz',
   video: 'Wideo',
+  'ai-image': 'Obraz AI',
+  mnemonic: 'Skojarzenie',
 };
 
 /** The word for a kind inside a sentence: "Przód — pole 1 — dźwięk". */
@@ -105,6 +133,22 @@ export const MEDIA_NOUNS: Record<MediaKind, string> = {
   audio: 'dźwięk',
   image: 'obraz',
   video: 'wideo',
+  'ai-image': 'obraz AI',
+  mnemonic: 'skojarzenie',
+};
+
+/**
+ * The word for **any** kind of field, media or not — "Przód — pole 1 — wymowa".
+ *
+ * `MEDIA_NOUNS` covers only the kinds that hold a file, and since 2026-09-08
+ * there is a kind that holds neither a file nor text on the card (`speech`).
+ * The editors label every row, so they need a word for every kind; the media
+ * ones are reused rather than retyped so the two lists cannot drift.
+ */
+export const FIELD_NOUNS: Record<FieldKind, string> = {
+  text: 'tekst',
+  speech: 'wymowa',
+  ...MEDIA_NOUNS,
 };
 
 /** The same word in the genitive, for messages built as "Nie dodano …". */
@@ -112,6 +156,8 @@ export const MEDIA_NOUNS_GENITIVE: Record<MediaKind, string> = {
   audio: 'dźwięku',
   image: 'obrazu',
   video: 'wideo',
+  'ai-image': 'obrazu AI',
+  mnemonic: 'skojarzenia',
 };
 
 /** Shown in place of a field whose file is gone. */
@@ -119,6 +165,8 @@ export const MEDIA_MISSING_LABELS: Record<MediaKind, string> = {
   audio: 'Brak pliku dźwiękowego',
   image: 'Brak pliku obrazu',
   video: 'Brak pliku wideo',
+  'ai-image': 'Brak wygenerowanego obrazu',
+  mnemonic: 'Brak obrazu skojarzenia',
 };
 
 /** The label a media field shows: its original file name, or a fallback. */

@@ -1,0 +1,139 @@
+{
+ "words": [
+  {
+   "term": "janela",
+   "termLanguage": "Portuguese (European)",
+   "meaning": "okno",
+   "meaningLanguages": [
+    "Polish",
+    "English"
+   ]
+  },
+  {
+   "term": "queijo",
+   "termLanguage": "Portuguese (European)",
+   "meaning": "ser",
+   "meaningLanguages": [
+    "Polish",
+    "English"
+   ]
+  },
+  {
+   "term": "sapato",
+   "termLanguage": "Portuguese (European)",
+   "meaning": "but",
+   "meaningLanguages": [
+    "Polish",
+    "English"
+   ]
+  },
+  {
+   "term": "cozinha",
+   "termLanguage": "Portuguese (European)",
+   "meaning": "kuchnia",
+   "meaningLanguages": [
+    "Polish",
+    "English"
+   ]
+  },
+  {
+   "term": "cavalo",
+   "termLanguage": "Portuguese (European)",
+   "meaning": "koń",
+   "meaningLanguages": [
+    "Polish",
+    "English"
+   ]
+  },
+  {
+   "term": "borboleta",
+   "termLanguage": "Portuguese (European)",
+   "meaning": "motyl",
+   "meaningLanguages": [
+    "Polish",
+    "English"
+   ]
+  },
+  {
+   "term": "chave",
+   "termLanguage": "Portuguese (European)",
+   "meaning": "klucz",
+   "meaningLanguages": [
+    "Polish",
+    "English"
+   ]
+  },
+  {
+   "term": "perro",
+   "termLanguage": "Spanish",
+   "meaning": "pies",
+   "meaningLanguages": [
+    "Polish",
+    "English"
+   ]
+  },
+  {
+   "term": "mantequilla",
+   "termLanguage": "Spanish",
+   "meaning": "masło",
+   "meaningLanguages": [
+    "Polish",
+    "English"
+   ]
+  }
+ ],
+ "configs": [
+  {
+   "name": "P2-ctrl",
+   "temperature": 0.7,
+   "reasoning": "none"
+  },
+  {
+   "name": "P2-polishOnly",
+   "temperature": 0.7,
+   "reasoning": "none",
+   "polishOnly": true
+  },
+  {
+   "name": "P2-sounds",
+   "temperature": 0.7,
+   "reasoning": "none",
+   "sounds": true
+  },
+  {
+   "name": "P2-sounds+pl",
+   "temperature": 0.7,
+   "reasoning": "none",
+   "sounds": true,
+   "polishOnly": true
+  },
+  {
+   "name": "P2-short",
+   "temperature": 0.7,
+   "reasoning": "none",
+   "short": true
+  },
+  {
+   "name": "P2-short+pl+sounds",
+   "temperature": 0.7,
+   "reasoning": "none",
+   "short": true,
+   "polishOnly": true,
+   "sounds": true
+  },
+  {
+   "name": "P2-six",
+   "temperature": 0.7,
+   "reasoning": "none",
+   "six": true
+  },
+  {
+   "name": "P2-six+pl+sounds",
+   "temperature": 0.7,
+   "reasoning": "none",
+   "six": true,
+   "polishOnly": true,
+   "sounds": true
+  }
+ ]
+}

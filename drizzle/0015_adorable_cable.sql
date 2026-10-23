@@ -1,0 +1,1 @@
+ALTER TABLE `card_fields` ADD `mnemonic` text;

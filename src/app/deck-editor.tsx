@@ -4,24 +4,31 @@ import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
+import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { AddFieldSheet } from '@/components/add-field-sheet';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
+import { SpeakerIcon } from '@/components/icons';
+import { keptSpeech, PHONETIC_DEFAULT_LABELS, speechMenu } from '@/components/speech-menu';
 import { Dropdown, type DropdownOption } from '@/components/dropdown';
+import { LanguageSheet } from '@/components/language-sheet';
 import { OptionPicker, type PickerOption } from '@/components/option-picker';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
-import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
   createDeck,
+  DEFAULT_TEMPLATE_NAME,
   deckMediaFiles,
+  deckTemplates,
   deleteDeck,
   getDeck,
   newCardFields,
   newCardLayout,
   stabilitySamples,
-  syncDeckSlots,
+  syncDeckTemplates,
   updateDeck,
+  type TemplateInput,
 } from '@/db/queries';
 import {
   type FieldKind,
@@ -29,12 +36,21 @@ import {
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
   DEFAULT_NEW_PER_DAY,
+  DEFAULT_PICTURE_QUALITY,
   DEFAULT_REVIEWS_PER_DAY,
   type NewCardOrder,
   type NewCardPlacement,
+  type PictureQuality,
 } from '@/db/schema';
 import { useTheme } from '@/hooks/use-theme';
-import { MEDIA_NOUNS } from '@/lib/media';
+import {
+  dedupeLanguages,
+  languageLabel,
+  parseLanguage,
+  parseLanguages,
+} from '@/lib/languages';
+import { FIELD_NOUNS } from '@/lib/media';
+import type { SpeechScope } from '@/lib/speech';
 import {
   DEFAULT_LEARNING_STEPS,
   DEFAULT_MAXIMUM_INTERVAL,
@@ -87,6 +103,27 @@ const PLACEMENT_OPTIONS: PickerOption<NewCardPlacement>[] = [
     value: 'after',
     label: 'Po powtórkach',
     hint: 'Najpierw zaległe powtórki, nowe karty na koniec.',
+  },
+];
+
+/**
+ * Which way this deck's generated pictures lean.
+ *
+ * The labels alone would not carry it — „dokładny" and „szybki" say nothing
+ * about five times the wait, and that is the whole trade. The card editor asks
+ * the same question with the same words when a field is made, so that changing
+ * your mind there is recognisably the same decision.
+ */
+const QUALITY_OPTIONS: PickerOption<PictureQuality>[] = [
+  {
+    value: 'accurate',
+    label: 'Dokładne',
+    hint: 'Rysunek wypełnia kadr. Kilkanaście sekund na obraz.',
+  },
+  {
+    value: 'fast',
+    label: 'Szybkie',
+    hint: 'Mniejszy rysunek w kadrze. Kilka sekund.',
   },
 ];
 
@@ -151,6 +188,17 @@ export default function DeckEditorScreen() {
   const existing = useMemo(() => (deckId ? getDeck(deckId) : undefined), [deckId]);
 
   const [name, setName] = useState(existing?.name ?? '');
+  const [frontLanguages, setFrontLanguages] = useState(() =>
+    parseLanguages(existing?.frontLanguages)
+  );
+  const [backLanguage, setBackLanguage] = useState<string | null>(() =>
+    parseLanguage(existing?.backLanguages)
+  );
+  /** Which of the two lists the sheet is editing, or null while it is closed. */
+  const [languageSheet, setLanguageSheet] = useState<'front' | 'back' | null>(null);
+  const [imageQuality, setImageQuality] = useState<PictureQuality>(
+    existing?.imageQuality ?? DEFAULT_PICTURE_QUALITY
+  );
   const [description, setDescription] = useState(existing?.description ?? '');
   const [newPerDay, setNewPerDay] = useState(String(existing?.newPerDay ?? DEFAULT_NEW_PER_DAY));
   const [reviewsPerDay, setReviewsPerDay] = useState(
@@ -243,17 +291,203 @@ export default function DeckEditorScreen() {
     isValidSteps(learningSteps) &&
     isValidSteps(relearningSteps) &&
     (!customInterval || typedDays !== null);
-  // The deck's default card, arranged in the very same list the card editor
-  // uses — only the boxes hold no text, because a template has none.
-  const [rows, setRows] = useState<Row[]>(() =>
-    deckId
-      ? buildRows(newCardLayout(deckId), newCardFields(deckId))
-      : buildRows(DEFAULT_PLACEMENT, [])
-  );
+  /**
+   * The ways a new card in this deck can start, each arranged in the very same
+   * list the card editor uses — only the boxes hold no text, because a
+   * template has none.
+   *
+   * Every template keeps its own layout, its own voices and transcription
+   * languages for the two mandatory fields, and its own empty slots on its
+   * rows. One is open at a time; the rest of this screen reads and writes the
+   * open one through `rows`, `newFrontSpeech` and their siblings below, which
+   * is what let the single default become several without the list, the gear
+   * or the save having to learn about more than one.
+   */
+  const [templates, setTemplates] = useState<TemplateDraft[]>(() => {
+    const stored = deckId ? deckTemplates(deckId) : [];
+
+    if (stored.length === 0) return [blankTemplate('template-0', DEFAULT_TEMPLATE_NAME)];
+
+    return stored.map((template) => ({
+      key: `template-${template.id}`,
+      name: template.name,
+      rows: buildRows(
+        newCardLayout(template.deckId, template.id),
+        newCardFields(template.deckId, template.id)
+      ),
+      frontSpeech: template.frontSpeech,
+      backSpeech: template.backSpeech,
+      frontPhonetic: template.frontPhoneticLanguage,
+      backPhonetic: template.backPhoneticLanguage,
+    }));
+  });
+
+  const [activeKey, setActiveKey] = useState(() => templates[0].key);
+  const active = templates.find((template) => template.key === activeKey) ?? templates[0];
+
+  /** Changes the open template, and only it. */
+  const updateActive = (change: (template: TemplateDraft) => TemplateDraft) =>
+    setTemplates((current) =>
+      current.map((template) => (template.key === active.key ? change(template) : template))
+    );
+
+  const rows = active.rows;
+  const setRows = (next: Row[] | ((current: Row[]) => Row[])) =>
+    updateActive((template) => ({
+      ...template,
+      rows: typeof next === 'function' ? next(template.rows) : next,
+    }));
+
+  /**
+   * What a new card made from the open template starts out reading aloud.
+   *
+   * The two mandatory fields keep theirs here, beside the template's other
+   * defaults; every empty slot keeps its own on its row, exactly as a card's
+   * extra fields do. Setting "the answer is always read in Portuguese" once is
+   * the whole point — doing it on card after card is the chore nobody keeps up
+   * with.
+   */
+  const newFrontSpeech = active.frontSpeech;
+  const newBackSpeech = active.backSpeech;
+  const setNewFrontSpeech = (code: string | null) =>
+    updateActive((template) => ({ ...template, frontSpeech: code }));
+  const setNewBackSpeech = (code: string | null) =>
+    updateActive((template) => ({ ...template, backSpeech: code }));
+
+  /**
+   * Which language a new card's mandatory fields get transcribed in when it is
+   * saved. Beside the voices because it is the same kind of default, set the
+   * same way; the slots keep theirs on their rows.
+   */
+  const newFrontPhonetic = active.frontPhonetic;
+  const newBackPhonetic = active.backPhonetic;
+  const setNewFrontPhonetic = (code: string | null) =>
+    updateActive((template) => ({ ...template, frontPhonetic: code }));
+  const setNewBackPhonetic = (code: string | null) =>
+    updateActive((template) => ({ ...template, backPhonetic: code }));
+
+  /** Template keys handed out here, so a new one never collides with a stored one. */
+  const nextTemplate = useRef(0);
+
+  /**
+   * A new template, either empty or a copy of the open one — a deck's second
+   * way of starting a card is most often its first with one field more.
+   */
+  const addTemplate = (copy: boolean) => {
+    nextTemplate.current += 1;
+
+    const key = `template-new-${nextTemplate.current}`;
+    const name = `Szablon ${templates.length + 1}`;
+    const made: TemplateDraft = copy
+      ? { ...active, key, name: `${active.name} — kopia` }
+      : blankTemplate(key, name);
+
+    setTemplates((current) => [...current, made]);
+    setActiveKey(key);
+  };
+
+  /** Takes the open template away; the deck always keeps at least one. */
+  const removeActiveTemplate = () => {
+    if (templates.length < 2) return;
+
+    const left = templates.filter((template) => template.key !== active.key);
+
+    setTemplates(left);
+    setActiveKey(left[0].key);
+  };
+
+  /** What the open gear offers, or null when it is closed. */
+  const [options, setOptions] = useState<{ title: string; actions: SheetAction[] } | null>(null);
 
   const nextKey = useRef(0);
   const [adding, setAdding] = useState(false);
   const info = describeRows(rows, BASE_LABELS);
+
+  /**
+   * What this deck declares **right now, in this form** — not what is stored.
+   *
+   * Languages and voices are set in one sitting: picking „portugalski" and then
+   * saying the answer should be read aloud has to work without saving and
+   * reopening in between.
+   */
+  const formLanguages = useMemo(
+    () => ({ front: frontLanguages, back: backLanguage }),
+    [frontLanguages, backLanguage]
+  );
+
+  /** Only text is read aloud; a slot for a file has nothing to say. */
+  const speechScope = (kind: FieldKind): SpeechScope | null =>
+    kind === 'text' ? 'free' : kind === 'mnemonic' ? 'mnemonic' : null;
+
+  /**
+   * The gear, and beside it the language it will start cards out in.
+   *
+   * No "listen" button here, unlike the card editor: a template holds no words,
+   * so there would be nothing to play. The language is a label rather than a
+   * control — the gear is what changes it.
+   */
+  const speechControls = (
+    label: string,
+    scope: SpeechScope,
+    current: string | null,
+    set: (code: string | null) => void,
+    phonetic: string | null,
+    setPhonetic: (code: string | null) => void
+  ) => (
+    <View style={styles.speech}>
+      {current ? (
+        <View style={styles.speakLabel}>
+          <SpeakerIcon size={13} color={theme.accent} />
+          <ThemedText type="small" style={{ color: theme.accent }}>
+            {languageLabel(current)}
+          </ThemedText>
+        </View>
+      ) : null}
+
+      {/* The same kind of label for the transcription a new card will get. */}
+      {phonetic ? (
+        <ThemedText type="small" style={{ color: theme.accent }}>
+          {`IPA · ${languageLabel(phonetic)}`}
+        </ThemedText>
+      ) : null}
+
+      <Pressable
+        onPress={() =>
+          setOptions({
+            title: label,
+            actions: [
+              ...speechMenu({
+                scope,
+                languages: formLanguages,
+                current,
+                set,
+                show: setOptions,
+              }),
+              ...speechMenu({
+                scope,
+                languages: formLanguages,
+                current: phonetic,
+                set: setPhonetic,
+                show: setOptions,
+                labels: PHONETIC_DEFAULT_LABELS,
+              }),
+            ],
+          })
+        }
+        hitSlop={12}
+        accessibilityRole="button"
+        accessibilityLabel={`Opcje pola: ${label}`}
+        style={({ pressed }) => [
+          styles.gear,
+          {
+            borderColor: theme.border,
+            backgroundColor: pressed ? theme.backgroundSelected : theme.backgroundElement,
+          },
+        ]}>
+        <ThemedText style={[styles.gearGlyph, { color: theme.accent }]}>⚙</ThemedText>
+      </Pressable>
+    </View>
+  );
 
   const addField = ({ side, kind }: { side: FieldSide; kind: FieldKind }) => {
     nextKey.current += 1;
@@ -262,8 +496,15 @@ export default function DeckEditorScreen() {
       kind: 'extra',
       id: null,
       field: kind,
+      mnemonic: null,
       value: '',
       mediaPath: null,
+      // Silent until somebody says otherwise, like every other field.
+      speech: null,
+      phonetic: null,
+      phoneticLanguage: null,
+      hideValue: false,
+      hideMedia: false,
     };
 
     setRows((current) => {
@@ -279,32 +520,137 @@ export default function DeckEditorScreen() {
 
   const renderRow = (row: Row, rowInfo: RowInfo) => {
     if (row.kind === 'base') {
+      const isQuestion = row.base === 'front';
+
       return (
-        <ThemedText type="small" themeColor="textSecondary">
-          {rowInfo.label}
-        </ThemedText>
+        <View style={styles.slot}>
+          <ThemedText type="small" themeColor="textSecondary">
+            {rowInfo.label}
+          </ThemedText>
+          {speechControls(
+            rowInfo.label,
+            isQuestion ? 'question' : 'answer',
+            isQuestion ? newFrontSpeech : newBackSpeech,
+            isQuestion ? setNewFrontSpeech : setNewBackSpeech,
+            isQuestion ? newFrontPhonetic : newBackPhonetic,
+            isQuestion ? setNewFrontPhonetic : setNewBackPhonetic
+          )}
+        </View>
       );
     }
 
     if (row.kind === 'boundary') return null;
 
+    const scope = speechScope(row.field);
+
     return (
       <View style={styles.slot}>
         <ThemedText type="small" themeColor="textSecondary">
-          {row.field === 'text' ? rowInfo.label : `${rowInfo.label} — ${MEDIA_NOUNS[row.field]}`}
+          {row.field === 'text' ? rowInfo.label : `${rowInfo.label} — ${FIELD_NOUNS[row.field]}`}
         </ThemedText>
-        <Pressable
-          onPress={() => removeRow(row.key)}
-          hitSlop={12}
-          accessibilityRole="button"
-          accessibilityLabel={`Usuń ${rowInfo.label}`}>
-          <ThemedText type="small" style={{ color: theme.danger }}>
-            Usuń
-          </ThemedText>
-        </Pressable>
+        <View style={styles.speech}>
+          {scope
+            ? speechControls(
+                rowInfo.label,
+                scope,
+                row.speech,
+                (code) =>
+                  setRows((current) =>
+                    current.map((item) =>
+                      item.kind === 'extra' && item.key === row.key
+                        ? { ...item, speech: code }
+                        : item
+                    )
+                  ),
+                row.phoneticLanguage,
+                (code) =>
+                  setRows((current) =>
+                    current.map((item) =>
+                      item.kind === 'extra' && item.key === row.key
+                        ? { ...item, phoneticLanguage: code }
+                        : item
+                    )
+                  )
+              )
+            : null}
+          <Pressable
+            onPress={() => removeRow(row.key)}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel={`Usuń ${rowInfo.label}`}>
+            <ThemedText type="small" style={{ color: theme.danger }}>
+              Usuń
+            </ThemedText>
+          </Pressable>
+        </View>
       </View>
     );
   };
+
+  /**
+   * One labelled row of chips: each language picked, removable by tapping it,
+   * plus the chip that opens the sheet. The same gesture the card editor gives
+   * tags, because it is the same kind of list.
+   */
+  const renderLanguages = (
+    label: string,
+    picked: string[],
+    setPicked: (next: string[]) => void,
+    open: () => void,
+    {
+      /** Numbered, because on the question side the order is the instruction. */
+      ranked = false,
+      /**
+       * Whether this row holds exactly one language. The chip that opens the
+       * sheet then disappears as soon as it is filled: „+ język" beside a
+       * language that cannot have a second one promises something the sheet
+       * will not do. Removing the chip that is there brings it back.
+       */
+      single = false,
+    }: { ranked?: boolean; single?: boolean } = {}
+  ) => (
+    <View style={styles.limits}>
+      <ThemedText type="smallBold">{label}</ThemedText>
+      <View style={styles.languages}>
+        {picked.map((language, index) => (
+          <Pressable
+            key={language}
+            onPress={() => setPicked(picked.filter((own) => own !== language))}
+            accessibilityRole="button"
+            accessibilityLabel={`Usuń język ${languageLabel(language)}`}
+            style={({ pressed }) => [
+              styles.language,
+              {
+                borderColor: theme.accent,
+                backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+                opacity: pressed ? 0.7 : 1,
+              },
+            ]}>
+            <ThemedText type="small" style={{ color: theme.accent }}>
+              {`${ranked ? `${index + 1}. ` : ''}${languageLabel(language)}  ×`}
+            </ThemedText>
+          </Pressable>
+        ))}
+        {single && picked.length > 0 ? null : (
+          <Pressable
+            onPress={open}
+            accessibilityRole="button"
+            accessibilityLabel={label}
+            style={({ pressed }) => [
+              styles.language,
+              {
+                borderColor: theme.border,
+                backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+              },
+            ]}>
+            <ThemedText type="small" themeColor="textSecondary">
+              {picked.length > 0 ? '+ język' : single ? '+ język' : '+ języki'}
+            </ThemedText>
+          </Pressable>
+        )}
+      </View>
+    </View>
+  );
 
   const canSave = name.trim().length > 0 && stepsOk;
 
@@ -312,13 +658,42 @@ export default function DeckEditorScreen() {
     if (!canSave) return;
 
     // The template keeps no content, so only the arrangement is worth saving:
-    // where the mandatory fields sit and what shape each empty slot has.
-    const { fields, placement } = toPlacement(rows);
-    const slots = fields.map((field) => ({
-      side: field.side,
-      position: field.position,
-      kind: field.kind,
-    }));
+    // where the mandatory fields sit, what shape each empty slot has, and what
+    // each of them starts out reading aloud.
+    //
+    // `keptSpeech` drops a language this deck no longer declares. The gear only
+    // ever offers declared ones, so such a value can only be left over from
+    // before the languages were changed in this very form — and it would go on
+    // handing every new card a voice the deck does not claim.
+    const templateInputs: TemplateInput[] = templates.map((template) => {
+      const { fields, placement } = toPlacement(template.rows);
+
+      return {
+        name: template.name,
+        layout: placement,
+        slots: fields.map((field) => ({
+          side: field.side,
+          position: field.position,
+          kind: field.kind,
+          speech: keptSpeech(speechScope(field.kind) ?? 'free', formLanguages, field.speech ?? null),
+          // The same rule for the same reason: a transcription language the deck
+          // no longer declares would hand every new card one it does not claim.
+          phoneticLanguage: keptSpeech(
+            speechScope(field.kind) ?? 'free',
+            formLanguages,
+            field.phoneticLanguage ?? null
+          ),
+        })),
+        speech: {
+          frontSpeech: keptSpeech('question', formLanguages, template.frontSpeech),
+          backSpeech: keptSpeech('answer', formLanguages, template.backSpeech),
+        },
+        phoneticLanguages: {
+          front: keptSpeech('question', formLanguages, template.frontPhonetic),
+          back: keptSpeech('answer', formLanguages, template.backPhonetic),
+        },
+      };
+    });
 
     const input = {
       name,
@@ -334,16 +709,17 @@ export default function DeckEditorScreen() {
         relearningSteps: relearningSteps.trim().toLowerCase(),
         weights,
       },
-      newCardLayout: placement,
+      languages: { front: frontLanguages, back: backLanguage },
+      imageQuality,
     };
 
     if (deckId) {
       updateDeck(deckId, input);
-      syncDeckSlots(deckId, slots);
+      syncDeckTemplates(deckId, templateInputs);
       router.back();
     } else {
       const deck = createDeck(input);
-      syncDeckSlots(deck.id, slots);
+      syncDeckTemplates(deck.id, templateInputs);
       router.replace({ pathname: '/deck/[deckId]', params: { deckId: deck.id } });
     }
   };
@@ -497,11 +873,109 @@ export default function DeckEditorScreen() {
           />
         ) : null}
 
+        {/* Ranked, and numbered so that the ranking is visible: the model hunts
+            for a sound-alike in the first language and reaches for the second
+            only when the first has nothing worth using. */}
+        {renderLanguages(
+          'Języki pytania — od najlepiej znanego',
+          frontLanguages,
+          setFrontLanguages,
+          () => setLanguageSheet('front'),
+          { ranked: true }
+        )}
+
+        {/* One, and only one. It decides which voice reads the card and which
+            word a sound-alike has to sound like, and both questions have
+            exactly one useful answer. */}
+        {renderLanguages(
+          'Język odpowiedzi',
+          backLanguage ? [backLanguage] : [],
+          (next) => setBackLanguage(next[0] ?? null),
+          () => setLanguageSheet('back'),
+          { single: true }
+        )}
+
+        {/* Stoi przy językach, bo dotyczy tej samej funkcji: skojarzeń. To
+            ustawienie domyślne — edytor karty otwiera się na nim i pozwala
+            odejść od niego przy pojedynczym obrazie. */}
+        <OptionPicker
+          label="Obrazy w skojarzeniach"
+          value={imageQuality}
+          options={QUALITY_OPTIONS}
+          onChange={setImageQuality}
+        />
+
         <View style={styles.limits}>
-          <ThemedText type="smallBold">Domyślny układ nowej karty</ThemedText>
+          <ThemedText type="smallBold">Szablony nowej karty</ThemedText>
         </View>
 
+        {/* One chip per template; the open one carries the accent. The card
+            editor switches between the same list while a card is made. */}
+        <View style={styles.templates}>
+          {templates.map((template) => {
+            const open = template.key === active.key;
+
+            return (
+              <Pressable
+                key={template.key}
+                onPress={() => setActiveKey(template.key)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: open }}
+                accessibilityLabel={`Szablon ${template.name}`}
+                style={({ pressed }) => [
+                  styles.templateChip,
+                  {
+                    borderColor: open ? theme.accent : theme.border,
+                    backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+                  },
+                ]}>
+                <ThemedText
+                  type="small"
+                  style={{ color: open ? theme.accent : theme.text }}
+                  numberOfLines={1}>
+                  {template.name.trim() || DEFAULT_TEMPLATE_NAME}
+                </ThemedText>
+              </Pressable>
+            );
+          })}
+          <Pressable
+            onPress={() =>
+              setOptions({
+                title: 'Nowy szablon',
+                actions: [
+                  { label: 'Pusty', onPress: () => addTemplate(false) },
+                  {
+                    label: `Kopia: ${active.name.trim() || DEFAULT_TEMPLATE_NAME}`,
+                    onPress: () => addTemplate(true),
+                  },
+                ],
+              })
+            }
+            accessibilityRole="button"
+            accessibilityLabel="Dodaj szablon"
+            style={({ pressed }) => [
+              styles.templateChip,
+              {
+                borderColor: theme.border,
+                backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+              },
+            ]}>
+            <ThemedText type="small" themeColor="textSecondary">
+              + szablon
+            </ThemedText>
+          </Pressable>
+        </View>
+
+        <TextField
+          label="Nazwa szablonu"
+          value={active.name}
+          onChangeText={(name) => updateActive((template) => ({ ...template, name }))}
+          placeholder={DEFAULT_TEMPLATE_NAME}
+        />
+
         <FieldLayoutList
+          // Remounted per template, so a drag in progress never carries over.
+          key={active.key}
           rows={rows}
           info={info}
           onChange={setRows}
@@ -518,9 +992,59 @@ export default function DeckEditorScreen() {
           ]}>
           <ThemedText style={[styles.addGlyph, { color: theme.accent }]}>+</ThemedText>
         </Pressable>
+
+        {templates.length > 1 ? (
+          <Pressable
+            onPress={() =>
+              Alert.alert(
+                `Usunąć szablon „${active.name.trim() || DEFAULT_TEMPLATE_NAME}"?`,
+                'Karty zrobione z niego zostają bez zmian.',
+                [
+                  { text: 'Anuluj', style: 'cancel' },
+                  { text: 'Usuń', style: 'destructive', onPress: removeActiveTemplate },
+                ],
+                { cancelable: true }
+              )
+            }
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Usuń szablon"
+            style={styles.removeTemplate}>
+            <ThemedText type="small" style={{ color: theme.danger }}>
+              Usuń szablon
+            </ThemedText>
+          </Pressable>
+        ) : null}
       </ScrollViewContainer>
 
-      <AddFieldSheet visible={adding} onClose={() => setAdding(false)} onAdd={addField} />
+      <LanguageSheet
+        visible={languageSheet !== null}
+        title={languageSheet === 'back' ? 'Język odpowiedzi' : 'Języki pytania'}
+        single={languageSheet === 'back'}
+        picked={
+          languageSheet === 'back' ? (backLanguage ? [backLanguage] : []) : frontLanguages
+        }
+        onChange={(picked) =>
+          languageSheet === 'back'
+            ? setBackLanguage(picked[0] ?? null)
+            : setFrontLanguages(dedupeLanguages(picked))
+        }
+        onClose={() => setLanguageSheet(null)}
+      />
+
+      <ActionSheet
+        visible={options !== null}
+        title={options?.title ?? ''}
+        actions={options?.actions ?? []}
+        onClose={() => setOptions(null)}
+      />
+
+      <AddFieldSheet
+        visible={adding}
+        askMode={false}
+        onClose={() => setAdding(false)}
+        onAdd={addField}
+      />
 
       <View style={[styles.footer, { borderColor: theme.border }]}>
         <Button title="Zapisz" onPress={save} disabled={!canSave} />
@@ -536,13 +1060,64 @@ function toLimit(value: string, fallback: number): number {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+/** One template as the form holds it, before it is saved. */
+type TemplateDraft = {
+  key: string;
+  name: string;
+  rows: Row[];
+  frontSpeech: string | null;
+  backSpeech: string | null;
+  frontPhonetic: string | null;
+  backPhonetic: string | null;
+};
+
+/** A template with nothing set: the stock layout, silent, no empty fields. */
+function blankTemplate(key: string, name: string): TemplateDraft {
+  return {
+    key,
+    name,
+    rows: buildRows(DEFAULT_PLACEMENT, []),
+    frontSpeech: null,
+    backSpeech: null,
+    frontPhonetic: null,
+    backPhonetic: null,
+  };
+}
+
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
   },
+  templates: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+  },
+  templateChip: {
+    borderWidth: 1,
+    borderRadius: Radius.medium,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    maxWidth: '100%',
+  },
+  removeTemplate: {
+    alignSelf: 'flex-start',
+  },
   limits: {
     gap: Spacing.one,
     paddingTop: Spacing.two,
+  },
+  languages: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  language: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    borderRadius: Radius.large,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   content: {
     padding: Spacing.three,
@@ -556,6 +1131,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.two,
+  },
+  /** Whatever the right-hand end of a row carries, in one line. */
+  speech: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+  },
+  /** The icon and the language, as one label — there is nothing to play here. */
+  speakLabel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+  },
+  /**
+   * A control, not a decoration — the same one the card editor's fields carry,
+   * so the two lists read as one idea.
+   */
+  gear: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gearGlyph: {
+    fontSize: 15,
+    lineHeight: 19,
   },
   add: {
     alignSelf: 'center',

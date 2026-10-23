@@ -10,7 +10,14 @@ import migrations from '@drizzle/migrations';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { db } from '@/db/client';
+import { addAiUsage } from '@/db/queries';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { setSpendSink } from '@/lib/ai-usage';
+
+// What the AI modules spend lands in the database, where the meters read it.
+// Set at load rather than in an effect: nothing can spend before a screen has
+// rendered, and by then the migrations below have run.
+setSpendSink(addAiUsage);
 
 /**
  * The catch-all: anything thrown outside a screen that has its own boundary
@@ -40,7 +47,14 @@ export default function RootLayout() {
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <StatusBar style="auto" />
           <Stack screenOptions={{ headerBackTitle: 'Wstecz' }}>
-            <Stack.Screen name="index" options={{ title: 'Talie' }} />
+            {/*
+              The main screen draws its own header (see index.tsx): the native
+              one doubled the status-bar inset in edge-to-edge mode, leaving a
+              big gap above the title, and `headerStatusBarHeight` is not exposed
+              on this Stack's options to correct it.
+            */}
+            <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="ai-limits" options={{ title: 'Ustawienia AI' }} />
             <Stack.Screen name="deck/[deckId]/index" options={{ title: 'Talia' }} />
             <Stack.Screen
               name="deck/[deckId]/review"
@@ -52,6 +66,12 @@ export default function RootLayout() {
             />
             <Stack.Screen name="deck-editor" options={{ presentation: 'modal' }} />
             <Stack.Screen name="card-editor" options={{ presentation: 'modal' }} />
+            {/* Opened from the card editor, which is itself a modal — so this
+                goes over it as one, or iOS would push it underneath. */}
+            <Stack.Screen
+              name="card-preview"
+              options={{ headerShown: false, presentation: 'fullScreenModal', animation: 'fade' }}
+            />
           </Stack>
         </ThemeProvider>
       </KeyboardProvider>

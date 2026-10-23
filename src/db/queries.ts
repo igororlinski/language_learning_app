@@ -2,7 +2,18 @@ import { and, asc, desc, eq, inArray, lt, lte, ne, or, sql, type SQLWrapper } fr
 
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
 import { isMediaKind, type MediaKind } from '@/lib/media';
+import { parseTemperature, type TextTemperatures } from '@/lib/ai-prompts';
+import { parseTextSource, type TextSource } from '@/lib/ai-transport';
+import type { UsageMetric } from '@/lib/ai-usage';
 import { DEFAULT_SCHEDULING, parseWeights, type DeckScheduling } from '@/lib/fsrs-options';
+import {
+  languageJson,
+  languagesJson,
+  NO_LANGUAGES,
+  parseLanguage,
+  parseLanguages,
+  type DeckLanguages,
+} from '@/lib/languages';
 import { type StabilitySample } from '@/lib/fsrs-optimizer';
 import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 
@@ -22,27 +33,34 @@ import {
   toFsrsCard,
   toReviewLog,
   toStateValues,
+  type FsrsCard,
   type Grade,
 } from '@/lib/scheduler';
 
 import { db } from './client';
 import {
+  aiUsage,
+  appSettings,
   cardFields,
   cards,
   cardTags,
+  cardTemplates,
   deckFieldSlots,
   decks,
   DEFAULT_NEW_CARD_ORDER,
   DEFAULT_NEW_CARD_PLACEMENT,
+  DEFAULT_PICTURE_QUALITY,
   fsrsState,
   reviewLogs,
   tags,
   type CardField,
+  type CardTemplate,
   type DeckFieldSlot,
   type FieldKind,
   type FieldSide,
   type NewCardOrder,
   type NewCardPlacement,
+  type PictureQuality,
 } from './schema';
 
 /** The transaction handle drizzle hands to a `db.transaction` callback. */
@@ -67,6 +85,35 @@ const DEFAULT_CARD_LAYOUT: CardLayout = {
   backSide: 'back',
   backPosition: 0,
 };
+
+/**
+ * Whether the two mandatory fields are read out loud, and in which language.
+ *
+ * Kept apart from `CardLayout` because that type does double duty as the shape
+ * of a **deck's** default layout, and a deck has nothing to say about this: it
+ * arranges empty fields for future cards, and there is no text there yet to be
+ * read.
+ */
+export type CardSpeech = { frontSpeech: string | null; backSpeech: string | null };
+
+const NO_SPEECH: CardSpeech = { frontSpeech: null, backSpeech: null };
+
+/**
+ * How the two mandatory fields are pronounced, in IPA, or null for none. Apart
+ * from `CardSpeech` because they are made and dropped separately: a card can
+ * be read aloud with no transcription under it, and the other way round.
+ */
+export type CardPhonetic = { frontPhonetic: string | null; backPhonetic: string | null };
+
+const NO_PHONETIC: CardPhonetic = { frontPhonetic: null, backPhonetic: null };
+
+/**
+ * Which language a new card's two mandatory fields are transcribed in when it
+ * is saved — the deck's template, not anything stored on a card.
+ */
+export type PhoneticLanguages = { front: string | null; back: string | null };
+
+const NO_PHONETIC_LANGUAGES: PhoneticLanguages = { front: null, back: null };
 
 /** Comma-separated bind params for a `state in (...)` test. */
 function stateList(states: State[]) {
@@ -278,6 +325,10 @@ export function cardsLines(
       frontPosition: cards.frontPosition,
       backSide: cards.backSide,
       backPosition: cards.backPosition,
+      frontSpeech: cards.frontSpeech,
+      backSpeech: cards.backSpeech,
+      frontPhonetic: cards.frontPhonetic,
+      backPhonetic: cards.backPhonetic,
     })
     .from(cards)
     .where(inArray(cards.id, cardIds))
@@ -302,20 +353,50 @@ export function getCardFields(cardId: number): CardField[] {
     .all();
 }
 
+/* -------------------------------------------------------------- templates */
+
 /**
- * Where a new card in this deck puts its two mandatory fields. Only a brand new
- * card ever reads this; from then on the layout is the card's own and the deck
- * has no say over it.
+ * The ways a new card in this deck can start, in the deck editor's order — the
+ * first one is the default. Every deck has at least one: `createDeck` makes it,
+ * and migration 0022 made one for every deck there was.
  */
-export function newCardLayout(deckId: number): CardLayout {
-  const deck = getDeck(deckId);
-  if (!deck) return DEFAULT_CARD_LAYOUT;
+export function deckTemplates(deckId: number): CardTemplate[] {
+  return db
+    .select()
+    .from(cardTemplates)
+    .where(eq(cardTemplates.deckId, deckId))
+    .orderBy(asc(cardTemplates.position), asc(cardTemplates.id))
+    .all();
+}
+
+/**
+ * The template a new card starts from: the one asked for, or the deck's first.
+ * Undefined only for a deck that does not exist.
+ */
+function resolveTemplate(deckId: number, templateId?: number | null): CardTemplate | undefined {
+  if (templateId != null) {
+    const asked = db.select().from(cardTemplates).where(eq(cardTemplates.id, templateId)).get();
+
+    if (asked) return asked;
+  }
+
+  return deckTemplates(deckId)[0];
+}
+
+/**
+ * Where a new card puts its two mandatory fields. Only a brand new card ever
+ * reads this; from then on the layout is the card's own and neither the deck
+ * nor the template has any say over it.
+ */
+export function newCardLayout(deckId: number, templateId?: number | null): CardLayout {
+  const template = resolveTemplate(deckId, templateId);
+  if (!template) return DEFAULT_CARD_LAYOUT;
 
   return {
-    frontSide: deck.newFrontSide,
-    frontPosition: deck.newFrontPosition,
-    backSide: deck.newBackSide,
-    backPosition: deck.newBackPosition,
+    frontSide: template.frontSide,
+    frontPosition: template.frontPosition,
+    backSide: template.backSide,
+    backPosition: template.backPosition,
   };
 }
 
@@ -323,42 +404,180 @@ export function newCardLayout(deckId: number): CardLayout {
  * The empty extra fields a new card starts with. Each slot carries its own side,
  * position and kind, because a text box and an audio slot are not the same
  * thing — a card cannot swap one for the other after the fact.
+ *
+ * A slot holds no text, but it can still hold a **voice**: "every card in this
+ * deck reads its example sentence in Portuguese" is a property of the deck, and
+ * setting it on each card by hand is a chore nobody keeps up. The language
+ * travels; the words arrive later.
  */
-export function newCardFields(deckId: number): CardFieldInput[] {
-  return getDeckSlots(deckId).map((slot) => ({
+export function newCardFields(deckId: number, templateId?: number | null): CardFieldInput[] {
+  return getDeckSlots(deckId, templateId).map((slot) => ({
     id: null,
     side: slot.side,
     position: slot.position,
     kind: slot.kind,
     value: '',
     mediaPath: null,
+    mnemonic: null,
+    speech: slot.speech,
+    phonetic: null,
+    phoneticLanguage: slot.phoneticLanguage,
   }));
 }
 
-/** The deck's empty slots, in the order the deck editor arranged them. */
-export function getDeckSlots(deckId: number): DeckFieldSlot[] {
+/**
+ * What a new card's two mandatory fields start out reading aloud in.
+ *
+ * Kept apart from `newCardLayout` for the reason `CardSpeech` is kept apart
+ * from `CardLayout`: that one is read by the deck editor as the shape of a
+ * **template**, and this is not part of a shape. Only a brand new card reads
+ * either; from then on both belong to the card.
+ */
+export function newCardSpeech(deckId: number, templateId?: number | null): CardSpeech {
+  const template = resolveTemplate(deckId, templateId);
+
+  if (!template) return NO_SPEECH;
+
+  return { frontSpeech: template.frontSpeech, backSpeech: template.backSpeech };
+}
+
+/** Which language a new card's mandatory fields are transcribed in, if any. */
+export function newCardPhoneticLanguages(
+  deckId: number,
+  templateId?: number | null
+): PhoneticLanguages {
+  const template = resolveTemplate(deckId, templateId);
+
+  if (!template) return NO_PHONETIC_LANGUAGES;
+
+  return { front: template.frontPhoneticLanguage, back: template.backPhoneticLanguage };
+}
+
+/** A template's empty slots, in the order the deck editor arranged them. */
+export function getDeckSlots(deckId: number, templateId?: number | null): DeckFieldSlot[] {
+  const template = resolveTemplate(deckId, templateId);
+
+  if (!template) return [];
+
   return db
     .select()
     .from(deckFieldSlots)
-    .where(eq(deckFieldSlots.deckId, deckId))
+    .where(eq(deckFieldSlots.templateId, template.id))
     .orderBy(asc(deckFieldSlots.position), asc(deckFieldSlots.id))
     .all();
 }
 
-/** One row of the deck editor's list; slots hold no content, only a shape. */
-export type DeckSlotInput = { side: FieldSide; position: number; kind: FieldKind };
+/**
+ * One row of the deck editor's list. Slots hold no content, only a shape — and
+ * a voice, which is a property of the deck rather than of any text: see
+ * `newCardFields`.
+ */
+export type DeckSlotInput = {
+  side: FieldSide;
+  position: number;
+  kind: FieldKind;
+  speech: string | null;
+  phoneticLanguage?: string | null;
+};
+
+/** Everything one template holds, as the deck editor hands it over. */
+export type TemplateInput = {
+  name: string;
+  layout: CardLayout;
+  speech: CardSpeech;
+  phoneticLanguages: PhoneticLanguages;
+  slots: DeckSlotInput[];
+};
+
+/** The name a deck's first template gets when nobody has named it. */
+export const DEFAULT_TEMPLATE_NAME = 'Podstawowy';
+
+/** A template's own columns, named one by one — pitfall 11. */
+function templateValues(input: Omit<TemplateInput, 'name' | 'slots'>) {
+  return {
+    frontSide: input.layout.frontSide,
+    frontPosition: input.layout.frontPosition,
+    backSide: input.layout.backSide,
+    backPosition: input.layout.backPosition,
+    frontSpeech: input.speech.frontSpeech,
+    backSpeech: input.speech.backSpeech,
+    frontPhoneticLanguage: input.phoneticLanguages.front,
+    backPhoneticLanguage: input.phoneticLanguages.back,
+  };
+}
+
+function insertSlots(tx: Tx, deckId: number, templateId: number, slots: DeckSlotInput[]) {
+  for (const slot of slots) {
+    tx.insert(deckFieldSlots)
+      .values({
+        deckId,
+        templateId,
+        side: slot.side,
+        position: slot.position,
+        kind: slot.kind,
+        speech: slot.speech,
+        phoneticLanguage: slot.phoneticLanguage ?? null,
+      })
+      .run();
+  }
+}
 
 /**
- * Replaces the deck's slots with the list the editor holds. They carry nothing
- * worth preserving, so this is a delete-and-insert rather than a diff.
+ * Replaces a deck's templates with the list the deck editor holds, slots and
+ * all. Delete-and-insert rather than a diff, for the reason the slots always
+ * were: nothing points at a template — a card remembers none — so there is
+ * nothing an id has to survive for.
+ *
+ * A deck is never left without one: an empty list writes the default.
  */
-export function syncDeckSlots(deckId: number, slots: DeckSlotInput[]) {
-  return db.transaction((tx) => {
-    tx.delete(deckFieldSlots).where(eq(deckFieldSlots.deckId, deckId)).run();
+export function syncDeckTemplates(deckId: number, templates: TemplateInput[]) {
+  const list: TemplateInput[] =
+    templates.length > 0
+      ? templates
+      : [
+          {
+            name: DEFAULT_TEMPLATE_NAME,
+            layout: DEFAULT_CARD_LAYOUT,
+            speech: NO_SPEECH,
+            phoneticLanguages: NO_PHONETIC_LANGUAGES,
+            slots: [],
+          },
+        ];
 
-    for (const slot of slots) {
-      tx.insert(deckFieldSlots).values({ deckId, ...slot }).run();
-    }
+  return db.transaction((tx) => {
+    // The slots go with their templates (ON DELETE CASCADE).
+    tx.delete(cardTemplates).where(eq(cardTemplates.deckId, deckId)).run();
+
+    list.forEach((template, position) => {
+      const row = tx
+        .insert(cardTemplates)
+        .values({
+          deckId,
+          name: template.name.trim() || DEFAULT_TEMPLATE_NAME,
+          position,
+          ...templateValues(template),
+        })
+        .returning()
+        .get();
+
+      insertSlots(tx, deckId, row.id, template.slots);
+    });
+  });
+}
+
+/**
+ * Replaces one template's slots — the deck's first, unless another is named.
+ * What the deck editor did before a deck could have several, and still the
+ * shortest way to set up a deck with one.
+ */
+export function syncDeckSlots(deckId: number, slots: DeckSlotInput[], templateId?: number | null) {
+  const template = resolveTemplate(deckId, templateId);
+
+  if (!template) return;
+
+  return db.transaction((tx) => {
+    tx.delete(deckFieldSlots).where(eq(deckFieldSlots.templateId, template.id)).run();
+    insertSlots(tx, deckId, template.id, slots);
   });
 }
 
@@ -412,6 +631,122 @@ export function cardsMediaFiles(cardIds: number[]): MediaFile[] {
       .where(inArray(cardFields.cardId, cardIds))
       .all()
   );
+}
+
+/* ------------------------------------------------------------- app settings */
+
+const TEXT_PROVIDER_KEY = 'ai.text-provider';
+const LMSTUDIO_MODEL_KEY = 'ai.lmstudio-model';
+
+/** Every app-wide setting, for `useLiveQuery` on the settings screen. */
+export function appSettingsQuery() {
+  return db.select().from(appSettings);
+}
+
+/** Who writes associations and transcriptions, out of the settings rows. */
+export function textSourceFrom(rows: readonly { key: string; value: string }[]): TextSource {
+  const value = (key: string) => rows.find((row) => row.key === key)?.value;
+
+  return parseTextSource(value(TEXT_PROVIDER_KEY), value(LMSTUDIO_MODEL_KEY));
+}
+
+/**
+ * The same, read at the moment of asking. The card editor calls this right
+ * before each request rather than holding a copy, so a change made on the
+ * settings screen applies to the very next one.
+ */
+export function getTextSource(): TextSource {
+  return textSourceFrom(appSettingsQuery().all());
+}
+
+/**
+ * Stores the choice. A model is kept only alongside LM Studio, and an empty one
+ * is a missing row rather than an empty string — one way to say "none".
+ */
+export function setTextSource(source: TextSource): void {
+  const upsert = (key: string, value: string) =>
+    db
+      .insert(appSettings)
+      .values({ key, value })
+      .onConflictDoUpdate({ target: appSettings.key, set: { value } })
+      .run();
+
+  db.transaction(() => {
+    upsert(TEXT_PROVIDER_KEY, source.provider);
+
+    const model = source.provider === 'lmstudio' ? source.model?.trim() : '';
+
+    if (model) upsert(LMSTUDIO_MODEL_KEY, model);
+    else db.delete(appSettings).where(eq(appSettings.key, LMSTUDIO_MODEL_KEY)).run();
+  });
+}
+
+const TEMPERATURE_KEYS: Record<keyof TextTemperatures, string> = {
+  mnemonic: 'ai.temperature.mnemonic',
+  phonetic: 'ai.temperature.phonetic',
+};
+
+/** The temperatures the user set, out of the settings rows; null is the default. */
+export function textTemperaturesFrom(
+  rows: readonly { key: string; value: string }[]
+): TextTemperatures {
+  const value = (key: string) => rows.find((row) => row.key === key)?.value;
+
+  return {
+    mnemonic: parseTemperature(value(TEMPERATURE_KEYS.mnemonic)),
+    phonetic: parseTemperature(value(TEMPERATURE_KEYS.phonetic)),
+  };
+}
+
+/** The same, read at the moment of asking. */
+export function getTextTemperatures(): TextTemperatures {
+  return textTemperaturesFrom(appSettingsQuery().all());
+}
+
+/**
+ * Stores one temperature. Null — "the default" — is a missing row, as with
+ * the LM Studio model: one way to say "none", and a default that moves with
+ * the provider instead of a number frozen on the day it was picked.
+ */
+export function setTextTemperature(kind: keyof TextTemperatures, temperature: number | null): void {
+  const key = TEMPERATURE_KEYS[kind];
+  const value = temperature == null ? null : parseTemperature(String(temperature));
+
+  if (value == null) {
+    db.delete(appSettings).where(eq(appSettings.key, key)).run();
+    return;
+  }
+
+  db.insert(appSettings)
+    .values({ key, value: String(value) })
+    .onConflictDoUpdate({ target: appSettings.key, set: { value: String(value) } })
+    .run();
+}
+
+/** Every stored usage counter, for the meters (`usageFrom` picks today's). */
+export function aiUsageQuery() {
+  return db.select().from(aiUsage);
+}
+
+/**
+ * Adds to today's counter for one metric — the sink `recordSpend` writes to.
+ * Older days of the same metric are dropped in the same transaction: a counter
+ * only ever matters for the day it resets on, so nothing piles up.
+ */
+export function addAiUsage(metric: UsageMetric, day: string, amount: number): void {
+  db.transaction(() => {
+    db.delete(aiUsage)
+      .where(and(eq(aiUsage.metric, metric), ne(aiUsage.day, day)))
+      .run();
+
+    db.insert(aiUsage)
+      .values({ metric, day, amount })
+      .onConflictDoUpdate({
+        target: [aiUsage.metric, aiUsage.day],
+        set: { amount: sql`${aiUsage.amount} + ${amount}` },
+      })
+      .run();
+  });
 }
 
 /** Every tag ever created, for the picker in the card editor. */
@@ -560,6 +895,10 @@ export function loadDueCards(
       frontPosition: cards.frontPosition,
       backSide: cards.backSide,
       backPosition: cards.backPosition,
+      frontSpeech: cards.frontSpeech,
+      backSpeech: cards.backSpeech,
+      frontPhonetic: cards.frontPhonetic,
+      backPhonetic: cards.backPhonetic,
       createdAt: cards.createdAt,
       due: fsrsState.due,
       stability: fsrsState.stability,
@@ -667,6 +1006,64 @@ export function deckScheduling(deckId: number): DeckScheduling {
 }
 
 /**
+ * Where a card stands in FSRS right now — or, for a card that does not exist
+ * yet, where a brand new one would. What the editor's preview needs to show the
+ * grading buttons with the intervals a real review would offer.
+ */
+export function cardSchedule(cardId: number | null, now = new Date()): FsrsCard {
+  const row = cardId
+    ? db.select().from(fsrsState).where(eq(fsrsState.cardId, cardId)).get()
+    : undefined;
+
+  return toFsrsCard(row ?? newCardState(now));
+}
+
+/** Those two columns as a pair — one mapping, every reader. */
+function toLanguages(row: {
+  frontLanguages: string | null;
+  backLanguages: string | null;
+}): DeckLanguages {
+  return {
+    front: parseLanguages(row.frontLanguages),
+    // One language, read out of a column that may still hold a list: decks
+    // written before the answer side became single-valued keep their first.
+    back: parseLanguage(row.backLanguages),
+  };
+}
+
+/**
+ * What languages a deck declares for its question and answer.
+ *
+ * Nothing schedules or validates on this — it is here for whatever needs to
+ * know what it is reading, the first of those being picture generation from
+ * the likeness between a card's two texts.
+ */
+export function deckLanguages(deckId: number): DeckLanguages {
+  const deck = getDeck(deckId);
+  if (!deck) return NO_LANGUAGES;
+
+  return toLanguages(deck);
+}
+
+/**
+ * Which way this deck's pictures lean, for the field that is about to draw one.
+ *
+ * Read from the deck rather than remembered by the editor: it is a standing
+ * preference, not a choice being made again on every card. What the editor's
+ * gear does with it afterwards belongs to that one run and is never written
+ * back — otherwise "just this once, quickly" would quietly become the deck's
+ * new default.
+ */
+export function deckPictureQuality(deckId: number): PictureQuality {
+  return getDeck(deckId)?.imageQuality ?? DEFAULT_PICTURE_QUALITY;
+}
+
+/* `usedLanguages()` lived here until 2026-09-08: it gathered every language any
+ * deck had typed, so a spelling could be reused instead of invented twice. The
+ * closed list in `src/lib/languages.ts` made it pointless — there is nothing to
+ * reuse when there is nothing to invent. */
+
+/**
  * What the optimiser learns from: one row per card that finished a first study
  * day and came back on a later one.
  *
@@ -772,14 +1169,27 @@ export type DeckInput = {
   newCardPlacement?: NewCardPlacement;
   newCardOrder?: NewCardOrder;
   scheduling?: DeckScheduling;
-  /** The layout every new card in this deck starts from. */
+  /** What the question and the answer are written in. Declarative only. */
+  languages?: DeckLanguages;
+  /**
+   * The deck's **first** template, for a caller that deals in one: a deck
+   * created with these gets them, and an update that names any of them
+   * rewrites that template (the rest default). The deck editor sends the whole
+   * list through `syncDeckTemplates` instead.
+   */
   newCardLayout?: CardLayout;
+  /** Which of its mandatory fields a new card starts reading aloud, and in what. */
+  newCardSpeech?: CardSpeech;
+  /** Which of them a new card gets transcribed, and in what. */
+  newCardPhoneticLanguages?: PhoneticLanguages;
+  /** Which way generated pictures lean here — a default, overridable per run. */
+  imageQuality?: PictureQuality;
 };
 
 /** The columns a deck form writes, with the queue options defaulted. */
 function deckValues(input: DeckInput) {
   const scheduling = input.scheduling ?? DEFAULT_SCHEDULING;
-  const layout = input.newCardLayout ?? DEFAULT_CARD_LAYOUT;
+  const languages = input.languages ?? NO_LANGUAGES;
 
   return {
     name: input.name.trim(),
@@ -797,19 +1207,72 @@ function deckValues(input: DeckInput) {
     // ignores a key that names no column — which is how a whole optimiser run
     // used to vanish on save, with neither `tsc` nor a test noticing.
     fsrsWeights: weightsJson(scheduling.weights),
-    newFrontSide: layout.frontSide,
-    newFrontPosition: layout.frontPosition,
-    newBackSide: layout.backSide,
-    newBackPosition: layout.backPosition,
+    // The deck's `new_*` columns are no longer written: what a new card starts
+    // as lives in `card_templates` since migration 0022.
+    // Named columns again, for the reason spelled out above `fsrsWeights`:
+    // `front` and `back` are not column names, and a spread would drop them
+    // in silence.
+    frontLanguages: languagesJson(languages.front),
+    backLanguages: languageJson(languages.back),
+    imageQuality: input.imageQuality ?? DEFAULT_PICTURE_QUALITY,
   };
 }
 
+/** The first-template part of a `DeckInput`, with everything left out defaulted. */
+function firstTemplateValues(input: DeckInput) {
+  return templateValues({
+    layout: input.newCardLayout ?? DEFAULT_CARD_LAYOUT,
+    speech: input.newCardSpeech ?? NO_SPEECH,
+    phoneticLanguages: input.newCardPhoneticLanguages ?? NO_PHONETIC_LANGUAGES,
+  });
+}
+
+/** Whether a `DeckInput` says anything about the first template at all. */
+const namesTemplate = (input: DeckInput) =>
+  input.newCardLayout !== undefined ||
+  input.newCardSpeech !== undefined ||
+  input.newCardPhoneticLanguages !== undefined;
+
+/** Creates the deck together with its first template — no deck is without one. */
 export function createDeck(input: DeckInput) {
-  return db.insert(decks).values(deckValues(input)).returning().get();
+  return db.transaction((tx) => {
+    const deck = tx.insert(decks).values(deckValues(input)).returning().get();
+
+    tx.insert(cardTemplates)
+      .values({
+        deckId: deck.id,
+        name: DEFAULT_TEMPLATE_NAME,
+        position: 0,
+        ...firstTemplateValues(input),
+      })
+      .run();
+
+    return deck;
+  });
 }
 
 export function updateDeck(deckId: number, patch: DeckInput) {
-  return db.update(decks).set(deckValues(patch)).where(eq(decks.id, deckId)).run();
+  return db.transaction((tx) => {
+    tx.update(decks).set(deckValues(patch)).where(eq(decks.id, deckId)).run();
+
+    // Only when asked: the deck editor saves its templates on their own, and an
+    // update that says nothing about them must not reset the first one.
+    if (!namesTemplate(patch)) return;
+
+    const first = tx
+      .select()
+      .from(cardTemplates)
+      .where(eq(cardTemplates.deckId, deckId))
+      .orderBy(asc(cardTemplates.position), asc(cardTemplates.id))
+      .get();
+
+    if (first) {
+      tx.update(cardTemplates)
+        .set(firstTemplateValues(patch))
+        .where(eq(cardTemplates.id, first.id))
+        .run();
+    }
+  });
 }
 
 export function deleteDeck(deckId: number) {
@@ -830,6 +1293,25 @@ export type CardFieldInput = {
   kind: FieldKind;
   value: string;
   mediaPath: string | null;
+  /**
+   * A `mnemonic` field only: its keyword and English scene, as the JSON the
+   * column holds. Carried through as raw text rather than parsed, exactly
+   * like `mediaPath` is carried as a file name — `src/lib/mnemonic.ts` reads
+   * it in the one place that needs its parts.
+   */
+  mnemonic?: string | null;
+  /** Kept on the card, not shown to the learner — see `sideLines`. */
+  hideValue?: boolean;
+  hideMedia?: boolean;
+  /** Read out loud in this language, or null for a field that stays silent. */
+  speech?: string | null;
+  /** Its pronunciation in IPA, or null for none. */
+  phonetic?: string | null;
+  /**
+   * A new card only: which language the deck's template asks this field to be
+   * transcribed in at save time. Not a column — nothing stores it on a card.
+   */
+  phoneticLanguage?: string | null;
 };
 
 /**
@@ -856,6 +1338,11 @@ function writeCardFields(tx: Tx, cardId: number, fields: CardFieldInput[]) {
       kind: field.kind,
       value: field.value.trim(),
       mediaPath: field.mediaPath,
+      mnemonic: field.mnemonic ?? null,
+      hideValue: field.hideValue ?? false,
+      hideMedia: field.hideMedia ?? false,
+      speech: field.speech ?? null,
+      phonetic: field.phonetic?.trim() || null,
     };
 
     if (field.id === null) {
@@ -880,7 +1367,9 @@ export function createCard(
   back: string,
   now = new Date(),
   fields: CardFieldInput[] = [],
-  layout: CardLayout = DEFAULT_CARD_LAYOUT
+  layout: CardLayout = DEFAULT_CARD_LAYOUT,
+  speech: CardSpeech = NO_SPEECH,
+  phonetic: CardPhonetic = NO_PHONETIC
 ) {
   return db.transaction((tx) => {
     const card = tx
@@ -891,6 +1380,10 @@ export function createCard(
         back: back.trim(),
         createdAt: now,
         ...layout,
+        ...speech,
+        // Named, not spread — pitfall 11.
+        frontPhonetic: phonetic.frontPhonetic?.trim() || null,
+        backPhonetic: phonetic.backPhonetic?.trim() || null,
       })
       .returning()
       .get();
@@ -907,7 +1400,14 @@ export function createCard(
 
 export function updateCard(
   cardId: number,
-  patch: { front: string; back: string; fields?: CardFieldInput[]; layout?: CardLayout }
+  patch: {
+    front: string;
+    back: string;
+    fields?: CardFieldInput[];
+    layout?: CardLayout;
+    speech?: CardSpeech;
+    phonetic?: CardPhonetic;
+  }
 ) {
   return db.transaction((tx) => {
     tx.update(cards)
@@ -915,6 +1415,13 @@ export function updateCard(
         front: patch.front.trim(),
         back: patch.back.trim(),
         ...(patch.layout ?? {}),
+        ...(patch.speech ?? {}),
+        ...(patch.phonetic
+          ? {
+              frontPhonetic: patch.phonetic.frontPhonetic?.trim() || null,
+              backPhonetic: patch.phonetic.backPhonetic?.trim() || null,
+            }
+          : {}),
       })
       .where(eq(cards.id, cardId))
       .run();
@@ -992,6 +1499,14 @@ export function copyCards(
           frontPosition: source.frontPosition,
           backSide: source.backSide,
           backPosition: source.backPosition,
+          // Reading aloud costs nothing and needs no file, so it travels with
+          // the copy exactly as the layout does.
+          frontSpeech: source.frontSpeech,
+          backSpeech: source.backSpeech,
+          // A transcription cost a model call and needs no file, so it
+          // travels too.
+          frontPhonetic: source.frontPhonetic,
+          backPhonetic: source.backPhonetic,
           createdAt: now,
         })
         .returning()
@@ -1013,6 +1528,14 @@ export function copyCards(
               isMediaKind(field.kind) && field.mediaPath
                 ? copyMedia(field.kind, field.mediaPath)
                 : null,
+            // The association travels with the copy. It cost a model call to
+            // invent, and a copy that kept the picture but forgot how to
+            // redraw it would be worse than one that kept neither.
+            mnemonic: field.mnemonic,
+            hideValue: field.hideValue,
+            hideMedia: field.hideMedia,
+            speech: field.speech,
+            phonetic: field.phonetic,
           })
           .run();
       }

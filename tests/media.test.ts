@@ -6,7 +6,9 @@
 import { FIELD_KINDS } from '@/db/schema';
 import {
   extensionOf,
+  FIELD_NOUNS,
   formatBytes,
+  isGeneratedKind,
   isMediaKind,
   MEDIA_DIRECTORIES,
   MEDIA_LIMITS,
@@ -28,11 +30,32 @@ check('tekst nie jest mediami', isMediaKind('text'), false);
 check('dzwiek jest', isMediaKind('audio'), true);
 check('obraz tez', isMediaKind('image'), true);
 check('wideo tez', isMediaKind('video'), true);
+
+// A generated picture is media like any other: the same copying, deleting and
+// rendering apply to it. Only the way it gets its file is different, and that
+// is what `isGeneratedKind` separates — so a field either offers a picker or
+// offers a button, never both and never neither.
+check('obraz AI tez jest mediami', isMediaKind('ai-image'), true);
+check('i jest generowany', isGeneratedKind('ai-image'), true);
+check('a wybierany obraz nie', isGeneratedKind('image'), false);
+check('tekst tym bardziej nie', isGeneratedKind('text'), false);
+
 check('kazdy rodzaj ma swoj katalog', MEDIA_DIRECTORIES, {
   audio: 'card-audio',
   image: 'card-images',
   video: 'card-videos',
+  'ai-image': 'card-ai-images',
+  mnemonic: 'card-mnemonics',
 });
+
+// Its own directory, not the one picked pictures live in: deleting a card walks
+// the directory for the kind the row names, so two kinds sharing a folder would
+// make an orphaned file indistinguishable from a live one.
+check(
+  'i jest to inny katalog niz przy obrazie wybranym',
+  MEDIA_DIRECTORIES['ai-image'] === MEDIA_DIRECTORIES.image,
+  false
+);
 
 // Each media kind needs an entry in every table, or a field of that kind lands
 // somewhere with `undefined` for a directory, a limit or a label. A new kind
@@ -110,3 +133,14 @@ check('pusta nazwa dzwieku dostaje zastepnik', mediaLabel('audio', '   '), 'Nagr
 check('pusta nazwa obrazu tez', mediaLabel('image', ''), 'Obraz');
 check('pusta nazwa wideo tez', mediaLabel('video', ''), 'Wideo');
 check('nazwa pliku zostaje', mediaLabel('audio', 'wymowa.mp3'), 'wymowa.mp3');
+
+group('Nazwa rodzaju pola');
+
+// Every kind is labelled in both editors, including the ones that hold no file
+// at all (`speech`, `text`) — a missing entry would put `undefined` on screen.
+check(
+  'kazdy rodzaj ma swoja nazwe',
+  FIELD_KINDS.every((kind) => Boolean(FIELD_NOUNS[kind])),
+  true
+);
+check('a rodzaje z plikiem maja te sama co w MEDIA_NOUNS', FIELD_NOUNS.audio, MEDIA_NOUNS.audio);

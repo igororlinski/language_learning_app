@@ -27,10 +27,67 @@ export const DEFAULT_NEW_CARD_ORDER: NewCardOrder = 'oldest';
 /** Which face of a card a field belongs to. */
 export const FIELD_SIDES = ['front', 'back'] as const;
 
-/** A field holds typed text, or one attached file: sound, a picture or video. */
-export const FIELD_KINDS = ['text', 'audio', 'image', 'video'] as const;
+/**
+ * A field holds typed text, or one attached file: sound, a picture, video, or a
+ * picture generated from the card's own words (`ai-image`). The generated one is
+ * a kind of its own rather than a flag on `image`, because how a field is filled
+ * in is the one thing about it that never changes afterwards.
+ *
+ * The SQL column is plain text with no CHECK, so a new kind needs no migration —
+ * `npm run db:generate` says "nothing to migrate". What it does need is an entry
+ * in every record in `src/lib/media.ts`; `tests/media.test.ts` enforces that.
+ */
+export const FIELD_KINDS = [
+  'text',
+  'audio',
+  'image',
+  'video',
+  'ai-image',
+  'mnemonic',
+  /**
+   * **Retired on 2026-09-09, a day after it was added.** A field whose whole
+   * content was a loudspeaker button reading the card's answer aloud.
+   *
+   * Reading a word out loud turned out not to be a field at all: it is
+   * something a piece of text *does*. Any text on a card can now be spoken by
+   * setting a language on it (`card_fields.speech`, `cards.front_speech`,
+   * `cards.back_speech`), which puts the button under the words it reads
+   * rather than on a line of its own — and lets the question be read in one
+   * language and the answer in another, which one field per card never could.
+   *
+   * Kept here, and everywhere else that handles it, so fields made in that one
+   * day still work. It is simply not offered in the "+" sheet any more, which
+   * is the retirement `ai-image` got.
+   */
+  'speech',
+] as const;
 export type FieldSide = (typeof FIELD_SIDES)[number];
 export type FieldKind = (typeof FIELD_KINDS)[number];
+
+/**
+ * How much care a generated picture is drawn with.
+ *
+ * An outcome, not a model: which model draws a careful picture is settled in
+ * one place, `QUALITY_MODELS` in `src/lib/ai-image.ts`.
+ * The difference is about five times the wait and whether the subject fills the
+ * frame — see `src/lib/ai-image.ts`.
+ *
+ * It lives here, beside the other column enums, because a deck stores one as its
+ * default. Declared before `decks` for the reason `FIELD_SIDES` is: drizzle-kit
+ * really loads this file, and a constant used above its declaration fails at
+ * startup rather than in `tsc`.
+ */
+export const PICTURE_QUALITIES = ['accurate', 'fast'] as const;
+export type PictureQuality = (typeof PICTURE_QUALITIES)[number];
+
+/**
+ * Quick, since 2026-10-07. It used to be careful, on the argument that the
+ * wait is paid once in the editor and never in review — but a careful round of
+ * three pictures is ~21 s against ~4 s, at almost twice the neurons, and the
+ * wait was the thing actually complained about. A deck that wants careful
+ * pictures says so in its editor; the gear overrides either for one run.
+ */
+export const DEFAULT_PICTURE_QUALITY: PictureQuality = 'fast';
 
 export const decks = sqliteTable('decks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -75,6 +132,62 @@ export const decks = sqliteTable('decks', {
   newFrontPosition: integer('new_front_position').notNull().default(0),
   newBackSide: text('new_back_side', { enum: FIELD_SIDES }).notNull().default('back'),
   newBackPosition: integer('new_back_position').notNull().default(0),
+  /**
+   * Which language each mandatory field of a **new** card is read out loud in,
+   * or null for one that starts silent. The same shape as `cards.front_speech`,
+   * which is what these are copied into.
+   *
+   * A default, not a rule: it decides what a card starts as and nothing after
+   * that. Changing it never reaches a card already made — the same line the
+   * default layout and the daily limits are on. It exists because the deck is
+   * the only place that knows the answer will always be the word being learned,
+   * and setting that on every single card by hand is the kind of chore nobody
+   * keeps up for long.
+   */
+  newFrontSpeech: text('new_front_speech'),
+  newBackSpeech: text('new_back_speech'),
+  /**
+   * Which language each mandatory field of a **new** card gets its IPA
+   * transcription written in when the card is saved, or null for none.
+   *
+   * A language and not a transcription: the template has no words yet, so
+   * what it can say is only "transcribe this, in that". The card editor asks
+   * the model at save time, for whatever was typed — see `src/lib/ai-phonetic.ts`.
+   * A default like the voices above: it decides how a card starts and nothing
+   * after that.
+   */
+  newFrontPhoneticLanguage: text('new_front_phonetic_language'),
+  newBackPhoneticLanguage: text('new_back_phonetic_language'),
+  /**
+   * Which languages this deck writes its questions and answers in, as JSON
+   * arrays of names, or null while the deck has not said. Nothing validates a
+   * card against them — see `src/lib/languages.ts` for why they exist and what
+   * counts as the same language.
+   *
+   * They follow `cards.front` and `cards.back`, the two mandatory fields, not
+   * the two sides of the card: a question may be laid out on the back, and it
+   * is still the question whose language this names.
+   */
+  frontLanguages: text('front_languages'),
+  backLanguages: text('back_languages'),
+  /**
+   * Which way this deck's generated pictures lean, careful or quick.
+   *
+   * A default rather than a rule: it is what a new field starts with and what
+   * the "+" sheet opens on, and the gear in the field overrides it for the run
+   * at hand. It sits on the deck for the same reason the default card layout
+   * and the daily limits do — it decides how new cards in *this* deck are made,
+   * and a deck of long sentences wants something different from a deck of
+   * single words.
+   */
+  //
+  // The SQL default stays the literal it was migrated with (0017), not
+  // `DEFAULT_PICTURE_QUALITY`: changing a column default in SQLite means
+  // drizzle-kit rebuilding the whole table, and nothing relies on it — every
+  // deck is written with its quality named (`deckValues`).
+  imageQuality: text('image_quality', { enum: PICTURE_QUALITIES })
+    .notNull()
+    .default('accurate'),
   createdAt: integer('created_at', { mode: 'timestamp_ms' })
     .notNull()
     .$defaultFn(() => new Date()),
@@ -83,7 +196,43 @@ export const decks = sqliteTable('decks', {
 export const IMAGE_STATUSES = ['none', 'generating', 'ready', 'failed'] as const;
 export type ImageStatus = (typeof IMAGE_STATUSES)[number];
 
-/** One empty field a new card in this deck starts with. */
+/**
+ * One way a new card in a deck can start — a deck has as many as it likes,
+ * and the card editor switches between them while a new card is being made.
+ *
+ * Each carries everything the deck used to carry once (migration 0022 moved
+ * it here): where the two mandatory fields sit, what they start out reading
+ * aloud in, which language each gets transcribed in at save, and — through
+ * `deck_field_slots.template_id` — the empty extra fields. The columns on
+ * `decks` that held this before are **dead**, like `cards.image_*`: dropping a
+ * column in SQLite means rebuilding the table, and nothing reads them.
+ *
+ * A template decides how a card *starts* and nothing after that: the card
+ * remembers no template, and editing or deleting one never touches a card.
+ */
+export const cardTemplates = sqliteTable(
+  'card_templates',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    deckId: integer('deck_id')
+      .notNull()
+      .references(() => decks.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** Order among the deck's templates; the first one is the default. */
+    position: integer('position').notNull().default(0),
+    frontSide: text('front_side', { enum: FIELD_SIDES }).notNull().default('front'),
+    frontPosition: integer('front_position').notNull().default(0),
+    backSide: text('back_side', { enum: FIELD_SIDES }).notNull().default('back'),
+    backPosition: integer('back_position').notNull().default(0),
+    frontSpeech: text('front_speech'),
+    backSpeech: text('back_speech'),
+    frontPhoneticLanguage: text('front_phonetic_language'),
+    backPhoneticLanguage: text('back_phonetic_language'),
+  },
+  (table) => [index('card_templates_deck_id_idx').on(table.deckId)]
+);
+
+/** One empty field a new card made from a template starts with. */
 export const deckFieldSlots = sqliteTable(
   'deck_field_slots',
   {
@@ -94,6 +243,18 @@ export const deckFieldSlots = sqliteTable(
     side: text('side', { enum: FIELD_SIDES }).notNull(),
     position: integer('position').notNull().default(0),
     kind: text('kind', { enum: FIELD_KINDS }).notNull().default('text'),
+    /** What a card made from this slot starts reading aloud in, if anything. */
+    speech: text('speech'),
+    /** Which language a card made from this slot transcribes it in, if any. */
+    phoneticLanguage: text('phonetic_language'),
+    /**
+     * The template this slot belongs to. Nullable only because SQLite cannot
+     * add a NOT NULL column to a table that has rows; migration 0022 fills it
+     * for every slot there was, and every slot written since names one.
+     */
+    templateId: integer('template_id').references(() => cardTemplates.id, {
+      onDelete: 'cascade',
+    }),
   },
   (table) => [index('deck_field_slots_deck_id_idx').on(table.deckId)]
 );
@@ -116,6 +277,34 @@ export const cards = sqliteTable(
     frontPosition: integer('front_position').notNull().default(0),
     backSide: text('back_side', { enum: FIELD_SIDES }).notNull().default('back'),
     backPosition: integer('back_position').notNull().default(0),
+    /**
+     * Whether each mandatory field is read out loud, and in which language: a
+     * BCP-47 code from `src/lib/languages.ts`, or null for a field that stays
+     * silent. One column carries both facts because there is no third state —
+     * a voice with no language is not something a phone can be asked for.
+     *
+     * The **code** is stored rather than a "yes, use the deck's" marker, and
+     * that is what makes the two sides independent: a card can ask its question
+     * in Polish and say its answer in Portuguese. It also means a line knows
+     * its own voice, so nothing that draws a card has to go and read the deck.
+     *
+     * The price is that changing the deck's languages leaves existing cards
+     * reading what they were set to. Deliberate: what a card says out loud is
+     * part of the card, not a view of a deck setting that can move under it.
+     */
+    frontSpeech: text('front_speech'),
+    backSpeech: text('back_speech'),
+    /**
+     * How each mandatory field is pronounced, written out in IPA (`/kuˈmeɾ/`),
+     * or null for none. Made in the editor, on request, by a language model —
+     * see `src/lib/ai-phonetic.ts` — and stored, because a review must never
+     * need a network. Shown in small type under the words it transcribes.
+     *
+     * It is text, not a language code: the language it was made in is a
+     * decision of the moment it was made, and nothing afterwards needs it.
+     */
+    frontPhonetic: text('front_phonetic'),
+    backPhonetic: text('back_phonetic'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -155,6 +344,48 @@ export const cardFields = sqliteTable(
      * cost a migration that copies every row for no gain.
      */
     mediaPath: text('audio_path'),
+    /**
+     * A `mnemonic` field only: the sound-alike keyword and the English scene,
+     * as JSON. The sentence the learner reads is not here — it is `value`,
+     * like every other field's label and search material. What this holds is
+     * what "another picture, same association" needs and nothing else reads.
+     *
+     * Null for every other kind, and null for a mnemonic whose association is
+     * unreadable — see `src/lib/mnemonic.ts` for what that costs.
+     */
+    mnemonic: text('mnemonic'),
+    /**
+     * Kept on the card, hidden from the learner.
+     *
+     * Two halves rather than one flag because an association is two things
+     * that fail apart: the picture can be wrong while the sentence is right,
+     * and the sentence can give the answer away while the picture is exactly
+     * the hint you wanted. Hiding is not deleting — the row keeps its content,
+     * the editor keeps showing it, and turning it back on costs one tap. That
+     * is the difference from removing the picture, which is gone for good and
+     * cost neurons to make.
+     *
+     * `sideLines` is the one place that reads them, so anything drawing a
+     * card for the learner — review, the preview screen, the editor's own
+     * preview — obeys them without knowing they exist.
+     */
+    hideValue: integer('hide_value', { mode: 'boolean' }).notNull().default(false),
+    hideMedia: integer('hide_media', { mode: 'boolean' }).notNull().default(false),
+    /**
+     * Read this field's text out loud, in this language — the same rule and the
+     * same shape as `cards.front_speech`: a BCP-47 code, or null for silence.
+     *
+     * Only a field whose `value` is words means anything here, so the editor
+     * offers it for `text` and `mnemonic` and nowhere else: an audio field's
+     * `value` is a file name, and having the phone read „img_2043.jpg" aloud
+     * is not a feature. `sideLines` holds to the same rule on the way out.
+     */
+    speech: text('speech'),
+    /**
+     * This field's pronunciation in IPA, or null — the same as
+     * `cards.front_phonetic`, and offered for the same kinds `speech` is.
+     */
+    phonetic: text('phonetic'),
   },
   (table) => [index('card_fields_card_id_idx').on(table.cardId)]
 );
@@ -240,9 +471,41 @@ export const reviewLogs = sqliteTable(
   (table) => [index('review_logs_card_id_idx').on(table.cardId)]
 );
 
+/**
+ * Choices that belong to the app rather than to any deck — today, which model
+ * writes associations and transcriptions (`src/lib/ai-transport.ts`).
+ *
+ * Key-value rather than a column per setting so the next such choice is a row,
+ * not a migration. Values are text; each key's reader parses its own and falls
+ * back to the default on anything it does not recognise.
+ */
+export const appSettings = sqliteTable('app_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+});
+
+/**
+ * What this phone has spent today against each free AI allowance — counted
+ * here because the keys are the user's own and the phone is the only thing
+ * that sees every request made with them (`src/lib/ai-usage.ts`).
+ *
+ * `day` is the provider's own day (`YYYY-MM-DD`): Cloudflare's neurons reset at
+ * midnight UTC, Google's requests at midnight Pacific.
+ */
+export const aiUsage = sqliteTable(
+  'ai_usage',
+  {
+    metric: text('metric').notNull(),
+    day: text('day').notNull(),
+    amount: real('amount').notNull().default(0),
+  },
+  (table) => [primaryKey({ columns: [table.metric, table.day] })]
+);
+
 export type Deck = typeof decks.$inferSelect;
 export type CardField = typeof cardFields.$inferSelect;
 export type DeckFieldSlot = typeof deckFieldSlots.$inferSelect;
+export type CardTemplate = typeof cardTemplates.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type FsrsStateRow = typeof fsrsState.$inferSelect;
 export type ReviewLog = typeof reviewLogs.$inferSelect;

@@ -7,6 +7,7 @@
  * surrounding query, or a scheduling rule drifting between JS and SQL.
  */
 import { eq } from 'drizzle-orm';
+import { openDatabaseSync } from 'expo-sqlite';
 
 import { db, sqliteDb } from '@/db/client';
 import {
@@ -16,6 +17,8 @@ import {
   cardsMediaFiles,
   allTagsQuery,
   copyCards,
+  deckLanguages,
+  deckPictureQuality,
   deckScheduling,
   deckTagsQuery,
   getCardTagNames,
@@ -42,19 +45,32 @@ import {
   getDeckSlots,
   newCardFields,
   newCardLayout,
+  newCardPhoneticLanguages,
+  newCardSpeech,
+  deckTemplates,
+  syncDeckTemplates,
+  DEFAULT_TEMPLATE_NAME,
   otherDecksQuery,
   rollbackCard,
   saveCardFields,
   syncDeckSlots,
   updateCard,
   updateDeck,
+  addAiUsage,
+  aiUsageQuery,
+  getTextSource,
+  getTextTemperatures,
+  setTextSource,
+  setTextTemperature,
+  type MediaCopier,
 } from '@/db/queries';
-import { decks, fsrsState, reviewLogs } from '@/db/schema';
+import { appSettings, decks, fsrsState, reviewLogs } from '@/db/schema';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { sortCards } from '@/lib/card-sort';
 import { filterCards } from '@/lib/search';
 import { DEFAULT_SCHEDULING, schedulingKey } from '@/lib/fsrs-options';
 import { optimizeWeights } from '@/lib/fsrs-optimizer';
+import { parseMnemonicColumn } from '@/lib/mnemonic';
 import { filterByTags } from '@/lib/tags';
 import {
   countQueueStates,
@@ -82,8 +98,18 @@ import migration0010 from '../drizzle/0010_quiet_absorbing_man.sql';
 import migration0011 from '../drizzle/0011_violet_giant_man.sql';
 import migration0012 from '../drizzle/0012_cool_swordsman.sql';
 import migration0013 from '../drizzle/0013_messy_nova.sql';
+import migration0014 from '../drizzle/0014_cultured_sphinx.sql';
+import migration0015 from '../drizzle/0015_adorable_cable.sql';
+import migration0016 from '../drizzle/0016_spotty_titanium_man.sql';
+import migration0017 from '../drizzle/0017_adorable_morph.sql';
+import migration0018 from '../drizzle/0018_naive_violations.sql';
+import migration0019 from '../drizzle/0019_brainy_ben_urich.sql';
+import migration0020 from '../drizzle/0020_mean_reavers.sql';
+import migration0021 from '../drizzle/0021_tiny_hobgoblin.sql';
+import migration0022 from '../drizzle/0022_daily_valkyrie.sql';
+import migration0023 from '../drizzle/0023_same_white_queen.sql';
 
-for (const migration of [
+const MIGRATIONS = [
   migration0000,
   migration0001,
   migration0002,
@@ -98,7 +124,27 @@ for (const migration of [
   migration0011,
   migration0012,
   migration0013,
-]) {
+  migration0014,
+  migration0015,
+  migration0016,
+  migration0017,
+  migration0018,
+  migration0019,
+  migration0020,
+  migration0021,
+  migration0022,
+  migration0023,
+];
+
+/** Runs migrations the way the app's migrator does: statement by statement. */
+const applyMigration = (run: (sql: string) => void, migration: string) => {
+  for (const statement of migration.split('--> statement-breakpoint')) {
+    const trimmed = statement.trim();
+    if (trimmed) run(trimmed);
+  }
+};
+
+for (const migration of MIGRATIONS) {
   for (const statement of migration.split('--> statement-breakpoint')) {
     const trimmed = statement.trim();
     if (trimmed) sqliteDb.execSync(trimmed);
@@ -404,9 +450,9 @@ const fieldDeck = createDeck({ name: 'Z polami', newPerDay: 10, reviewsPerDay: 1
 // Position 0 on each side belongs to the mandatory field, so the empty slots
 // start below it. Each one carries its own kind — a text box or an audio slot.
 syncDeckSlots(fieldDeck.id, [
-  { side: 'front', position: 1, kind: 'text' },
-  { side: 'front', position: 2, kind: 'audio' },
-  { side: 'back', position: 1, kind: 'text' },
+  { side: 'front', position: 1, kind: 'text', speech: null },
+  { side: 'front', position: 2, kind: 'audio', speech: null },
+  { side: 'back', position: 1, kind: 'text', speech: null },
 ]);
 
 // Order between the two sides carries no meaning — each side is sorted on its
@@ -430,7 +476,7 @@ check(
 );
 
 // Saving the deck again replaces the whole set rather than diffing it.
-syncDeckSlots(fieldDeck.id, [{ side: 'back', position: 1, kind: 'audio' }]);
+syncDeckSlots(fieldDeck.id, [{ side: 'back', position: 1, kind: 'audio', speech: null }]);
 
 check(
   'ponowny zapis podmienia caly zestaw slotow',
@@ -447,7 +493,7 @@ const oddDeck = createDeck({
   newCardLayout: { frontSide: 'back', frontPosition: 1, backSide: 'back', backPosition: 0 },
 });
 
-syncDeckSlots(oddDeck.id, [{ side: 'front', position: 0, kind: 'text' }]);
+syncDeckSlots(oddDeck.id, [{ side: 'front', position: 0, kind: 'text', speech: null }]);
 
 check('talia pamieta swoj domyslny uklad', newCardLayout(oddDeck.id), {
   frontSide: 'back',
@@ -457,7 +503,18 @@ check('talia pamieta swoj domyslny uklad', newCardLayout(oddDeck.id), {
 });
 
 check('puste pole trafia na wolna strone', newCardFields(oddDeck.id), [
-  { id: null, side: 'front', position: 0, kind: 'text', value: '', mediaPath: null },
+  {
+    id: null,
+    side: 'front',
+    position: 0,
+    kind: 'text',
+    value: '',
+    mediaPath: null,
+    mnemonic: null,
+    speech: null,
+    phonetic: null,
+    phoneticLanguage: null,
+  },
 ]);
 
 // A card made from that template reads exactly as the deck arranged it.
@@ -475,8 +532,8 @@ const oddQueued = () =>
 
 check('nowa karta dziedziczy uklad talii: przod pusty', oddQueued()?.frontLines, []);
 check('a oba pola podstawowe czytaja sie z tylu', oddQueued()?.backLines, [
-  { text: 'latac', base: true, media: null },
-  { text: 'to fly', base: true, media: null },
+  { text: 'latac', base: true, media: null, speak: null, phonetic: null },
+  { text: 'to fly', base: true, media: null, speak: null, phonetic: null },
 ]);
 
 group('Uklad pol na karcie');
@@ -508,12 +565,12 @@ check(
 const queued = () => loadDueCards(fieldDeck.id, now).find((card) => card.cardId === fieldCard.id);
 
 check('przod czyta sie w kolejnosci z edytora, bez pustego pola', queued()?.frontLines, [
-  { text: '/breik/', base: false, media: null },
-  { text: 'to break', base: true, media: null },
+  { text: '/breik/', base: false, media: null, speak: null, phonetic: null },
+  { text: 'to break', base: true, media: null, speak: null, phonetic: null },
 ]);
 check('tyl tak samo', queued()?.backLines, [
-  { text: 'lamac', base: true, media: null },
-  { text: 'break-broke-broken', base: false, media: null },
+  { text: 'lamac', base: true, media: null, speak: null, phonetic: null },
+  { text: 'break-broke-broken', base: false, media: null, speak: null, phonetic: null },
 ]);
 
 const rows = getCardFields(fieldCard.id);
@@ -534,12 +591,12 @@ saveCardFields(
 );
 
 check('po przestawieniu przod ma tylko pole podstawowe', queued()?.frontLines, [
-  { text: 'to break', base: true, media: null },
+  { text: 'to break', base: true, media: null, speak: null, phonetic: null },
 ]);
 check('a pole przeniesione czyta sie na tyle, nad podstawowym', queued()?.backLines, [
-  { text: '/breik/', base: false, media: null },
-  { text: 'lamac', base: true, media: null },
-  { text: 'break-broke-broken', base: false, media: null },
+  { text: '/breik/', base: false, media: null, speak: null, phonetic: null },
+  { text: 'lamac', base: true, media: null, speak: null, phonetic: null },
+  { text: 'break-broke-broken', base: false, media: null, speak: null, phonetic: null },
 ]);
 
 check('pole wyrzucone z listy znika z karty', getCardFields(fieldCard.id).length, 3);
@@ -565,9 +622,9 @@ const emptyFrontQueued = () =>
 
 check('przod bez zadnego pola nie ma linii', emptyFrontQueued()?.frontLines, []);
 check('a caly uklad czyta sie z tylu', emptyFrontQueued()?.backLines, [
-  { text: 'to run', base: true, media: null },
-  { text: 'biegac', base: true, media: null },
-  { text: 'ran / run', base: false, media: null },
+  { text: 'to run', base: true, media: null, speak: null, phonetic: null },
+  { text: 'biegac', base: true, media: null, speak: null, phonetic: null },
+  { text: 'ran / run', base: false, media: null, speak: null, phonetic: null },
 ]);
 
 group('Przenosiny a pola karty');
@@ -580,9 +637,9 @@ check(
   'uklad karty przezywa przenosiny w calosci',
   loadDueCards(fieldTarget.id, now).find((card) => card.cardId === fieldCard.id)?.backLines,
   [
-    { text: '/breik/', base: false, media: null },
-    { text: 'lamac', base: true, media: null },
-    { text: 'break-broke-broken', base: false, media: null },
+    { text: '/breik/', base: false, media: null, speak: null, phonetic: null },
+    { text: 'lamac', base: true, media: null, speak: null, phonetic: null },
+    { text: 'break-broke-broken', base: false, media: null, speak: null, phonetic: null },
   ]
 );
 
@@ -677,13 +734,13 @@ const mediaQueued = () =>
   loadDueCards(mediaDeck.id, now).find((card) => card.cardId === mediaCard.id);
 
 check('linia dzwieku niesie plik i jego rodzaj', mediaQueued()?.frontLines, [
-  { text: 'to break', base: true, media: null },
-  { text: 'break.m4a', base: false, media: { kind: 'audio', fileName: 'a1.m4a' } },
+  { text: 'to break', base: true, media: null, speak: null, phonetic: null },
+  { text: 'break.m4a', base: false, media: { kind: 'audio', fileName: 'a1.m4a' }, speak: null, phonetic: null },
 ]);
 check('linia obrazu i wideo tak samo', mediaQueued()?.backLines, [
-  { text: 'lamac', base: true, media: null },
-  { text: 'lamanie.jpg', base: false, media: { kind: 'image', fileName: 'i1.jpg' } },
-  { text: 'lamanie.mp4', base: false, media: { kind: 'video', fileName: 'v1.mp4' } },
+  { text: 'lamac', base: true, media: null, speak: null, phonetic: null },
+  { text: 'lamanie.jpg', base: false, media: { kind: 'image', fileName: 'i1.jpg' }, speak: null, phonetic: null },
+  { text: 'lamanie.mp4', base: false, media: { kind: 'video', fileName: 'v1.mp4' }, speak: null, phonetic: null },
 ]);
 
 // Deleting has to know the kind: each one lives in its own directory.
@@ -711,7 +768,7 @@ saveCardFields(mediaCard.id, [
 ]);
 
 check('pole bez pliku nie trafia na karte', mediaQueued()?.frontLines, [
-  { text: 'to break', base: true, media: null },
+  { text: 'to break', base: true, media: null, speak: null, phonetic: null },
 ]);
 check('i nie ma czego kasowac', cardMediaFiles(mediaCard.id), []);
 
@@ -749,7 +806,7 @@ updateCard(editedCard.id, {
 });
 
 check('po edycji widac nowa tresc', getCardLines(editedCard.id)?.front, [
-  { text: 'to fall down', base: true, media: null },
+  { text: 'to fall down', base: true, media: null, speak: null, phonetic: null },
 ]);
 
 deleteCard(editedCard.id);
@@ -769,7 +826,7 @@ const plainCopyCard = createCard(sourceDeck.id, 'to swim', 'plywac', now);
 
 // The file system is not available here, so the duplication is injected — the
 // real one lives in `src/lib/media-files.ts` and needs a device.
-const fakeCopier = (kind: 'audio' | 'image' | 'video', fileName: string) => `${kind}-2-${fileName}`;
+const fakeCopier: MediaCopier = (kind, fileName) => `${kind}-2-${fileName}`;
 
 // Answer one card first: the copy must not inherit any of this.
 gradeCard(withFile.id, Rating.Good, now);
@@ -1025,11 +1082,11 @@ const halfQueued = () => loadDueCards(halfDeck.id, now).find((card) => card.card
 
 check('karta bez odpowiedzi zapisuje sie', getCard(halfCard.id)?.back, '');
 check('przod czyta sie normalnie', halfQueued()?.frontLines, [
-  { text: 'to wonder', base: true, media: null },
+  { text: 'to wonder', base: true, media: null, speak: null, phonetic: null },
 ]);
 // The empty mandatory field drops out the same way an empty extra one does.
 check('a tyl pokazuje tylko to, co ma tresc', halfQueued()?.backLines, [
-  { text: 'zastanawiac sie', base: false, media: null },
+  { text: 'zastanawiac sie', base: false, media: null, speak: null, phonetic: null },
 ]);
 
 const emptyBack = createCard(halfDeck.id, 'to hush', '', now);
@@ -1238,3 +1295,662 @@ for (const rating of RATINGS) {
 
   checkPromise(`${GRADE_LABELS[rating]} na karcie w powtorkach`, card.id, rating, at(12, 0, 60));
 }
+
+
+group('Jezyki talii');
+
+/**
+ * The property this shares with the FSRS weights, and the reason it gets a test
+ * at all: `front` and `back` are not column names, so a save written as a spread
+ * would drop them without a word from `tsc` or from drizzle. What the editor
+ * sends has to be what comes back.
+ */
+const langDeck = createDeck({
+  name: 'Angielski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+});
+
+check('nowa talia nie deklaruje jezykow', deckLanguages(langDeck.id), { front: [], back: null });
+
+updateDeck(langDeck.id, {
+  name: 'Angielski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  languages: { front: ['pl'], back: 'en-US' },
+});
+
+check('zapisane jezyki wracaja z bazy', deckLanguages(langDeck.id), {
+  front: ['pl'],
+  back: 'en-US',
+});
+
+// Several per side is the point — a deck may mix them.
+updateDeck(langDeck.id, {
+  name: 'Angielski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  languages: { front: ['pl', 'la'], back: 'en-US' },
+});
+
+check('kilka jezykow na stronie tez', deckLanguages(langDeck.id).front, ['pl', 'la']);
+
+group('Domyslna jakosc obrazow w talii');
+
+/**
+ * The same rule as the languages and the weights above: what the deck editor
+ * sends has to come back. A default that silently reverted would look exactly
+ * like a user who never changed it.
+ */
+check('nowa talia rysuje szybko', deckPictureQuality(langDeck.id), 'fast');
+
+updateDeck(langDeck.id, {
+  name: 'Angielski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  imageQuality: 'accurate',
+});
+
+check('wybrana jakosc wraca z bazy', deckPictureQuality(langDeck.id), 'accurate');
+
+// A save that says nothing about pictures must not quietly undo the choice…
+updateDeck(langDeck.id, {
+  name: 'Angielski po zmianie',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  imageQuality: 'accurate',
+});
+
+check('i przezywa zapis reszty formularza', deckPictureQuality(langDeck.id), 'accurate');
+
+// …and a deck that never existed answers with the default rather than throwing.
+check('nieznana talia oddaje domyslna', deckPictureQuality(9999), 'fast');
+
+// One language named twice is one language, or a future reader would be told
+// the question is in two.
+updateDeck(langDeck.id, {
+  name: 'Angielski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  languages: { front: ['pl', 'pl'], back: null },
+});
+
+check('powtorzony kod sklada sie w jeden', deckLanguages(langDeck.id).front, ['pl']);
+check('pusta strona wraca pusta', deckLanguages(langDeck.id).back, null);
+
+// A brand new deck has to carry them too, not only an edited one.
+const bornWithLanguages = createDeck({
+  name: 'Od razu z jezykami',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  languages: { front: ['de'], back: 'pl' },
+});
+
+check('nowa talia tez je zapisuje', deckLanguages(bornWithLanguages.id), {
+  front: ['de'],
+  back: 'pl',
+});
+
+// Nothing outside the catalogue reaches the column: the codes are what the
+// speech engine and the language model are handed, so a made-up one would fail
+// somewhere far away from here.
+updateDeck(langDeck.id, {
+  name: 'Angielski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  languages: { front: ['pl', 'klingonski'], back: null },
+});
+
+check('wymyslony jezyk nie wchodzi do bazy', deckLanguages(langDeck.id).front, ['pl']);
+
+group('Pole ze skojarzeniem');
+
+/**
+ * The association is three pieces kept in two places: the sentence is the
+ * field's `value`, like every other field's label, and the keyword plus the
+ * English scene live in the `mnemonic` column. That split is the thing worth a
+ * test — a save that dropped the column would leave a field which still shows
+ * its picture and its sentence but can never be redrawn, and nothing on screen
+ * would say so.
+ */
+const mnemoDeck = createDeck({
+  name: 'Portugalski',
+  newPerDay: 50,
+  reviewsPerDay: 50,
+  languages: { front: ['pl'], back: 'pt-PT' },
+});
+
+const association = '{"keyword":"komar","prompt":"a mosquito eating a sandwich"}';
+
+const mnemoCard = createCard(mnemoDeck.id, 'jeść', 'comer', now, [
+  {
+    id: null,
+    side: 'back',
+    position: 1,
+    kind: 'mnemonic',
+    value: 'Komar je kanapkę.',
+    mediaPath: 'komar.jpg',
+    mnemonic: association,
+  },
+]);
+
+const mnemoField = getCardFields(mnemoCard.id)[0];
+
+check('zdanie zapisuje sie jako value pola', mnemoField.value, 'Komar je kanapkę.');
+check('obraz jako plik', mnemoField.mediaPath, 'komar.jpg');
+check('slowo-klucz w swojej kolumnie', parseMnemonicColumn(mnemoField.mnemonic)?.keyword, 'komar');
+check(
+  'razem ze scena do ponownego narysowania',
+  parseMnemonicColumn(mnemoField.mnemonic)?.prompt,
+  'a mosquito eating a sandwich'
+);
+
+// Unlike every other media field, whose text is a file name kept off the card,
+// a mnemonic's sentence is the association itself — so it has to reach the
+// review screen.
+check('zdanie dociera na kartę', getCardLines(mnemoCard.id)?.back, [
+  { text: 'comer', base: true, media: null, speak: null, phonetic: null },
+  { text: 'Komar je kanapkę.', base: false, media: { kind: 'mnemonic', fileName: 'komar.jpg' }, speak: null, phonetic: null },
+]);
+
+// An association whose picture failed is still worth reading, which is why it
+// is the one media kind that survives without a file.
+saveCardFields(mnemoCard.id, [
+  {
+    id: mnemoField.id,
+    side: 'back',
+    position: 1,
+    kind: 'mnemonic',
+    value: 'Komar je kanapkę.',
+    mediaPath: null,
+    mnemonic: association,
+  },
+]);
+
+check('samo zdanie bez obrazu tez sie pokazuje', getCardLines(mnemoCard.id)?.back, [
+  { text: 'comer', base: true, media: null, speak: null, phonetic: null },
+  { text: 'Komar je kanapkę.', base: false, media: null, speak: null, phonetic: null },
+]);
+
+// The association cost a model call to invent; a copy that kept the picture but
+// forgot how to redraw it would be worse than one that kept neither.
+const mnemoCopy = copyCards([mnemoCard.id], mnemoDeck.id, fakeCopier, now)[0];
+
+check(
+  'kopia zabiera skojarzenie ze soba',
+  parseMnemonicColumn(getCardFields(mnemoCopy)[0].mnemonic)?.keyword,
+  'komar'
+);
+
+group('Chowanie polowek pola przed uczacym sie');
+
+/**
+ * Hiding is data, not a screen's mood: it has to survive the save and reach
+ * the review screen, or the editor would promise something the card does not
+ * do. This is the same failure the FSRS weights had — written by the screen,
+ * silently dropped on the way to the table — so it is checked the same way:
+ * what the editor saved is read back out of the database.
+ */
+const hiddenCard = createCard(mnemoDeck.id, 'okno', 'janela', now, [
+  {
+    id: null,
+    side: 'back',
+    position: 1,
+    kind: 'mnemonic',
+    value: 'Żaluzja zasłania okno.',
+    mediaPath: 'zaluzja.jpg',
+    mnemonic: '{"keyword":"żaluzja","prompt":"window blinds"}',
+    hideValue: true,
+  },
+]);
+
+const hiddenField = getCardFields(hiddenCard.id)[0];
+
+check('schowanie wraca z bazy', hiddenField.hideValue, true);
+check('a druga polowka zostaje widoczna', hiddenField.hideMedia, false);
+check('tresc nie znika przy chowaniu', hiddenField.value, 'Żaluzja zasłania okno.');
+
+// The sentence is hidden, so the card shows the picture alone.
+check('karta pokazuje sam obraz', getCardLines(hiddenCard.id)?.back, [
+  { text: 'janela', base: true, media: null, speak: null, phonetic: null },
+  { text: '', base: false, media: { kind: 'mnemonic', fileName: 'zaluzja.jpg' }, speak: null, phonetic: null },
+]);
+
+// Turning it back on is a save like any other, and the line returns.
+saveCardFields(hiddenCard.id, [
+  {
+    id: hiddenField.id,
+    side: 'back',
+    position: 1,
+    kind: 'mnemonic',
+    value: 'Żaluzja zasłania okno.',
+    mediaPath: 'zaluzja.jpg',
+    mnemonic: '{"keyword":"żaluzja","prompt":"window blinds"}',
+    hideValue: false,
+    hideMedia: true,
+  },
+]);
+
+check('przywrocone zdanie wraca na karte', getCardLines(hiddenCard.id)?.back?.[1]?.text, 'Żaluzja zasłania okno.');
+check('a schowany obraz z niej znika', getCardLines(hiddenCard.id)?.back?.[1]?.media, null);
+
+// A copy inherits what the original was showing, like everything else about it.
+const hiddenCopy = copyCards([hiddenCard.id], mnemoDeck.id, fakeCopier, now)[0];
+
+check('kopia dziedziczy schowanie', getCardFields(hiddenCopy)[0].hideMedia, true);
+check('i to, co widoczne', getCardFields(hiddenCopy)[0].hideValue, false);
+
+group('Czytanie na glos wraca z bazy');
+
+/**
+ * Speaking is a column, not a screen's mood, and it is three columns rather
+ * than one: the two mandatory fields carry their own on `cards`, every extra
+ * field on its own row. Checked the same way the FSRS weights are — written by
+ * the editor, read back out of the table — because that is exactly the bug the
+ * weights had, and drizzle drops a key that is not a column without a word.
+ */
+const spokenCard = createCard(
+  mnemoDeck.id,
+  'okno',
+  'a janela',
+  now,
+  [
+    { id: null, side: 'back', position: 1, kind: 'text', value: 'A janela esta aberta.', mediaPath: null, speech: 'pt-PT' },
+    { id: null, side: 'back', position: 2, kind: 'text', value: 'rodzaj zenski', mediaPath: null },
+  ],
+  { frontSide: 'front', frontPosition: 0, backSide: 'back', backPosition: 0 },
+  { frontSpeech: 'pl', backSpeech: 'pt-PT' }
+);
+
+const spokenRow = getCard(spokenCard.id)!;
+
+check('pytanie pamieta swoj jezyk', spokenRow.frontSpeech, 'pl');
+// The two sides are independent, which is the whole reason the language sits on
+// the card rather than being read back off the deck.
+check('odpowiedz pamieta swoj, inny', spokenRow.backSpeech, 'pt-PT');
+check('pole dodatkowe tez', getCardFields(spokenCard.id)[0].speech, 'pt-PT');
+check('a pole bez glosu milczy', getCardFields(spokenCard.id)[1].speech, null);
+
+// What the card says out loud is what the review screen will offer, in the
+// order the layout put it.
+check('karta czyta kazda linie jej wlasnym glosem', getCardLines(spokenCard.id)?.back, [
+  { text: 'a janela', base: true, media: null, speak: { text: 'a janela', language: 'pt-PT' }, phonetic: null },
+  {
+    text: 'A janela esta aberta.',
+    base: false,
+    media: null,
+    speak: { text: 'A janela esta aberta.', language: 'pt-PT' },
+    phonetic: null,
+  },
+  { text: 'rodzaj zenski', base: false, media: null, speak: null, phonetic: null },
+]);
+
+// Switching a voice off is a save like any other.
+updateCard(spokenCard.id, {
+  front: 'okno',
+  back: 'a janela',
+  speech: { frontSpeech: null, backSpeech: 'pt-BR' },
+});
+
+check('wylaczony glos znika', getCard(spokenCard.id)?.frontSpeech, null);
+check('a zmieniony sie zmienia', getCard(spokenCard.id)?.backSpeech, 'pt-BR');
+
+// Reading aloud costs nothing and needs no file, so it travels with a copy
+// exactly as the layout does.
+const spokenCopy = copyCards([spokenCard.id], mnemoDeck.id, fakeCopier, now)[0];
+
+check('kopia czyta tak samo', getCard(spokenCopy)?.backSpeech, 'pt-BR');
+check('razem z polami', getCardFields(spokenCopy)[0].speech, 'pt-PT');
+
+group('Zapis fonetyczny wraca z bazy');
+
+/**
+ * Three more columns, checked the way the voices are: written as the editor
+ * writes them, read back out of the table. Each one cost a model call.
+ */
+const ipaCard = createCard(
+  mnemoDeck.id,
+  'okno',
+  'a janela',
+  now,
+  [{ id: null, side: 'back', position: 1, kind: 'text', value: 'A janela.', mediaPath: null, phonetic: ' /ɐ ʒɐˈnɛlɐ/ ' }],
+  { frontSide: 'front', frontPosition: 0, backSide: 'back', backPosition: 0 },
+  { frontSpeech: null, backSpeech: 'pt-PT' },
+  { frontPhonetic: null, backPhonetic: '/ɐ ʒɐˈnɛlɐ/' }
+);
+
+check('odpowiedz pamieta swoj zapis', getCard(ipaCard.id)?.backPhonetic, '/ɐ ʒɐˈnɛlɐ/');
+check('pytanie bez zapisu ma NULL', getCard(ipaCard.id)?.frontPhonetic, null);
+check('pole dodatkowe tez, przyciete', getCardFields(ipaCard.id)[0].phonetic, '/ɐ ʒɐˈnɛlɐ/');
+check('karta pokazuje go pod slowami', getCardLines(ipaCard.id)?.back[0]?.phonetic, '/ɐ ʒɐˈnɛlɐ/');
+
+updateCard(ipaCard.id, {
+  front: 'okno',
+  back: 'a janela',
+  phonetic: { frontPhonetic: '/ˈɔknɔ/', backPhonetic: '' },
+});
+
+check('dopisany zapis sie zapisuje', getCard(ipaCard.id)?.frontPhonetic, '/ˈɔknɔ/');
+check('pusty zapis to NULL, nie pusty tekst', getCard(ipaCard.id)?.backPhonetic, null);
+
+// A save that says nothing about transcriptions leaves them alone.
+updateCard(ipaCard.id, { front: 'okno', back: 'a janela' });
+
+check('zapis bez zdania o fonetyce jej nie rusza', getCard(ipaCard.id)?.frontPhonetic, '/ˈɔknɔ/');
+
+const ipaCopy = copyCards([ipaCard.id], mnemoDeck.id, fakeCopier, now)[0];
+
+check('kopia niesie zapis', getCard(ipaCopy)?.frontPhonetic, '/ˈɔknɔ/');
+check('razem z polem', getCardFields(ipaCopy)[0].phonetic, '/ɐ ʒɐˈnɛlɐ/');
+
+
+group('Talia mowi, co nowa karta ma czytac na glos');
+
+/**
+ * A voice is the one thing a template can carry that is not a shape: a slot
+ * holds no words, but "every card in this deck reads its example sentence in
+ * Portuguese" is a property of the deck. Checked the way every other deck
+ * default is — written by the editor, read back out of the table — because
+ * drizzle drops a key that names no column without saying a word, and these
+ * are named `new_*` on the deck and plain on the card.
+ */
+const spokenDeck = createDeck({
+  name: 'Czyta sama',
+  newPerDay: 10,
+  reviewsPerDay: 10,
+  languages: { front: ['pl'], back: 'pt-PT' },
+  newCardSpeech: { frontSpeech: 'pl', backSpeech: 'pt-PT' },
+});
+
+syncDeckSlots(spokenDeck.id, [
+  { side: 'back', position: 1, kind: 'text', speech: 'pt-PT' },
+  { side: 'back', position: 2, kind: 'audio', speech: null },
+]);
+
+check('talia pamieta, czym czytaja nowe karty', newCardSpeech(spokenDeck.id), {
+  frontSpeech: 'pl',
+  backSpeech: 'pt-PT',
+});
+check('slot niesie swoj jezyk', newCardFields(spokenDeck.id)[0]?.speech, 'pt-PT');
+check('a slot na plik zadnego', newCardFields(spokenDeck.id)[1]?.speech, null);
+
+// The whole point: a card made from the template speaks without anybody having
+// set it up on that card.
+const bornSpeaking = createCard(
+  spokenDeck.id,
+  'okno',
+  'a janela',
+  now,
+  newCardFields(spokenDeck.id),
+  newCardLayout(spokenDeck.id),
+  newCardSpeech(spokenDeck.id)
+);
+
+check('nowa karta rodzi sie czytajaca', getCard(bornSpeaking.id)?.backSpeech, 'pt-PT');
+check('razem z polem dodatkowym', getCardFields(bornSpeaking.id)[0]?.speech, 'pt-PT');
+
+// A default is a default: changing it never reaches a card already made.
+updateDeck(spokenDeck.id, {
+  name: 'Czyta sama',
+  newPerDay: 10,
+  reviewsPerDay: 10,
+  languages: { front: ['pl'], back: 'pt-PT' },
+  newCardSpeech: { frontSpeech: null, backSpeech: null },
+});
+
+check('zmiana domyslnej nie rusza karty', getCard(bornSpeaking.id)?.backSpeech, 'pt-PT');
+check('ale nastepna rodzi sie cicha', newCardSpeech(spokenDeck.id).backSpeech, null);
+
+group('Talia mowi, w czym nowa karta dostaje zapis fonetyczny');
+
+/**
+ * The template holds no words, so what it stores is a **language** — "this
+ * field gets transcribed, in that" — for the card editor to act on at save.
+ * Checked the way the voices are: written by the deck editor, read back.
+ */
+const ipaDeck = createDeck({
+  name: 'Z zapisem',
+  newPerDay: 10,
+  reviewsPerDay: 10,
+  languages: { front: ['pl'], back: 'pt-PT' },
+  newCardPhoneticLanguages: { front: null, back: 'pt-PT' },
+});
+
+syncDeckSlots(ipaDeck.id, [
+  { side: 'back', position: 1, kind: 'text', speech: null, phoneticLanguage: 'pt-PT' },
+  { side: 'back', position: 2, kind: 'text', speech: null },
+]);
+
+check('talia pamieta jezyk zapisu odpowiedzi', newCardPhoneticLanguages(ipaDeck.id), {
+  front: null,
+  back: 'pt-PT',
+});
+check('slot niesie swoj jezyk zapisu', newCardFields(ipaDeck.id)[0]?.phoneticLanguage, 'pt-PT');
+check('slot bez zdania nie ma zadnego', newCardFields(ipaDeck.id)[1]?.phoneticLanguage, null);
+// A language is not a transcription: a new card starts with none until saved.
+check('a zapisu jeszcze nie ma', newCardFields(ipaDeck.id)[0]?.phonetic, null);
+
+// Since templates moved to their own table, a deck save that says nothing
+// about them leaves them alone — the deck editor saves its templates apart.
+updateDeck(ipaDeck.id, { name: 'Z zapisem', newPerDay: 10, reviewsPerDay: 10 });
+
+check('zapis talii bez zdania o szablonie go nie rusza', newCardPhoneticLanguages(ipaDeck.id).back, 'pt-PT');
+check('nieznana talia nie ma zadnej', newCardPhoneticLanguages(9999), { front: null, back: null });
+
+group('Kilka szablonow nowej karty w jednej talii');
+
+/**
+ * A deck can start a new card more than one way. Each template carries its
+ * own layout, voices, transcription languages and empty slots; the first one
+ * is the default, and asking for a template by id gets exactly that one.
+ */
+const manyDeck = createDeck({
+  name: 'Szablony',
+  newPerDay: 10,
+  reviewsPerDay: 10,
+  languages: { front: ['pl'], back: 'pt-PT' },
+});
+
+check('nowa talia ma jeden szablon', deckTemplates(manyDeck.id).length, 1);
+check('nazwany domyslnie', deckTemplates(manyDeck.id)[0]?.name, DEFAULT_TEMPLATE_NAME);
+
+syncDeckTemplates(manyDeck.id, [
+  {
+    name: 'Slowko',
+    layout: { frontSide: 'front', frontPosition: 0, backSide: 'back', backPosition: 0 },
+    speech: { frontSpeech: null, backSpeech: 'pt-PT' },
+    phoneticLanguages: { front: null, back: 'pt-PT' },
+    slots: [{ side: 'back', position: 1, kind: 'text', speech: 'pt-PT' }],
+  },
+  {
+    name: '  Zdanie  ',
+    layout: { frontSide: 'back', frontPosition: 1, backSide: 'front', backPosition: 0 },
+    speech: { frontSpeech: 'pl', backSpeech: null },
+    phoneticLanguages: { front: null, back: null },
+    slots: [
+      { side: 'front', position: 1, kind: 'audio', speech: null },
+      { side: 'back', position: 0, kind: 'text', speech: null, phoneticLanguage: 'pl' },
+    ],
+  },
+]);
+
+const [wordTemplate, sentenceTemplate] = deckTemplates(manyDeck.id);
+
+check('dwa szablony w kolejnosci edytora', deckTemplates(manyDeck.id).map((t) => t.name), [
+  'Slowko',
+  'Zdanie',
+]);
+
+// No id is the deck's first; an id is that template, whole.
+check('bez wyboru pierwszy jest domyslny', newCardSpeech(manyDeck.id).backSpeech, 'pt-PT');
+check('drugi ma swoj uklad', newCardLayout(manyDeck.id, sentenceTemplate.id), {
+  frontSide: 'back',
+  frontPosition: 1,
+  backSide: 'front',
+  backPosition: 0,
+});
+check('swoje glosy', newCardSpeech(manyDeck.id, sentenceTemplate.id), {
+  frontSpeech: 'pl',
+  backSpeech: null,
+});
+check('swoje jezyki zapisu', newCardPhoneticLanguages(manyDeck.id, wordTemplate.id), {
+  front: null,
+  back: 'pt-PT',
+});
+check(
+  'i swoje puste pola',
+  newCardFields(manyDeck.id, sentenceTemplate.id).map((field) => field.kind),
+  ['text', 'audio']
+);
+check('pierwszy swoje', newCardFields(manyDeck.id, wordTemplate.id).length, 1);
+
+// A card made from the second template reads as that template says.
+const fromSentence = createCard(
+  manyDeck.id,
+  'okno',
+  'a janela',
+  now,
+  newCardFields(manyDeck.id, sentenceTemplate.id),
+  newCardLayout(manyDeck.id, sentenceTemplate.id),
+  newCardSpeech(manyDeck.id, sentenceTemplate.id)
+);
+
+check('karta z drugiego szablonu ma jego uklad', getCard(fromSentence.id)?.frontSide, 'back');
+check('i jego pola', getCardFields(fromSentence.id).length, 2);
+
+// Replacing the list replaces it, slots included, and a deck is never left
+// without a template.
+syncDeckTemplates(manyDeck.id, []);
+
+check('pusta lista zostawia jeden domyslny', deckTemplates(manyDeck.id).length, 1);
+check('bez pustych pol po starych', newCardFields(manyDeck.id).length, 0);
+// A template decides how a card starts and nothing after that.
+check('karta nie traci pol razem z szablonem', getCardFields(fromSentence.id).length, 2);
+
+// A stale id — a template deleted meanwhile — falls back to the deck's first
+// rather than to nothing.
+check(
+  'nieistniejacy szablon to pierwszy szablon talii',
+  newCardLayout(manyDeck.id, sentenceTemplate.id),
+  { frontSide: 'front', frontPosition: 0, backSide: 'back', backPosition: 0 }
+);
+
+group('Migracja 0022 przenosi uklad talii do szablonu');
+
+/**
+ * The one migration here that moves data rather than shape, so it gets its
+ * own database: everything up to 0021, a deck laid out the old way, then 0022.
+ */
+const legacy = openDatabaseSync(':memory:');
+
+// By index, not "the last one": later migrations must not slide under this test.
+const TEMPLATES_MIGRATION = MIGRATIONS.indexOf(migration0022);
+
+for (const migration of MIGRATIONS.slice(0, TEMPLATES_MIGRATION)) {
+  applyMigration((sql) => legacy.execSync(sql), migration);
+}
+
+legacy.execSync(`
+  INSERT INTO decks (id, name, created_at, new_front_side, new_front_position, new_back_side,
+    new_back_position, new_front_speech, new_back_speech, new_back_phonetic_language)
+  VALUES (7, 'Stara', 0, 'back', 2, 'front', 0, 'pl', 'pt-PT', 'pt-PT');
+  INSERT INTO deck_field_slots (deck_id, side, position, kind, speech)
+  VALUES (7, 'back', 1, 'text', 'pt-PT'), (7, 'front', 1, 'audio', NULL);
+`);
+
+applyMigration((sql) => legacy.execSync(sql), migration0022);
+
+/** Rows of a query on the legacy database. */
+const legacyRows = (sql: string) =>
+  legacy.prepareSync(sql).executeSync<Record<string, unknown>>().getAllSync();
+
+const migrated = legacyRows('SELECT * FROM card_templates WHERE deck_id = 7');
+
+check('kazda talia dostaje jeden szablon', migrated.length, 1);
+check('nazwany Podstawowy', migrated[0]?.name, 'Podstawowy');
+check('z jej ukladem', [migrated[0]?.front_side, migrated[0]?.front_position], ['back', 2]);
+check('glosami', [migrated[0]?.front_speech, migrated[0]?.back_speech], ['pl', 'pt-PT']);
+check('i jezykiem zapisu', migrated[0]?.back_phonetic_language, 'pt-PT');
+check(
+  'puste pola trafiaja do niego',
+  legacyRows('SELECT template_id FROM deck_field_slots WHERE deck_id = 7').map(
+    (row) => row.template_id
+  ),
+  [migrated[0]?.id, migrated[0]?.id]
+);
+
+group('Kto pisze skojarzenia: zapis ustawienia');
+
+// What the settings screen saves is what the card editor reads back — the
+// round trip pitfall 11 asks of every mapping.
+check('bez zapisu to chmura', getTextSource(), { provider: 'cloud', model: null });
+
+setTextSource({ provider: 'lmstudio', model: 'qwen3-14b' });
+check('LM Studio z modelem wraca z bazy', getTextSource(), {
+  provider: 'lmstudio',
+  model: 'qwen3-14b',
+});
+
+setTextSource({ provider: 'lmstudio', model: null });
+check('model mozna odpiac', getTextSource(), { provider: 'lmstudio', model: null });
+
+setTextSource({ provider: 'lmstudio', model: 'gemma-3-12b' });
+setTextSource({ provider: 'cloud', model: 'gemma-3-12b' });
+check('powrot do chmury', getTextSource(), { provider: 'cloud', model: null });
+check(
+  'i nie zostawia osieroconego modelu',
+  db.select().from(appSettings).all().map((row) => row.key),
+  ['ai.text-provider']
+);
+
+// The same round trip for the temperatures: what the screen stores comes back.
+check('bez zapisu temperatury sa domyslne', getTextTemperatures(), {
+  mnemonic: null,
+  phonetic: null,
+});
+
+setTextTemperature('mnemonic', 0.7);
+setTextTemperature('phonetic', 0);
+check('temperatury wracaja z bazy, zero tez', getTextTemperatures(), {
+  mnemonic: 0.7,
+  phonetic: 0,
+});
+
+setTextTemperature('mnemonic', 1.1);
+check('zmiana nadpisuje', getTextTemperatures().mnemonic, 1.1);
+
+// "Domyślna" is a missing row, so the default can keep following the provider.
+setTextTemperature('mnemonic', null);
+setTextTemperature('phonetic', null);
+check('powrot do domyslnej', getTextTemperatures(), { mnemonic: null, phonetic: null });
+check(
+  'i nie zostawia wierszy',
+  db.select().from(appSettings).all().map((row) => row.key),
+  ['ai.text-provider']
+);
+
+group('Licznik zuzycia AI na telefonie');
+
+addAiUsage('neurons', '2026-10-20', 57.6);
+addAiUsage('neurons', '2026-10-20', 104);
+addAiUsage('gemini', '2026-10-19', 1);
+
+check(
+  'wydatki tego samego dnia sie sumuja',
+  aiUsageQuery()
+    .all()
+    .find((row) => row.metric === 'neurons')?.amount,
+  161.6
+);
+
+// A counter only matters for the day it resets on, so nothing piles up.
+addAiUsage('neurons', '2026-10-21', 10);
+
+check(
+  'nowa doba wypiera stara, ale tylko swojej miary',
+  aiUsageQuery()
+    .all()
+    .map((row) => `${row.metric}:${row.day}:${row.amount}`)
+    .sort(),
+  ['gemini:2026-10-19:1', 'neurons:2026-10-21:10']
+);

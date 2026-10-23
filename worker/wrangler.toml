@@ -1,0 +1,25 @@
+# The picture generator. See src/index.js for what it does and why it exists.
+#
+#   cd worker && npx wrangler login && npx wrangler deploy
+#
+# There is no API token anywhere in here: the [ai] binding below is how this
+# Worker reaches Workers AI, and Cloudflare attaches it at deploy time.
+
+name = "flashcards-ai"
+main = "src/index.js"
+
+# Today's date at the time of writing. If wrangler complains that this is in
+# the future, move it back — it only selects runtime defaults.
+compatibility_date = "2026-09-03"
+
+[ai]
+binding = "AI"
+
+# The daily-usage counters behind POST /usage live in this KV namespace, created
+# once with `npx wrangler kv namespace create USAGE`. Without this binding the
+# Worker still runs — it just reports `tracking: false` and counts nothing, which
+# is why generation never depends on it. (For `wrangler dev`, add a
+# `preview_id = "<id from --preview>"` line below.)
+[[kv_namespaces]]
+binding = "USAGE"
+id = "18fca122f9fe46318fb6f0be77550ecb"

@@ -123,3 +123,202 @@ const nothingAtAll = cardPieces({ ...plainCard(), back: '   ' }, []);
 
 check('tyl bez niczego nie ma ani jednej linii', sideLines(nothingAtAll, 'back'), []);
 check('ale pole nadal jest czescia ukladu', piecesOnSide(nothingAtAll, 'back').length, 1);
+
+group('Schowane polowki pola');
+
+/** A mnemonic field: a sentence to read and a picture to look at. */
+const association = (overrides: { hideValue?: boolean; hideMedia?: boolean } = {}) =>
+  cardPieces(plainCard(), [
+    {
+      side: 'back' as const,
+      position: 1,
+      value: 'Komar je kanapkę.',
+      kind: 'mnemonic' as const,
+      mediaPath: 'komar.jpg',
+      ...overrides,
+    },
+  ]);
+
+const backLine = (pieces: ReturnType<typeof cardPieces>) => sideLines(pieces, 'back')[1];
+
+check('domyslnie widac i zdanie, i obraz', [
+  backLine(association())?.text,
+  backLine(association())?.media?.fileName,
+], ['Komar je kanapkę.', 'komar.jpg']);
+
+// Hiding is not deleting: the piece keeps its content and stays in the layout,
+// it simply stops reaching the learner.
+check(
+  'schowane zdanie znika z karty',
+  backLine(association({ hideValue: true }))?.text,
+  ''
+);
+check(
+  'ale obraz zostaje',
+  backLine(association({ hideValue: true }))?.media?.fileName,
+  'komar.jpg'
+);
+check(
+  'schowany obraz znika z karty',
+  backLine(association({ hideMedia: true }))?.media,
+  null
+);
+check(
+  'a zdanie zostaje',
+  backLine(association({ hideMedia: true }))?.text,
+  'Komar je kanapkę.'
+);
+
+// Both halves hidden leaves nothing to show, so the field falls out through the
+// same filter an empty one does.
+check(
+  'schowane obie polowki to pole bez linii',
+  sideLines(association({ hideValue: true, hideMedia: true }), 'back').length,
+  1
+);
+check(
+  'ale pole nadal jest czescia ukladu',
+  piecesOnSide(association({ hideValue: true, hideMedia: true }), 'back').length,
+  2
+);
+
+group('Czytanie na glos');
+
+/**
+ * Speaking is a property of a text, not a field of its own: a piece that has
+ * been given a language keeps its words **and** gains something to say. The
+ * screen then puts the loudspeaker under those very words, which is the only
+ * thing that says which of several buttons belongs to which line.
+ */
+const spoken = cardPieces({ ...plainCard(), frontSpeech: 'en-US', backSpeech: 'pt-PT' }, [
+  { side: 'front', position: 1, value: 'a janela', kind: 'text' as const, speech: 'pt-PT' },
+  { side: 'front', position: 2, value: 'cichy', kind: 'text' as const },
+]);
+
+const spokenFront = sideLines(spoken, 'front');
+
+check('pytanie czyta swoim jezykiem', spokenFront[0]?.speak, {
+  text: 'to break',
+  language: 'en-US',
+});
+check('i nadal pokazuje swoj tekst', spokenFront[0]?.text, 'to break');
+check('pole dodatkowe czyta swoim', spokenFront[1]?.speak, {
+  text: 'a janela',
+  language: 'pt-PT',
+});
+check('pole bez jezyka milczy', spokenFront[2]?.speak, null);
+
+// The two sides are independent, which one deck-wide voice could never do.
+check('odpowiedz czyta innym jezykiem niz pytanie', sideLines(spoken, 'back')[0]?.speak, {
+  text: 'lamac',
+  language: 'pt-PT',
+});
+
+// Hiding the text hides it from the loudspeaker too, or hiding would not hide.
+const hiddenSpoken = cardPieces(plainCard(), [
+  {
+    side: 'back',
+    position: 1,
+    value: 'Komar je kanapke.',
+    kind: 'mnemonic' as const,
+    mediaPath: 'komar.jpg',
+    speech: 'pl',
+    hideValue: true,
+  },
+]);
+
+check('schowany tekst nie daje sie przeczytac', sideLines(hiddenSpoken, 'back')[1]?.speak, null);
+check('ale obraz zostaje', Boolean(sideLines(hiddenSpoken, 'back')[1]?.media), true);
+
+// An attachment's `value` is a file name; no phone should read one aloud.
+const namedFile = cardPieces(plainCard(), [
+  {
+    side: 'front',
+    position: 1,
+    value: 'img_2043.jpg',
+    kind: 'image' as const,
+    mediaPath: 'stored.jpg',
+    speech: 'pl',
+  },
+]);
+
+check('nazwa pliku nie jest czytana', sideLines(namedFile, 'front')[1]?.speak, null);
+
+group('Wycofane pole wymowy');
+
+/**
+ * The retired `speech` kind: a field that was nothing but a button. It carries
+ * no language of its own — the deck's answer voice is filled in by whoever
+ * draws it — and what it says is its own text, or the card's answer, which may
+ * well be laid out on the other face.
+ */
+const speechCard = cardPieces(plainCard(), [
+  { side: 'front', position: 1, value: '', kind: 'speech' as const },
+]);
+
+const speechLine = sideLines(speechCard, 'front')[1];
+
+check('pole wymowy zostaje na karcie', Boolean(speechLine), true);
+check('czyta odpowiedz z drugiej strony', speechLine?.speak, { text: 'lamac', language: null });
+check('i nie pokazuje zadnego tekstu', speechLine?.text, '');
+check('zwykla linia nie ma czego czytac', sideLines(speechCard, 'front')[0]?.speak, null);
+
+// Its own text wins, which is how a spelling the engine mangles gets nudged.
+const spelled = cardPieces(plainCard(), [
+  { side: 'front', position: 1, value: 'lamacz', kind: 'speech' as const },
+]);
+
+check('wpisany tekst wygrywa z odpowiedzia', sideLines(spelled, 'front')[1]?.speak, {
+  text: 'lamacz',
+  language: null,
+});
+
+// A button that reads silence is worse than no button.
+const mute = cardPieces(
+  { ...plainCard(), back: '' },
+  [{ side: 'front', position: 1, value: '', kind: 'speech' as const }]
+);
+
+check('bez odpowiedzi i bez tekstu pole znika', sideLines(mute, 'front').length, 1);
+
+group('Zapis fonetyczny');
+
+/**
+ * A transcription is an adornment on its line, like the loudspeaker, and it
+ * obeys the same two rules: only words have one, and hidden words have none.
+ */
+const transcribed = cardPieces({ ...plainCard(), backPhonetic: '/ˈlamat͡s/' }, [
+  { side: 'back', position: 1, value: 'a janela', kind: 'text' as const, phonetic: '/ɐ ʒɐˈnɛlɐ/' },
+  { side: 'back', position: 2, value: 'bez zapisu', kind: 'text' as const },
+  {
+    side: 'back',
+    position: 3,
+    value: 'Komar je.',
+    kind: 'mnemonic' as const,
+    mediaPath: 'komar.jpg',
+    phonetic: '/ˈkɔmar jɛ/',
+    hideValue: true,
+  },
+  {
+    side: 'back',
+    position: 4,
+    value: 'img_2043.jpg',
+    kind: 'image' as const,
+    mediaPath: 'stored.jpg',
+    phonetic: '/nie/',
+  },
+]);
+
+const transcribedBack = sideLines(transcribed, 'back');
+
+check('odpowiedz niesie swoj zapis', transcribedBack[0]?.phonetic, '/ˈlamat͡s/');
+check('pole dodatkowe tez', transcribedBack[1]?.phonetic, '/ɐ ʒɐˈnɛlɐ/');
+check('pole bez zapisu nie ma nic', transcribedBack[2]?.phonetic, null);
+check('schowany tekst chowa tez zapis', transcribedBack[3]?.phonetic, null);
+check('plik nie ma wymowy', transcribedBack[4]?.phonetic, null);
+
+// A transcription with nothing under it is nothing: the empty field still
+// drops out, rather than standing on the card as pronunciation of silence.
+const orphan = cardPieces({ ...plainCard(), back: '', backPhonetic: '/ˈlamat͡s/' }, []);
+
+check('zapis bez tekstu nie trzyma linii', sideLines(orphan, 'back').length, 0);

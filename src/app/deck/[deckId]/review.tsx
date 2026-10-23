@@ -18,6 +18,8 @@ import {
   Rating,
   type Grade,
 } from '@/lib/scheduler';
+import { deckLanguages } from '@/db/queries';
+import { speechVoice } from '@/lib/speech';
 import { useReviewStore } from '@/stores/review-store';
 
 const RATING_COLOR: Record<Grade, string> = {
@@ -39,6 +41,13 @@ export default function ReviewScreen() {
 
   const { deckId: deckIdParam } = useLocalSearchParams<{ deckId: string }>();
   const deckId = Number(deckIdParam);
+
+  /**
+   * The fallback voice for a **retired `speech` field** — the one kind that
+   * carries no language of its own. Every text spoken since says which language
+   * it is in, so this reaches nothing made after 2026-09-09.
+   */
+  const voice = useMemo(() => speechVoice(deckLanguages(deckId)), [deckId]);
 
   const queue = useReviewStore((s) => s.queue);
   const revealed = useReviewStore((s) => s.revealed);
@@ -131,6 +140,7 @@ export default function ReviewScreen() {
               frontLines={current.frontLines}
               backLines={current.backLines}
               revealed={revealed}
+              voice={voice}
             />
           </ScrollView>
 

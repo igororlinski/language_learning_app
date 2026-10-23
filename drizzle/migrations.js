@@ -15,6 +15,16 @@ import m0010 from './0010_quiet_absorbing_man.sql';
 import m0011 from './0011_violet_giant_man.sql';
 import m0012 from './0012_cool_swordsman.sql';
 import m0013 from './0013_messy_nova.sql';
+import m0014 from './0014_cultured_sphinx.sql';
+import m0015 from './0015_adorable_cable.sql';
+import m0016 from './0016_spotty_titanium_man.sql';
+import m0017 from './0017_adorable_morph.sql';
+import m0018 from './0018_naive_violations.sql';
+import m0019 from './0019_brainy_ben_urich.sql';
+import m0020 from './0020_mean_reavers.sql';
+import m0021 from './0021_tiny_hobgoblin.sql';
+import m0022 from './0022_daily_valkyrie.sql';
+import m0023 from './0023_same_white_queen.sql';
 
   export default {
     journal,
@@ -32,7 +42,17 @@ m0009,
 m0010,
 m0011,
 m0012,
-m0013
+m0013,
+m0014,
+m0015,
+m0016,
+m0017,
+m0018,
+m0019,
+m0020,
+m0021,
+m0022,
+m0023
     }
   }
   

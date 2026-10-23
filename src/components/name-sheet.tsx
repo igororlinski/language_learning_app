@@ -7,53 +7,79 @@ import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { isUsableTag, tagName, tagSlug } from '@/lib/tags';
 
-export type TagSheetProps = {
+export type NameSheetProps = {
   visible: boolean;
-  /** The tags on the card right now, by name. */
+  /** Heading of the sheet, e.g. "Tagi karty". */
+  title: string;
+  /** Label over the text box, e.g. "Nowy tag". */
+  inputLabel: string;
+  placeholder?: string;
+  /** The names picked right now. */
   picked: string[];
-  /** Every tag that already exists, so one can be reused instead of retyped. */
+  /** Every name already in use somewhere, so one can be reused instead of retyped. */
   known: string[];
+  /** The spelling to store for what was typed — trimming and length are its business. */
+  normalize: (raw: string) => string;
+  /** What makes two spellings the same name. Two domains, two foldings, one sheet. */
+  identity: (raw: string) => string;
   onClose: () => void;
   onChange: (picked: string[]) => void;
 };
 
 /**
- * Picking a card's tags: type a new one, or tap any that already exists.
+ * Picking a set of short names by typing them: type a new one, or tap any that
+ * already exists.
  *
- * The sheet works in names rather than ids because a tag typed here has no row
- * until the card is saved — see `setCardTagNames`. Nothing typed here creates
- * anything on its own, so a sheet opened and closed leaves no trace.
+ * It works in names rather than ids because in both places that use it nothing
+ * exists until the thing being edited is saved — a tag typed here has no row
+ * until the card is written, and a language is never a row at all. So a sheet
+ * opened, typed into and closed leaves no trace.
+ *
+ * `normalize` and `identity` are injected rather than picked here on purpose:
+ * tags and languages fold the same way today, and a copy of that folding living
+ * in this component is exactly how the two would quietly drift apart.
  */
-export function TagSheet({ visible, picked, known, onClose, onChange }: TagSheetProps) {
+export function NameSheet({
+  visible,
+  title,
+  inputLabel,
+  placeholder,
+  picked,
+  known,
+  normalize,
+  identity,
+  onClose,
+  onChange,
+}: NameSheetProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const [typed, setTyped] = useState('');
 
-  const isPicked = (name: string) => picked.some((own) => tagSlug(own) === tagSlug(name));
+  const usable = (name: string) => identity(name).length > 0;
+  const isPicked = (name: string) => picked.some((own) => identity(own) === identity(name));
 
   const toggle = (name: string) =>
     onChange(
       isPicked(name)
-        ? picked.filter((own) => tagSlug(own) !== tagSlug(name))
-        : [...picked, tagName(name)]
+        ? picked.filter((own) => identity(own) !== identity(name))
+        : [...picked, normalize(name)]
     );
 
   const add = () => {
-    if (!isUsableTag(typed)) return;
+    if (!usable(typed)) return;
 
-    if (!isPicked(typed)) onChange([...picked, tagName(typed)]);
+    if (!isPicked(typed)) onChange([...picked, normalize(typed)]);
     setTyped('');
   };
 
-  // Everything known, plus what is on the card but not saved anywhere yet.
+  // Everything known, plus what is picked but not saved anywhere yet.
   const listed = [...known];
   for (const name of picked) {
-    if (!listed.some((own) => tagSlug(own) === tagSlug(name))) listed.push(name);
+    if (!listed.some((own) => identity(own) === identity(name))) listed.push(name);
   }
 
-  const fresh = isUsableTag(typed) && !listed.some((own) => tagSlug(own) === tagSlug(typed));
+  const fresh = usable(typed) && !listed.some((own) => identity(own) === identity(typed));
 
   return (
     <Modal
@@ -75,20 +101,20 @@ export function TagSheet({ visible, picked, known, onClose, onChange }: TagSheet
           ]}>
           <View style={[styles.grabber, { backgroundColor: theme.border }]} />
 
-          <ThemedText style={styles.title}>Tagi karty</ThemedText>
+          <ThemedText style={styles.title}>{title}</ThemedText>
 
           <View style={styles.add}>
             <TextField
-              label="Nowy tag"
+              label={inputLabel}
               value={typed}
               onChangeText={setTyped}
-              placeholder="np. czasownik"
+              placeholder={placeholder}
               autoCapitalize="none"
               autoCorrect={false}
               returnKeyType="done"
               onSubmitEditing={add}
             />
-            {fresh ? <Button title={`Dodaj „${tagName(typed)}”`} onPress={add} /> : null}
+            {fresh ? <Button title={`Dodaj „${normalize(typed)}”`} onPress={add} /> : null}
           </View>
 
           {listed.length > 0 ? (
@@ -98,7 +124,7 @@ export function TagSheet({ visible, picked, known, onClose, onChange }: TagSheet
 
                 return (
                   <Pressable
-                    key={tagSlug(name)}
+                    key={identity(name)}
                     onPress={() => toggle(name)}
                     accessibilityRole="checkbox"
                     accessibilityState={{ checked: selected }}
@@ -162,7 +188,7 @@ const styles = StyleSheet.create({
   add: {
     gap: Spacing.two,
   },
-  /** Capped so a long tag list cannot push the input off the screen. */
+  /** Capped so a long list cannot push the input off the screen. */
   list: {
     maxHeight: 260,
   },
