@@ -1242,6 +1242,46 @@ export function mnemonicCardsQuery(deckId: number | null) {
     );
 }
 
+/* ----------------------------------------------------------------- backup */
+
+/** How much a backup holds, for its manifest — and for the question before a restore. */
+export function backupCounts(): { decks: number; cards: number; reviews: number } {
+  const count = (table: typeof decks | typeof cards | typeof reviewLogs) =>
+    db.select({ n: sql<number>`count(*)` }).from(table).get()?.n ?? 0;
+
+  return { decks: count(decks), cards: count(cards), reviews: count(reviewLogs) };
+}
+
+const LAST_BACKUP_KEY = 'backup.last-at';
+const BACKUP_FOLDER_KEY = 'backup.folder';
+
+/** When the last backup was saved on this phone, out of the settings rows. */
+export function lastBackupFrom(rows: readonly { key: string; value: string }[]): Date | null {
+  const value = rows.find((row) => row.key === LAST_BACKUP_KEY)?.value;
+  const time = value ? Date.parse(value) : NaN;
+
+  return Number.isNaN(time) ? null : new Date(time);
+}
+
+/** The folder the last backup was saved into — where the picker opens next time. */
+export function backupFolderFrom(rows: readonly { key: string; value: string }[]): string | null {
+  return rows.find((row) => row.key === BACKUP_FOLDER_KEY)?.value || null;
+}
+
+export function setLastBackup(at: Date, folder?: string): void {
+  const rows = [{ key: LAST_BACKUP_KEY, value: at.toISOString() }];
+  if (folder) rows.push({ key: BACKUP_FOLDER_KEY, value: folder });
+
+  db.transaction((tx) => {
+    for (const row of rows) {
+      tx.insert(appSettings)
+        .values(row)
+        .onConflictDoUpdate({ target: appSettings.key, set: { value: row.value } })
+        .run();
+    }
+  });
+}
+
 /* -------------------------------------------------------------- mutations */
 
 export type DeckInput = {

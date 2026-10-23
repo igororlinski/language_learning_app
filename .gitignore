@@ -48,3 +48,5 @@ settings.json
 # LM Studio benchmark: bundles and downloaded dictionaries (research/lmstudio-mnemonics/setup.sh)
 research/*/exp/
 research/*/dict/
+# Git Bash (MSYS) crash dumps
+*.stackdump

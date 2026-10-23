@@ -6,7 +6,7 @@
  * actually happen here: drizzle rendering SQL differently depending on the
  * surrounding query, or a scheduling rule drifting between JS and SQL.
  */
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { openDatabaseSync } from 'expo-sqlite';
 
 import { db, sqliteDb } from '@/db/client';
@@ -66,6 +66,9 @@ import {
   statsLogsQuery,
   setTextSource,
   setTextTemperature,
+  backupFolderFrom,
+  lastBackupFrom,
+  setLastBackup,
   type MediaCopier,
 } from '@/db/queries';
 import { appSettings, decks, fsrsState, reviewLogs } from '@/db/schema';
@@ -1934,6 +1937,26 @@ check(
   db.select().from(appSettings).all().map((row) => row.key),
   ['ai.text-provider']
 );
+
+group('Ostatnia kopia zapasowa');
+
+const settingsNow = () => db.select().from(appSettings).all();
+
+check('bez kopii nie ma daty ani folderu', [lastBackupFrom(settingsNow()), backupFolderFrom(settingsNow())], [null, null]);
+
+const FOLDER = 'content://com.android.externalstorage.documents/tree/primary%3ADownload%2FFiszki';
+setLastBackup(new Date('2026-10-23T10:00:00Z'), FOLDER);
+check('zapis do folderu zapamietuje date', lastBackupFrom(settingsNow())?.toISOString(), '2026-10-23T10:00:00.000Z');
+check('i folder', backupFolderFrom(settingsNow()), FOLDER);
+
+setLastBackup(new Date('2026-10-24T10:00:00Z'));
+check(
+  'sama data nie gubi folderu',
+  [lastBackupFrom(settingsNow())?.toISOString(), backupFolderFrom(settingsNow())],
+  ['2026-10-24T10:00:00.000Z', FOLDER]
+);
+
+db.delete(appSettings).where(inArray(appSettings.key, ['backup.last-at', 'backup.folder'])).run();
 
 group('Licznik zuzycia AI na telefonie');
 
