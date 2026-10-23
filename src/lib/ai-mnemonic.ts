@@ -1,8 +1,10 @@
 import type { AiKeys } from '@/lib/ai-keys';
-import { MNEMONIC_SHAPE, mnemonicPrompt } from '@/lib/ai-prompts';
+import { LOCAL_MNEMONIC_SHAPE, MNEMONIC_SHAPE, mnemonicPrompt } from '@/lib/ai-prompts';
 import { writeText } from '@/lib/ai-text';
 import { AiError, type TextSource } from '@/lib/ai-transport';
+import { languageByEnglish } from '@/lib/languages';
 import { parseMnemonicList, type Mnemonic } from '@/lib/mnemonic';
+import { soundsLike } from '@/lib/sounds-like';
 
 /**
  * Asking a language model for keyword-method associations.
@@ -42,7 +44,48 @@ export type MnemonicRequest = {
    * that holds two languages.
    */
   meaningLanguages: string[];
+  /**
+   * The card's stored IPA of `term`, if it has one. Read only for LM Studio,
+   * and only for a language without spelling rules (`sounds-like.ts`).
+   */
+  termPhonetic?: string | null;
 };
+
+/**
+ * What a model on the user's own computer is asked instead — the same prompt,
+ * three switches (measured 2026-10-21 on gemma-4-e4b, `LMSTUDIO-EKSPERYMENTY.md`):
+ *
+ * - **only the first KNOWN language.** Given "Polish, English", the small model
+ *   took an English word about one time in three (`janitor`, `key`, `cave`),
+ *   ranking or no ranking. Asked in Polish alone it stays in Polish;
+ * - **`SOUNDS LIKE`**, the word's sound in Polish letters, worked out here —
+ *   the model reads spelling instead of hearing (`chave` → `kawa`). The two
+ *   only work together: 8–11 good Polish keywords on nine words instead of
+ *   1–2, each alone about 3. The sound is Polish spelling, so it goes only
+ *   when that first language is Polish;
+ * - **temperature 0.7**, which is what that shape was measured at.
+ *
+ * The cost is the ranking: LM Studio no longer reaches into a second language
+ * on its own. "Przegeneruj w: …" still asks in that one language — with no
+ * sound line, since Polish spelling tells English nothing.
+ *
+ * Gemini gets none of this: it hears the word, and the ranking works for it.
+ */
+function forLocalModel(languages: string[], term: string, request: MnemonicRequest) {
+  const known = languages.slice(0, 1);
+  const polish = known.length > 0 && languageByEnglish(known[0]) === 'pl';
+
+  return {
+    known,
+    sounds: polish
+      ? soundsLike({
+          term,
+          language: languageByEnglish(request.termLanguage),
+          ipa: request.termPhonetic,
+        })
+      : null,
+  };
+}
 
 /**
  * Three associations, best first — or fewer, when the model managed fewer.
@@ -68,17 +111,21 @@ export async function requestMnemonics(
 
   if (!term || !meaning) throw new AiError('empty-prompt');
 
+  const languages = request.meaningLanguages
+    .map((name) => clip(name, MAX_LANGUAGE))
+    .filter(Boolean)
+    .slice(0, MAX_LANGUAGES);
+  const local = source.provider === 'lmstudio' ? forLocalModel(languages, term, request) : null;
+
   const prompt = mnemonicPrompt({
     term,
     termLanguage: clip(request.termLanguage, MAX_LANGUAGE),
     meaning,
-    meaningLanguages: request.meaningLanguages
-      .map((name) => clip(name, MAX_LANGUAGE))
-      .filter(Boolean)
-      .slice(0, MAX_LANGUAGES),
+    meaningLanguages: local?.known ?? languages,
+    sounds: local?.sounds,
   });
 
-  const text = await writeText(prompt, MNEMONIC_SHAPE, source, keys);
+  const text = await writeText(prompt, local ? LOCAL_MNEMONIC_SHAPE : MNEMONIC_SHAPE, source, keys);
   const mnemonics = parseMnemonicList(text);
 
   // The model answered, but not with an association. Its own words go into the

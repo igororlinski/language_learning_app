@@ -225,6 +225,102 @@ const local = await withStub(
 check('LM Studio pytane wprost', local.sent?.url, 'http://pc:1234/v1/chat/completions');
 check('a odpowiedz czyta sie tak samo', local.outcome, 'komar');
 
+group('Skojarzenie z LM Studio: jeden jezyk i brzmienie');
+
+const LM_KEYS = { ...NO_KEYS, lmStudioUrl: 'http://pc:1234' };
+const LM_SOURCE = { provider: 'lmstudio', model: 'gemma' } as const;
+
+/** What went to LM Studio for one request: its messages and temperature. */
+async function lmStudioSent(request: Parameters<typeof requestMnemonics>[0]) {
+  const { sent } = await withStub(
+    { status: 200, body: { choices: [{ message: { content: good } }] } },
+    () => requestMnemonics(request, LM_SOURCE, LM_KEYS)
+  );
+  const body = bodyOf(sent) as {
+    messages?: { role: string; content: string }[];
+    temperature?: number;
+  };
+  const messages = body.messages ?? [];
+
+  return { messages, last: messages[messages.length - 1]?.content, temperature: body.temperature };
+}
+
+const chave = {
+  term: 'chave',
+  termLanguage: 'Portuguese (European)',
+  meaning: 'klucz',
+  meaningLanguages: ['Polish', 'English'],
+};
+
+const lm = await lmStudioSent(chave);
+
+// Measured 2026-10-21: given two languages the small model drifts into English,
+// and it reads spelling instead of hearing — `chave` got `kawa`. One language
+// and the sound in Polish letters, together, are what fixed it.
+check(
+  'LM Studio dostaje tylko pierwszy jezyk i brzmienie z regul',
+  lm.last,
+  'FOREIGN (Portuguese (European)): chave\nSOUNDS LIKE: szaw\nMEANING: klucz\nKNOWN:\n1. Polish'
+);
+check(
+  'przyklady tez niosa brzmienie',
+  lm.messages[1]?.content,
+  'FOREIGN (Portuguese): comer\nSOUNDS LIKE: komer\nMEANING: jeść\nKNOWN:\n1. Polish'
+);
+check('i temperature 0,7', lm.temperature, 0.7);
+
+// Rules first: IPA on the card may have been written by the same small model.
+check(
+  'zapisane IPA nie przebija regul',
+  (await lmStudioSent({ ...chave, termPhonetic: '/kɐj/' })).last?.includes('SOUNDS LIKE: szaw'),
+  true
+);
+check(
+  'jezyk bez regul bierze zapisane IPA',
+  (
+    await lmStudioSent({ ...chave, termLanguage: 'Portuguese (Brazilian)', termPhonetic: '/ˈʃavi/' })
+  ).last?.includes('SOUNDS LIKE: szawi'),
+  true
+);
+check(
+  'bez regul i bez IPA nie ma linii, a jezyk dalej jeden',
+  (await lmStudioSent({ ...chave, termLanguage: 'English (American)', term: 'key' })).last,
+  'FOREIGN (English (American)): key\nMEANING: klucz\nKNOWN:\n1. Polish'
+);
+
+// The sound is spelled the Polish way, so it tells an English keyword nothing.
+// This is "Przegeneruj w: angielski".
+const english = await lmStudioSent({ ...chave, meaningLanguages: ['English'] });
+
+check('po angielsku bez linii brzmienia', english.last?.includes('SOUNDS LIKE'), false);
+check(
+  'ani w przykladach',
+  english.messages.some((message) => message.content.includes('SOUNDS LIKE')),
+  false
+);
+
+// Gemini hears the word and uses the ranking well: it gets the prompt it had.
+const cloud = await withStub(geminiSays(good), () =>
+  requestMnemonics({ ...chave, termPhonetic: '/ʃav/' }, CLOUD_TEXT, KEYS)
+);
+const cloudBody = bodyOf(cloud.sent) as {
+  contents?: { parts?: { text?: string }[] }[];
+  generationConfig?: { temperature?: number };
+};
+const cloudTexts = (cloudBody.contents ?? []).map((turn) => turn.parts?.[0]?.text ?? '');
+
+check(
+  'Gemini bez zmian: caly ranking',
+  cloudTexts[cloudTexts.length - 1],
+  'FOREIGN (Portuguese (European)): chave\nMEANING: klucz\nKNOWN:\n1. Polish\n2. English'
+);
+check(
+  'bez linii brzmienia nigdzie',
+  cloudTexts.some((text) => text.includes('SOUNDS LIKE')),
+  false
+);
+check('i z dawna temperatura', cloudBody.generationConfig?.temperature, 0.95);
+
 /** The failure a request rejects with. */
 async function refusalOf(call: () => Promise<unknown>) {
   try {

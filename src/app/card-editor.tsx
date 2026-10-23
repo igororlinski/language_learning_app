@@ -736,6 +736,10 @@ export default function CardEditorScreen() {
         // In the deck's order, which is the learner's ranking of how readily
         // each language comes to mind — the model works down it.
         meaningLanguages: (language ? [language] : languages.front).map(languageEnglish),
+        // How the answer sounds, for LM Studio when its language has no
+        // spelling rules. A stale one after an edit is a rough sound, not a
+        // wrong word.
+        termPhonetic: backPhonetic,
       },
       textSource,
       aiKeys

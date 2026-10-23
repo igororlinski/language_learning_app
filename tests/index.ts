@@ -17,6 +17,7 @@ import './ai-text.test';
 import './ai-image.test';
 import './ai-phonetic.test';
 import './mnemonic.test';
+import './sounds-like.test';
 import './languages.test';
 import './speech.test';
 import './tags.test';

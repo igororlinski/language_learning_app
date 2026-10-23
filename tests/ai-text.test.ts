@@ -5,7 +5,7 @@
  */
 import { NO_KEYS } from '@/lib/ai-keys';
 import { MNEMONIC_SHAPE, PHONETIC_SHAPE, type Prompt } from '@/lib/ai-prompts';
-import { checkLmStudio, GEMINI_MODELS, LLAMA_MODEL, plainSchema, writeText } from '@/lib/ai-text';
+import { checkLmStudio, GEMINI_MODELS, LLAMA_MODEL, writeText } from '@/lib/ai-text';
 import { CLOUD_TEXT } from '@/lib/ai-transport';
 import { setSpendSink } from '@/lib/ai-usage';
 
@@ -138,18 +138,17 @@ const studio = await withStub(
 const completion = studio.calls.find((call) => call.url.endsWith('/v1/chat/completions'));
 const completionBody = bodyOf(completion) as {
   model?: string;
-  response_format?: { json_schema?: { schema?: unknown } };
+  reasoning_effort?: string;
+  response_format?: unknown;
 };
 
 check('pierwszy model czatu, nie embeddingow', completionBody.model, 'qwen3-14b');
+// On a CPU thinking is the whole wait: 48 s against 3.9 s for the same answer.
+check('myslenie wylaczone w zadaniu', completionBody.reasoning_effort, 'none');
 check('myslenie wyciete z odpowiedzi', studio.outcome, '[{"keyword":"komar"}]');
 check('token LM Studio w naglowku', headersOf(completion).Authorization, 'Bearer LMT');
-check(
-  'schemat bez googlowego propertyOrdering',
-  JSON.stringify(completionBody.response_format).includes('propertyOrdering'),
-  false
-);
-check('ale ten sam w reszcie', completionBody.response_format?.json_schema?.schema, plainSchema(MNEMONIC_SHAPE.schema));
+// A schema made the model think anyway: 149 s against 33 s for the same shape.
+check('bez wymuszonego schematu', completionBody.response_format, undefined);
 check('Gemini nawet nie pytany', studio.calls.some((call) => call.url.includes('google')), false);
 
 const chosen = await withStub(chat('{"ipa":"/x/"}'), () =>

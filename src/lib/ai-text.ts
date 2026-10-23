@@ -183,6 +183,21 @@ const LMSTUDIO_LIST_TIMEOUT_MS = 8000;
 const LMSTUDIO_MAX_TOKENS = 4096;
 
 /**
+ * Thinking off, where the model lets it be turned off. Measured 2026-10-20 on
+ * gemma-4-e4b on a laptop CPU: one IPA answer took 48 s with 238 of its 263
+ * tokens spent thinking, and 3.9 s without — the same answer. LM Studio heard
+ * only this spelling; `reasoning: { effort }` and `chat_template_kwargs` were
+ * ignored. Models that do not think ignore it too.
+ *
+ * And no `response_format`, for the same reason: with the association prompt
+ * and a JSON schema the model thought anyway, flag or not — 611 of 777 tokens
+ * and 149 s, against 156 tokens and 33 s without the schema, in the right
+ * shape. The examples hold the shape well enough, and the readers forgive the
+ * rest, as they do for llama.
+ */
+const LMSTUDIO_REASONING_EFFORT = 'none';
+
+/**
  * Embedding models sit in the same list as chat models, and asking one to
  * write an association fails with an error nobody can act on.
  */
@@ -215,23 +230,6 @@ export async function checkLmStudio(keys: AiKeys): Promise<LmStudioStatus> {
     .filter((id): id is string => typeof id === 'string' && id.trim() !== '' && isChatModel(id));
 
   return { online: true, models };
-}
-
-/**
- * A Gemini schema as plain JSON Schema. `propertyOrdering` is Google's own
- * keyword; LM Studio's grammar follows the order `properties` is written in,
- * which is the same order, so the keyword is only noise to it — and noise in a
- * schema is a way for a request to come back a 400.
- */
-export function plainSchema(schema: unknown): unknown {
-  if (Array.isArray(schema)) return schema.map(plainSchema);
-  if (!schema || typeof schema !== 'object') return schema;
-
-  return Object.fromEntries(
-    Object.entries(schema)
-      .filter(([key]) => key !== 'propertyOrdering')
-      .map(([key, value]) => [key, plainSchema(value)])
-  );
 }
 
 async function lmStudioAsk(
@@ -267,10 +265,7 @@ async function lmStudioAsk(
         messages: forChat(prompt),
         temperature: shape.temperature,
         max_tokens: LMSTUDIO_MAX_TOKENS,
-        response_format: {
-          type: 'json_schema',
-          json_schema: { name: 'answer', strict: true, schema: plainSchema(shape.schema) },
-        },
+        reasoning_effort: LMSTUDIO_REASONING_EFFORT,
       },
     });
   } catch (error) {

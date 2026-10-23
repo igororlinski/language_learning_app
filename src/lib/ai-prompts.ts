@@ -22,8 +22,8 @@ export type Prompt = { system: string; turns: Turn[] };
 /**
  * What an answer has to look like and how wild it may be.
  *
- * `schema` is enforced by Gemini (`responseSchema`) and LM Studio
- * (`response_format`); llama gets no schema and is read leniently instead.
+ * `schema` is enforced by Gemini (`responseSchema`) only; llama and LM Studio
+ * get no schema and are read leniently instead.
  */
 export type Shape = {
   schema: object;
@@ -118,6 +118,18 @@ export const MNEMONIC_SHAPE: Shape = {
   llamaMaxTokens: MNEMONIC_LLAMA_MAX_TOKENS,
 };
 
+/**
+ * The same, a little calmer, for a model on the user's own computer.
+ *
+ * Measured 2026-10-21 on gemma-4-e4b (`LMSTUDIO-EKSPERYMENTY.md`): between 0.1
+ * and 0.95 the number of good keywords did not move, and below 0.5 the model
+ * started repeating one proposal within an answer, turning three options into
+ * two. 0.7 is not better than 0.95 by itself — it is what the one request
+ * shape that did work (`SOUNDS LIKE` with a single KNOWN language) was
+ * measured at, twice, so it is what ships.
+ */
+export const LOCAL_MNEMONIC_SHAPE: Shape = { ...MNEMONIC_SHAPE, temperature: 0.7 };
+
 /** One language for the prompt, or an honest "unknown". */
 const languagePhrase = (name: string) => name || 'unknown';
 
@@ -185,18 +197,30 @@ const languageRanking = (names: readonly string[]) =>
  * string could only have said "Polish + Spanish" and nothing could look that
  * up. Nothing stored changes — the column keeps keyword, scene and sentence,
  * and never kept the language.
+ *
+ * **`sounds` adds one line, `SOUNDS LIKE`, and nothing else (2026-10-23).**
+ * It is how the foreign word sounds in Polish letters, worked out by the app
+ * (`sounds-like.ts`), for a model too small to hear the word itself. The line
+ * goes into every example too, from the example's own `sounds` — that is how
+ * it was measured, and an example without the line would teach that the line
+ * is optional. Without `sounds` the prompt is word for word what it was, which
+ * is what Gemini still gets.
  */
 export function mnemonicPrompt({
   term,
   termLanguage,
   meaning,
   meaningLanguages,
+  sounds,
 }: {
   term: string;
   termLanguage: string;
   meaning: string;
   meaningLanguages: readonly string[];
+  sounds?: string | null;
 }): Prompt {
+  const soundsLine = (spelled: string) => (sounds ? `SOUNDS LIKE: ${spelled}\n` : '');
+
   const system = [
     'You invent keyword-method mnemonics for language learners.',
     '',
@@ -304,12 +328,13 @@ export function mnemonicPrompt({
     foreignLang: string,
     native: string,
     known: string[],
-    answers: object[]
+    answers: ({ sounds: string } & Record<string, unknown>)[]
   ): Turn[] => [
       {
         role: 'user',
         content:
           `FOREIGN (${foreignLang}): ${foreign}\n` +
+          soundsLine(answers[0].sounds) +
           `MEANING: ${native}\n` +
           `KNOWN:\n${languageRanking(known)}`,
       },
@@ -482,6 +507,7 @@ export function mnemonicPrompt({
       role: 'user',
       content:
         `FOREIGN (${languagePhrase(termLanguage)}): ${term}\n` +
+        soundsLine(sounds ?? '') +
         `MEANING: ${meaning}\n` +
         `KNOWN:\n${languageRanking(meaningLanguages)}`,
     },
