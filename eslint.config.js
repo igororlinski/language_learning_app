@@ -6,8 +6,7 @@ module.exports = defineConfig([
   expoConfig,
   {
     // Generated: the router types carry an eslint-disable nobody wrote, and
-    // `wrangler dev` leaves its own bundles under worker/.wrangler, and the
-    // research setup scripts leave theirs under research/*/exp.
-    ignores: ["dist/*", ".expo/*", "worker/.wrangler/*", "research/*/exp/*"],
+    // the research setup scripts leave their bundles under research/*/exp.
+    ignores: ["dist/*", ".expo/*", "research/*/exp/*"],
   }
 ]);
