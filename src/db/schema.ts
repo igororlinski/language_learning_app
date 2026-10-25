@@ -1,4 +1,5 @@
-import { index, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 import {
   DEFAULT_LEARNING_STEPS,
@@ -89,109 +90,129 @@ export type PictureQuality = (typeof PICTURE_QUALITIES)[number];
  */
 export const DEFAULT_PICTURE_QUALITY: PictureQuality = 'fast';
 
-export const decks = sqliteTable('decks', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  name: text('name').notNull(),
-  description: text('description'),
-  /**
-   * Daily caps, counted per study day. 0 switches a bucket off entirely.
-   * Cards in Learning/Relearning are never capped — same as Anki, where
-   * learning steps always come back regardless of the day's allowance.
-   */
-  newPerDay: integer('new_per_day').notNull().default(DEFAULT_NEW_PER_DAY),
-  /**
-   * What this deck tells FSRS. The rules for reading them — and why `w` is not
-   * among them — live in `src/lib/fsrs-options.ts`.
-   */
-  desiredRetention: real('desired_retention').notNull().default(DEFAULT_RETENTION),
-  maximumInterval: integer('maximum_interval').notNull().default(DEFAULT_MAXIMUM_INTERVAL),
-  /** Space-separated, Anki style: `1m 10m`. */
-  learningSteps: text('learning_steps').notNull().default(DEFAULT_LEARNING_STEPS),
-  relearningSteps: text('relearning_steps').notNull().default(DEFAULT_RELEARNING_STEPS),
-  /**
-   * The twenty one FSRS weights as JSON, or null while the deck still uses the
-   * defaults. Written only by the optimiser — see `src/lib/fsrs-optimizer.ts`,
-   * which explains why they are not an editable setting.
-   */
-  fsrsWeights: text('fsrs_weights'),
-  reviewsPerDay: integer('reviews_per_day').notNull().default(DEFAULT_REVIEWS_PER_DAY),
-  /** How the session queue is built — see the two constant blocks above. */
-  newCardPlacement: text('new_card_placement', { enum: NEW_CARD_PLACEMENTS })
-    .notNull()
-    .default(DEFAULT_NEW_CARD_PLACEMENT),
-  newCardOrder: text('new_card_order', { enum: NEW_CARD_ORDERS })
-    .notNull()
-    .default(DEFAULT_NEW_CARD_ORDER),
-  /**
-   * Where a new card in this deck puts its two mandatory fields. The empty
-   * extra fields it starts with live in `deck_field_slots`, because they are no
-   * longer interchangeable: each one is a text box or a slot for one kind of file.
-   * Only a brand new card reads any of this.
-   */
-  newFrontSide: text('new_front_side', { enum: FIELD_SIDES }).notNull().default('front'),
-  newFrontPosition: integer('new_front_position').notNull().default(0),
-  newBackSide: text('new_back_side', { enum: FIELD_SIDES }).notNull().default('back'),
-  newBackPosition: integer('new_back_position').notNull().default(0),
-  /**
-   * Which language each mandatory field of a **new** card is read out loud in,
-   * or null for one that starts silent. The same shape as `cards.front_speech`,
-   * which is what these are copied into.
-   *
-   * A default, not a rule: it decides what a card starts as and nothing after
-   * that. Changing it never reaches a card already made — the same line the
-   * default layout and the daily limits are on. It exists because the deck is
-   * the only place that knows the answer will always be the word being learned,
-   * and setting that on every single card by hand is the kind of chore nobody
-   * keeps up for long.
-   */
-  newFrontSpeech: text('new_front_speech'),
-  newBackSpeech: text('new_back_speech'),
-  /**
-   * Which language each mandatory field of a **new** card gets its IPA
-   * transcription written in when the card is saved, or null for none.
-   *
-   * A language and not a transcription: the template has no words yet, so
-   * what it can say is only "transcribe this, in that". The card editor asks
-   * the model at save time, for whatever was typed — see `src/lib/ai-phonetic.ts`.
-   * A default like the voices above: it decides how a card starts and nothing
-   * after that.
-   */
-  newFrontPhoneticLanguage: text('new_front_phonetic_language'),
-  newBackPhoneticLanguage: text('new_back_phonetic_language'),
-  /**
-   * Which languages this deck writes its questions and answers in, as JSON
-   * arrays of names, or null while the deck has not said. Nothing validates a
-   * card against them — see `src/lib/languages.ts` for why they exist and what
-   * counts as the same language.
-   *
-   * They follow `cards.front` and `cards.back`, the two mandatory fields, not
-   * the two sides of the card: a question may be laid out on the back, and it
-   * is still the question whose language this names.
-   */
-  frontLanguages: text('front_languages'),
-  backLanguages: text('back_languages'),
-  /**
-   * Which way this deck's generated pictures lean, careful or quick.
-   *
-   * A default rather than a rule: it is what a new field starts with and what
-   * the "+" sheet opens on, and the gear in the field overrides it for the run
-   * at hand. It sits on the deck for the same reason the default card layout
-   * and the daily limits do — it decides how new cards in *this* deck are made,
-   * and a deck of long sentences wants something different from a deck of
-   * single words.
-   */
-  //
-  // The SQL default stays the literal it was migrated with (0017), not
-  // `DEFAULT_PICTURE_QUALITY`: changing a column default in SQLite means
-  // drizzle-kit rebuilding the whole table, and nothing relies on it — every
-  // deck is written with its quality named (`deckValues`).
-  imageQuality: text('image_quality', { enum: PICTURE_QUALITIES })
-    .notNull()
-    .default('accurate'),
-  createdAt: integer('created_at', { mode: 'timestamp_ms' })
-    .notNull()
-    .$defaultFn(() => new Date()),
-});
+/**
+ * A row's identity outside this phone (migration 0025, 2026-10-23): 32 hex
+ * characters, random, never reused. The integer `id` is only unique inside one
+ * database — a deck exported from one phone and imported on another needs a
+ * name both can recognise, or importing it twice would make two of everything.
+ *
+ * Made by SQLite (`randomblob`) rather than in JS, so the backfill in the
+ * migration and every insert since draw from the same source, and the tests
+ * on `node:sqlite` get exactly what the phone gets. Nullable only because
+ * SQLite cannot add a NOT NULL column to a table with rows, nor give an added
+ * column a non-constant default; the migration fills every row there was and
+ * every insert since gets one here.
+ */
+const uid = () => text('uid').$defaultFn(() => sql`lower(hex(randomblob(16)))`);
+
+export const decks = sqliteTable(
+  'decks',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    uid: uid(),
+    name: text('name').notNull(),
+    description: text('description'),
+    /**
+     * Daily caps, counted per study day. 0 switches a bucket off entirely.
+     * Cards in Learning/Relearning are never capped — same as Anki, where
+     * learning steps always come back regardless of the day's allowance.
+     */
+    newPerDay: integer('new_per_day').notNull().default(DEFAULT_NEW_PER_DAY),
+    /**
+     * What this deck tells FSRS. The rules for reading them — and why `w` is not
+     * among them — live in `src/lib/fsrs-options.ts`.
+     */
+    desiredRetention: real('desired_retention').notNull().default(DEFAULT_RETENTION),
+    maximumInterval: integer('maximum_interval').notNull().default(DEFAULT_MAXIMUM_INTERVAL),
+    /** Space-separated, Anki style: `1m 10m`. */
+    learningSteps: text('learning_steps').notNull().default(DEFAULT_LEARNING_STEPS),
+    relearningSteps: text('relearning_steps').notNull().default(DEFAULT_RELEARNING_STEPS),
+    /**
+     * The twenty one FSRS weights as JSON, or null while the deck still uses the
+     * defaults. Written only by the optimiser — see `src/lib/fsrs-optimizer.ts`,
+     * which explains why they are not an editable setting.
+     */
+    fsrsWeights: text('fsrs_weights'),
+    reviewsPerDay: integer('reviews_per_day').notNull().default(DEFAULT_REVIEWS_PER_DAY),
+    /** How the session queue is built — see the two constant blocks above. */
+    newCardPlacement: text('new_card_placement', { enum: NEW_CARD_PLACEMENTS })
+      .notNull()
+      .default(DEFAULT_NEW_CARD_PLACEMENT),
+    newCardOrder: text('new_card_order', { enum: NEW_CARD_ORDERS })
+      .notNull()
+      .default(DEFAULT_NEW_CARD_ORDER),
+    /**
+     * Where a new card in this deck puts its two mandatory fields. The empty
+     * extra fields it starts with live in `deck_field_slots`, because they are no
+     * longer interchangeable: each one is a text box or a slot for one kind of file.
+     * Only a brand new card reads any of this.
+     */
+    newFrontSide: text('new_front_side', { enum: FIELD_SIDES }).notNull().default('front'),
+    newFrontPosition: integer('new_front_position').notNull().default(0),
+    newBackSide: text('new_back_side', { enum: FIELD_SIDES }).notNull().default('back'),
+    newBackPosition: integer('new_back_position').notNull().default(0),
+    /**
+     * Which language each mandatory field of a **new** card is read out loud in,
+     * or null for one that starts silent. The same shape as `cards.front_speech`,
+     * which is what these are copied into.
+     *
+     * A default, not a rule: it decides what a card starts as and nothing after
+     * that. Changing it never reaches a card already made — the same line the
+     * default layout and the daily limits are on. It exists because the deck is
+     * the only place that knows the answer will always be the word being learned,
+     * and setting that on every single card by hand is the kind of chore nobody
+     * keeps up for long.
+     */
+    newFrontSpeech: text('new_front_speech'),
+    newBackSpeech: text('new_back_speech'),
+    /**
+     * Which language each mandatory field of a **new** card gets its IPA
+     * transcription written in when the card is saved, or null for none.
+     *
+     * A language and not a transcription: the template has no words yet, so
+     * what it can say is only "transcribe this, in that". The card editor asks
+     * the model at save time, for whatever was typed — see `src/lib/ai-phonetic.ts`.
+     * A default like the voices above: it decides how a card starts and nothing
+     * after that.
+     */
+    newFrontPhoneticLanguage: text('new_front_phonetic_language'),
+    newBackPhoneticLanguage: text('new_back_phonetic_language'),
+    /**
+     * Which languages this deck writes its questions and answers in, as JSON
+     * arrays of names, or null while the deck has not said. Nothing validates a
+     * card against them — see `src/lib/languages.ts` for why they exist and what
+     * counts as the same language.
+     *
+     * They follow `cards.front` and `cards.back`, the two mandatory fields, not
+     * the two sides of the card: a question may be laid out on the back, and it
+     * is still the question whose language this names.
+     */
+    frontLanguages: text('front_languages'),
+    backLanguages: text('back_languages'),
+    /**
+     * Which way this deck's generated pictures lean, careful or quick.
+     *
+     * A default rather than a rule: it is what a new field starts with and what
+     * the "+" sheet opens on, and the gear in the field overrides it for the run
+     * at hand. It sits on the deck for the same reason the default card layout
+     * and the daily limits do — it decides how new cards in *this* deck are made,
+     * and a deck of long sentences wants something different from a deck of
+     * single words.
+     */
+    //
+    // The SQL default stays the literal it was migrated with (0017), not
+    // `DEFAULT_PICTURE_QUALITY`: changing a column default in SQLite means
+    // drizzle-kit rebuilding the whole table, and nothing relies on it — every
+    // deck is written with its quality named (`deckValues`).
+    imageQuality: text('image_quality', { enum: PICTURE_QUALITIES })
+      .notNull()
+      .default('accurate'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [uniqueIndex('decks_uid_unique').on(table.uid)]
+);
 
 export const IMAGE_STATUSES = ['none', 'generating', 'ready', 'failed'] as const;
 export type ImageStatus = (typeof IMAGE_STATUSES)[number];
@@ -263,6 +284,7 @@ export const cards = sqliteTable(
   'cards',
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
+    uid: uid(),
     deckId: integer('deck_id')
       .notNull()
       .references(() => decks.id, { onDelete: 'cascade' }),
@@ -313,7 +335,10 @@ export const cards = sqliteTable(
     imagePrompt: text('image_prompt'),
     imageStatus: text('image_status', { enum: IMAGE_STATUSES }).notNull().default('none'),
   },
-  (table) => [index('cards_deck_id_idx').on(table.deckId)]
+  (table) => [
+    index('cards_deck_id_idx').on(table.deckId),
+    uniqueIndex('cards_uid_unique').on(table.uid),
+  ]
 );
 
 /**
@@ -452,6 +477,7 @@ export const reviewLogs = sqliteTable(
   'review_logs',
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
+    uid: uid(),
     cardId: integer('card_id')
       .notNull()
       .references(() => cards.id, { onDelete: 'cascade' }),
@@ -475,7 +501,10 @@ export const reviewLogs = sqliteTable(
      */
     durationMs: integer('duration_ms'),
   },
-  (table) => [index('review_logs_card_id_idx').on(table.cardId)]
+  (table) => [
+    index('review_logs_card_id_idx').on(table.cardId),
+    uniqueIndex('review_logs_uid_unique').on(table.uid),
+  ]
 );
 
 /**

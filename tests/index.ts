@@ -21,6 +21,8 @@ import './sounds-like.test';
 import './ai-temperature.test';
 import './stats.test';
 import './archive.test';
+import './deck-package.test';
+import './csv-import.test';
 import './languages.test';
 import './speech.test';
 import './tags.test';

@@ -59,7 +59,7 @@ export default function RootLayout() {
             <Stack.Screen name="index" options={{ headerShown: false }} />
             <Stack.Screen name="ai-limits" options={{ title: 'Ustawienia AI' }} />
             <Stack.Screen name="stats" options={{ title: 'Statystyki' }} />
-            <Stack.Screen name="backup" options={{ title: 'Kopia zapasowa' }} />
+            <Stack.Screen name="backup" options={{ title: 'Import i eksport' }} />
             <Stack.Screen name="deck/[deckId]/index" options={{ title: 'Talia' }} />
             <Stack.Screen
               name="deck/[deckId]/review"

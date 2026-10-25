@@ -6,7 +6,7 @@
  * actually happen here: drizzle rendering SQL differently depending on the
  * surrounding query, or a scheduling rule drifting between JS and SQL.
  */
-import { eq, inArray } from 'drizzle-orm';
+import { asc, eq, inArray } from 'drizzle-orm';
 import { openDatabaseSync } from 'expo-sqlite';
 
 import { db, sqliteDb } from '@/db/client';
@@ -69,9 +69,15 @@ import {
   backupFolderFrom,
   lastBackupFrom,
   setLastBackup,
+  exportDeckPackage,
+  importCsvCards,
+  importDeckPackage,
   type MediaCopier,
 } from '@/db/queries';
-import { appSettings, decks, fsrsState, reviewLogs } from '@/db/schema';
+import { appSettings, cards, decks, fsrsState, reviewLogs } from '@/db/schema';
+import { parseCsv } from '@/lib/csv-import';
+import { jsonBytes, parseDeckPackage } from '@/lib/deck-package';
+import type { MediaKind } from '@/lib/media';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { sortCards } from '@/lib/card-sort';
 import { filterCards } from '@/lib/search';
@@ -116,6 +122,7 @@ import migration0021 from '../drizzle/0021_tiny_hobgoblin.sql';
 import migration0022 from '../drizzle/0022_daily_valkyrie.sql';
 import migration0023 from '../drizzle/0023_same_white_queen.sql';
 import migration0024 from '../drizzle/0024_wooden_greymalkin.sql';
+import migration0025 from '../drizzle/0025_bent_obadiah_stane.sql';
 
 const MIGRATIONS = [
   migration0000,
@@ -143,6 +150,7 @@ const MIGRATIONS = [
   migration0022,
   migration0023,
   migration0024,
+  migration0025,
 ];
 
 /** Runs migrations the way the app's migrator does: statement by statement. */
@@ -2069,3 +2077,176 @@ check('bez pomiaru NULL', lastDuration(), null);
 
 gradeCard(timedCard.id, Rating.Good, statsAt, -5);
 check('ujemny (zegar cofniety) to zero', lastDuration(), 0);
+
+group('uid: migracja 0025');
+
+/** Its own database: everything up to 0024, rows the old way, then 0025. */
+const uidLegacy = openDatabaseSync(':memory:');
+const UID_MIGRATION = MIGRATIONS.indexOf(migration0025);
+
+for (const migration of MIGRATIONS.slice(0, UID_MIGRATION)) {
+  applyMigration((sql) => uidLegacy.execSync(sql), migration);
+}
+
+uidLegacy.execSync(`
+  INSERT INTO decks (id, name, created_at) VALUES (1, 'A', 0), (2, 'B', 0);
+  INSERT INTO cards (id, deck_id, front, back, created_at) VALUES (1, 1, 'a', 'b', 0), (2, 1, 'c', 'd', 0), (3, 2, 'e', 'f', 0);
+  INSERT INTO review_logs (card_id, rating, state, due, stability, difficulty, elapsed_days,
+    last_elapsed_days, scheduled_days, reviewed_at)
+  VALUES (1, 3, 0, 0, 0, 0, 0, 0, 0, 0), (1, 3, 1, 0, 0, 0, 0, 0, 0, 1);
+`);
+
+applyMigration((sql) => uidLegacy.execSync(sql), migration0025);
+
+const legacyUids = (table: string) =>
+  uidLegacy
+    .prepareSync(`SELECT uid FROM ${table}`)
+    .executeSync<{ uid: string | null }>()
+    .getAllSync()
+    .map((row) => row.uid);
+
+const isUid = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{32}$/.test(value);
+
+for (const table of ['decks', 'cards', 'review_logs']) {
+  const uids = legacyUids(table);
+  check(`${table}: kazdy wiersz dostaje uid`, uids.every(isUid), true);
+  check(`${table}: kazdy inny`, new Set(uids).size, uids.length);
+}
+
+const uidDeck = createDeck({ name: 'Z uid', newPerDay: 10, reviewsPerDay: 10 });
+const uidCard = createCard(uidDeck.id, 'kot', 'gato', statsAt);
+const [uidCopy] = copyCards([uidCard.id], uidDeck.id, (kind, name) => name, statsAt);
+gradeCard(uidCard.id, Rating.Good, statsAt);
+
+check('nowa talia ma uid', isUid(uidDeck.uid), true);
+check('nowa karta tez', isUid(uidCard.uid), true);
+check('kopia dostaje wlasny', [isUid(getCard(uidCopy)?.uid), getCard(uidCopy)?.uid !== uidCard.uid], [true, true]);
+check(
+  'odpowiedz tez',
+  db.select().from(reviewLogs).where(eq(reviewLogs.cardId, uidCard.id)).all().map((row) => isUid(row.uid)),
+  [true]
+);
+
+group('Eksport i import talii');
+
+const pkgDeck = createDeck({
+  name: 'Paczka',
+  newPerDay: 7,
+  reviewsPerDay: 70,
+  languages: { front: ['pl', 'en-US'], back: 'pt-PT' },
+  newCardSpeech: { frontSpeech: null, backSpeech: 'pt-PT' },
+});
+syncDeckSlots(pkgDeck.id, [{ side: 'back', position: 1, kind: 'text', speech: 'pt-PT' }]);
+
+const pkgCat = createCard(pkgDeck.id, 'kot', 'gato', statsAt, [
+  { id: null, side: 'back', position: 1, kind: 'image', value: 'kot.jpg', mediaPath: 'abc.jpg' },
+  { id: null, side: 'front', position: 1, kind: 'text', value: 'zwierzę', mediaPath: null, speech: 'pl' },
+]);
+createCard(pkgDeck.id, 'pies', 'cão', new Date(statsAt.getTime() + 1000));
+setCardTagNames(pkgCat.id, ['Zwierzęta', 'A1']);
+gradeCard(pkgCat.id, Rating.Good, statsAt, 3000);
+gradeCard(pkgCat.id, Rating.Good, new Date(statsAt.getTime() + 60_000), 2000);
+
+const exported = exportDeckPackage(pkgDeck.id, true, statsAt)!;
+const pkgParsed = parseDeckPackage(jsonBytes(exported))!;
+const renamed = (kind: MediaKind, name: string) => `nowy-${name}`;
+
+check('eksport przechodzi przez JSON bez strat', pkgParsed, exported);
+check('niesie dwie karty, tagi i dwie odpowiedzi', [
+  exported.cards.length,
+  exported.cards[0].tags,
+  exported.cards[0].reviews.length,
+], [2, ['A1', 'Zwierzęta'], 2]);
+
+const sameAgain = importDeckPackage(pkgParsed, renamed, statsAt);
+check('import tego, co jest: nic nie dochodzi', sameAgain, {
+  deckId: pkgDeck.id,
+  created: false,
+  added: 0,
+  skipped: 2,
+  media: [],
+});
+
+const pkgCards = () => db.select().from(cards).where(eq(cards.deckId, pkgDeck.id)).all().length;
+const extraCard = {
+  ...pkgParsed.cards[1],
+  uid: 'f'.repeat(32),
+  front: 'mysz',
+  back: 'rato',
+  reviews: [],
+};
+const joined = importDeckPackage({ ...pkgParsed, cards: [...pkgParsed.cards, extraCard] }, renamed, statsAt);
+check('nowsza wersja talii dokłada tylko nowe karty', [joined.deckId, joined.added, joined.skipped], [pkgDeck.id, 1, 2]);
+check('i talia ma ich trzy', pkgCards(), 3);
+
+// Gone from this phone: comes back whole, files under new names.
+deleteDeck(pkgDeck.id);
+const reborn = importDeckPackage(pkgParsed, renamed, statsAt);
+
+check('usunieta talia wraca jako nowa', [reborn.created, reborn.added, reborn.skipped], [true, 2, 0]);
+check('pliki dostaja nowe nazwy', reborn.media, [{ kind: 'image', from: 'abc.jpg', to: 'nowy-abc.jpg' }]);
+check(
+  'a reszta jest ta sama: uid, ustawienia, szablon, pola, tagi, harmonogram, historia',
+  JSON.stringify(exportDeckPackage(reborn.deckId, true, statsAt)).replaceAll('nowy-', ''),
+  JSON.stringify(exported)
+);
+
+const withoutProgress = parseDeckPackage(jsonBytes(exportDeckPackage(reborn.deckId, false, statsAt)))!;
+check('bez postepu: brak harmonogramu i historii w pliku', withoutProgress.cards.map((c) => [c.schedule, c.reviews.length]), [
+  [null, 0],
+  [null, 0],
+]);
+
+deleteDeck(reborn.deckId);
+const fresh = importDeckPackage(withoutProgress, renamed, statsAt);
+const freshCat = db.select().from(cards).where(eq(cards.uid, pkgCat.uid!)).get()!;
+
+check('karty bez postepu sa nowe', db.select().from(fsrsState).where(eq(fsrsState.cardId, freshCat.id)).get()?.state, State.New);
+check('bez historii', db.select().from(reviewLogs).where(eq(reviewLogs.cardId, freshCat.id)).all().length, 0);
+check('ale z tagami', getCardTagNames(freshCat.id), ['A1', 'Zwierzęta']);
+// Renamed twice: this file came from the deck the previous import made.
+check('i polami', getCardFields(freshCat.id).map((f) => [f.side, f.kind, f.value, f.mediaPath, f.speech]), [
+  ['back', 'image', 'kot.jpg', 'nowy-nowy-abc.jpg', null],
+  ['front', 'text', 'zwierzę', null, 'pl'],
+]);
+check('pies tez wrocil', fresh.added, 2);
+
+group('Import CSV do talii');
+
+const csvDeck = createDeck({
+  name: 'CSV',
+  newPerDay: 10,
+  reviewsPerDay: 10,
+  newCardSpeech: { frontSpeech: null, backSpeech: 'pt-PT' },
+});
+syncDeckSlots(csvDeck.id, [
+  { side: 'back', position: 1, kind: 'text', speech: 'pt-PT' },
+  { side: 'back', position: 2, kind: 'audio', speech: null },
+]);
+
+const csvRows = parseCsv('#tags column:5\nkot;gato;O gato dorme.;dodatek;zwierzęta\npies;cão\nkot;gato\n');
+const csvFirst = importCsvCards(csvDeck.id, csvRows, statsAt);
+const csvCards = db.select().from(cards).where(eq(cards.deckId, csvDeck.id)).orderBy(asc(cards.id)).all();
+
+check('dwie karty, powtorka z pliku pominieta', csvFirst, { added: 2, skipped: 1 });
+check('z glosem z szablonu', csvCards.map((c) => [c.front, c.back, c.backSpeech]), [
+  ['kot', 'gato', 'pt-PT'],
+  ['pies', 'cão', 'pt-PT'],
+]);
+check(
+  'trzecia kolumna w pole tekstowe szablonu, czwarta na tyl po nim',
+  getCardFields(csvCards[0].id).map((f) => [f.side, f.position, f.kind, f.value, f.speech]),
+  [
+    ['back', 1, 'text', 'O gato dorme.', 'pt-PT'],
+    ['back', 2, 'audio', '', null],
+    ['back', 3, 'text', 'dodatek', null],
+  ]
+);
+check('karta bez dodatkow ma puste pola szablonu', getCardFields(csvCards[1].id).map((f) => f.value), ['', '']);
+// By slug: `Zwierzęta` from the deck import above is the same tag.
+check('tagi z kolumny, dopasowane do istniejacego', getCardTagNames(csvCards[0].id), ['Zwierzęta']);
+check('karty sa nowe', db.select().from(fsrsState).where(eq(fsrsState.cardId, csvCards[0].id)).get()?.state, State.New);
+check('drugi import tego samego pliku nic nie dodaje', importCsvCards(csvDeck.id, csvRows, statsAt), {
+  added: 0,
+  skipped: 3,
+});

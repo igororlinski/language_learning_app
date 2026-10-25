@@ -166,7 +166,7 @@ export default function DecksScreen() {
           items={[
             { label: 'Ustawienia AI', onPress: () => router.push('/ai-limits') },
             { label: 'Statystyki', onPress: () => router.push('/stats') },
-            { label: 'Kopia zapasowa', onPress: () => router.push('/backup') },
+            { label: 'Import i eksport', onPress: () => router.push('/backup') },
           ]}
         />
       </View>

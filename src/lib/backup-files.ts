@@ -63,7 +63,7 @@ const staging = () => new Directory(Paths.cache, 'restore');
 /** The state before the last restore — the one way back from a wrong file. */
 const safetyFile = () => new File(ensure(new Directory(Paths.document, 'backups')), 'przed-przywroceniem.zip');
 
-function ensure(directory: Directory): Directory {
+export function ensure(directory: Directory): Directory {
   if (!directory.exists) directory.create({ intermediates: true });
   return directory;
 }
@@ -77,7 +77,7 @@ export class BackupError extends Error {
 }
 
 /** A file's bytes, in pieces, from a handle — never the whole file at once. */
-function* fileChunks(file: File): Generator<Uint8Array> {
+export function* fileChunks(file: File): Generator<Uint8Array> {
   const handle = file.open(FileMode.ReadOnly);
 
   try {
@@ -128,14 +128,19 @@ async function writeBackupInto(handle: FileHandle): Promise<BackupManifest> {
   return manifest;
 }
 
-/** Writes a full backup into `target`, which must already exist. A failure leaves no half a file behind. */
+/** Writes a full backup into `target`, which must already exist. */
 async function writeBackupTo(target: File): Promise<BackupManifest> {
+  return writeInto(target, writeBackupInto);
+}
+
+/** Runs `write` on a handle to `target`, which must already exist. A failure leaves no half a file behind. */
+export async function writeInto<T>(target: File, write: (handle: FileHandle) => Promise<T>): Promise<T> {
   const handle = target.open(FileMode.WriteOnly);
 
   try {
-    const manifest = await writeBackupInto(handle);
+    const result = await write(handle);
     handle.close();
-    return manifest;
+    return result;
   } catch (error) {
     handle.close();
     try {
@@ -148,7 +153,7 @@ async function writeBackupTo(target: File): Promise<BackupManifest> {
 }
 
 /** Writes a full backup into a file of the app's own, replacing what was there. */
-async function writeBackup(target: File): Promise<BackupManifest> {
+export async function writeBackup(target: File): Promise<BackupManifest> {
   if (target.exists) target.delete();
   target.create();
 
@@ -166,14 +171,8 @@ async function writeBackup(target: File): Promise<BackupManifest> {
  * the last backup went.
  */
 export async function saveBackupToFolder(initialUri?: string, now = new Date()): Promise<string | null> {
-  let folder: Directory;
-
-  try {
-    folder = await Directory.pickDirectoryAsync(initialUri);
-  } catch (error) {
-    if (isCancelled(error)) return null;
-    throw error;
-  }
+  const folder = await pickFolder(initialUri);
+  if (!folder) return null;
 
   const file = folder.createFile(backupFileName(now), 'application/zip');
   await writeBackupTo(file);
@@ -181,6 +180,16 @@ export async function saveBackupToFolder(initialUri?: string, now = new Date()):
   setLastBackup(now, folder.uri);
 
   return folder.uri;
+}
+
+/** The system folder picker; null when the user backed out of it. */
+export async function pickFolder(initialUri?: string): Promise<Directory | null> {
+  try {
+    return await Directory.pickDirectoryAsync(initialUri);
+  } catch (error) {
+    if (isCancelled(error)) return null;
+    throw error;
+  }
 }
 
 /** The native picker rejects instead of resolving when backed out of. */
@@ -197,15 +206,25 @@ const isCancelled = (error: unknown) =>
  * whether the file went somewhere or the user just closed it.
  */
 export async function shareBackup(now = new Date()): Promise<void> {
+  const file = outboxFile(backupFileName(now));
+  await writeBackup(file);
+  await shareFile(file, 'Udostępnij kopię zapasową');
+}
+
+/**
+ * A fresh file in the outbox, where a zip waits for the share sheet. Whatever
+ * waited there before goes first — it was shared already, or never will be.
+ */
+export function outboxFile(name: string): File {
   const box = outbox();
 
   for (const entry of box.list()) entry.delete();
 
-  const file = new File(box, backupFileName(now));
-  await writeBackup(file);
-
-  await Sharing.shareAsync(file.uri, { mimeType: 'application/zip', dialogTitle: 'Udostępnij kopię zapasową' });
+  return new File(box, name);
 }
+
+export const shareFile = (file: File, dialogTitle: string) =>
+  Sharing.shareAsync(file.uri, { mimeType: 'application/zip', dialogTitle });
 
 /** The system picker, for a zip. Null when the user backed out. */
 export async function pickBackup(): Promise<File | null> {

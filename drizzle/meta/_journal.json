@@ -176,6 +176,13 @@
       "when": 1792750741271,
       "tag": "0024_wooden_greymalkin",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1792761585176,
+      "tag": "0025_bent_obadiah_stane",
+      "breakpoints": true
     }
   ]
 }
