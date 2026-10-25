@@ -13,7 +13,6 @@ import {
   mnemonicComparison,
   recentRetention,
   retention,
-  streakStats,
   studyTime,
   todayStats,
   type StatsCard,
@@ -59,25 +58,6 @@ check('nauka i ponowna nauka razem', today.learning, 2);
 check('powtorki', today.review, 1);
 check('poprawnie to wszystko poza „Znowu”', today.correct, 0.75);
 check('bez odpowiedzi nie ma procentu', todayStats([], NOW).correct, null);
-
-group('Statystyki: seria');
-
-const days = (...list: number[]) => list.map((day) => log(at(day, 10)));
-
-check('trzy dni z rzedu, dzis tez', streakStats(days(18, 19, 20), NOW), {
-  current: 3,
-  longest: 3,
-});
-// The day is not over: no answer yet today does not break the streak.
-check('dzis jeszcze nic — seria trwa od wczoraj', streakStats(days(18, 19), NOW).current, 2);
-check('przedwczoraj ostatnio — seria przerwana', streakStats(days(17, 18), NOW).current, 0);
-check('najdluzsza pamieta stara serie', streakStats(days(5, 6, 7, 8, 19, 20), NOW).longest, 4);
-check(
-  'odpowiedz o 2:00 nalezy do poprzedniego dnia',
-  streakStats([log(at(19, 10)), log(at(20, 2))], NOW).current,
-  1
-);
-check('bez odpowiedzi zero', streakStats([], NOW), { current: 0, longest: 0 });
 
 group('Statystyki: prognoza');
 

@@ -538,6 +538,36 @@ export const aiUsage = sqliteTable(
   (table) => [primaryKey({ columns: [table.metric, table.day] })]
 );
 
+/**
+ * One row per study day with an answer: how many there were, and the daily
+ * goal that day was held to (`src/lib/goals.ts`).
+ *
+ * Counted here rather than from `review_logs`, for two reasons. Deleting a deck
+ * cascades into its answers, and a streak that a tidy-up can break is not one
+ * worth keeping. And the goal can change: storing it **per day** means raising
+ * it today does not turn last month's met days into missed ones.
+ *
+ * `gradeCard` adds one and `rollbackCard` takes it back, in their own
+ * transactions. `day` is the local date the study day starts on (`YYYY-MM-DD`,
+ * 4:00 rollover). Migration 0026 filled it from the history with a goal of one
+ * answer — the rule the streak had before there was a goal.
+ */
+export const studyDays = sqliteTable('study_days', {
+  day: text('day').primaryKey(),
+  answers: integer('answers').notNull().default(0),
+  goal: integer('goal').notNull(),
+});
+
+/**
+ * Badges, once earned (`src/lib/badges.ts`). Kept rather than worked out each
+ * time: the mature-card count falls when a deck goes, and a badge that can be
+ * taken back is a penalty, not a badge.
+ */
+export const badges = sqliteTable('badges', {
+  id: text('id').primaryKey(),
+  earnedAt: integer('earned_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
 export type Deck = typeof decks.$inferSelect;
 export type CardField = typeof cardFields.$inferSelect;
 export type DeckFieldSlot = typeof deckFieldSlots.$inferSelect;

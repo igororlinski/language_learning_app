@@ -3,6 +3,7 @@ import {
   asc,
   desc,
   eq,
+  gte,
   inArray,
   isNotNull,
   lt,
@@ -38,6 +39,9 @@ import {
   type PackageTemplate,
 } from '@/lib/deck-package';
 import type { CsvCard } from '@/lib/csv-import';
+import { dayKey, parseDailyGoal } from '@/lib/goals';
+import { dayProgress, newlyEarned, type BadgeProgress } from '@/lib/badges';
+import { MATURE_DAYS } from '@/lib/stats';
 
 import {
   remainingAllowance,
@@ -63,6 +67,7 @@ import { db } from './client';
 import {
   aiUsage,
   appSettings,
+  badges,
   cardFields,
   cards,
   cardTags,
@@ -74,6 +79,7 @@ import {
   DEFAULT_PICTURE_QUALITY,
   fsrsState,
   reviewLogs,
+  studyDays,
   tags,
   type CardField,
   type CardTemplate,
@@ -1253,6 +1259,82 @@ export function mnemonicCardsQuery(deckId: number | null) {
     );
 }
 
+/* --------------------------------------------------- daily goal and badges */
+
+const DAILY_GOAL_KEY = 'goal.answers';
+
+/** The daily goal, out of the settings rows (`appSettingsQuery`). */
+export function dailyGoalFrom(rows: readonly { key: string; value: string }[]): number {
+  return parseDailyGoal(rows.find((row) => row.key === DAILY_GOAL_KEY)?.value);
+}
+
+export function getDailyGoal(): number {
+  return dailyGoalFrom(appSettingsQuery().all());
+}
+
+/**
+ * Sets the daily goal from today on. Today's row, if there is one, takes the
+ * new goal at once — today is measured by what is set now — and every earlier
+ * day keeps the goal it had.
+ */
+export function setDailyGoal(goal: number, now = Date.now()): void {
+  const value = parseDailyGoal(String(goal));
+
+  db.transaction((tx) => {
+    tx.insert(appSettings)
+      .values({ key: DAILY_GOAL_KEY, value: String(value) })
+      .onConflictDoUpdate({ target: appSettings.key, set: { value: String(value) } })
+      .run();
+    tx.update(studyDays).set({ goal: value }).where(eq(studyDays.day, dayKey(now))).run();
+  });
+}
+
+/** Every study day with an answer, for the streak and the goal (`src/lib/goals.ts`). */
+export function studyDaysQuery() {
+  return db.select().from(studyDays);
+}
+
+/** Badges earned so far, oldest first. */
+export function badgesQuery() {
+  return db.select().from(badges).orderBy(asc(badges.earnedAt), asc(badges.id));
+}
+
+/** Where every badge ladder stands now, across all decks. */
+export function badgeProgress(now = Date.now()): BadgeProgress {
+  const mature = db
+    .select({ count: sql<number>`count(*)` })
+    .from(fsrsState)
+    .where(and(eq(fsrsState.state, State.Review), gte(fsrsState.scheduledDays, MATURE_DAYS)))
+    .get();
+
+  return {
+    ...dayProgress(studyDaysQuery().all(), getDailyGoal(), now),
+    mature: mature?.count ?? 0,
+    mnemonics: mnemonicCardsQuery(null).all().length,
+  };
+}
+
+/**
+ * Stores every badge the numbers have reached and that is not stored yet, and
+ * says which ones those were — the session summary announces them. Called when
+ * a session ends and when "Statystyki" opens, not on every write: a badge for
+ * an association made in the card editor can wait for the next of the two.
+ */
+export function awardBadges(now = Date.now()): string[] {
+  return db.transaction((tx) => {
+    const earned = new Set(tx.select({ id: badges.id }).from(badges).all().map((row) => row.id));
+    const fresh = newlyEarned(badgeProgress(now), earned);
+
+    if (fresh.length > 0) {
+      tx.insert(badges)
+        .values(fresh.map((id) => ({ id, earnedAt: new Date(now) })))
+        .run();
+    }
+
+    return fresh;
+  });
+}
+
 /* ----------------------------------------------------------------- backup */
 
 /** How much a backup holds, for its manifest — and for the question before a restore. */
@@ -2318,6 +2400,20 @@ export function gradeCard(
       })
       .run();
 
+    // The day's count, held to the goal set now — so a goal changed later in
+    // the day is what today is measured by, and earlier days keep theirs.
+    const goal = dailyGoalFrom(
+      tx.select().from(appSettings).where(eq(appSettings.key, DAILY_GOAL_KEY)).all()
+    );
+
+    tx.insert(studyDays)
+      .values({ day: dayKey(log.review), answers: 1, goal })
+      .onConflictDoUpdate({
+        target: studyDays.day,
+        set: { answers: sql`${studyDays.answers} + 1`, goal },
+      })
+      .run();
+
     return next;
   });
 }
@@ -2346,6 +2442,13 @@ export function rollbackCard(cardId: number) {
 
     tx.update(fsrsState).set(toStateValues(previous)).where(eq(fsrsState.cardId, cardId)).run();
     tx.delete(reviewLogs).where(eq(reviewLogs.id, logRow.id)).run();
+
+    // Taken back from the day the answer was given, which after midnight may
+    // no longer be today. The goal stays as it was.
+    tx.update(studyDays)
+      .set({ answers: sql`max(${studyDays.answers} - 1, 0)` })
+      .where(eq(studyDays.day, dayKey(logRow.reviewedAt)))
+      .run();
 
     return previous;
   });

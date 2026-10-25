@@ -8,12 +8,14 @@ import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { Button } from '@/components/button';
 import { DueCounts } from '@/components/due-counts';
 import { EmptyState } from '@/components/empty-state';
+import { GoalBar } from '@/components/goal-bar';
 import { MenuIcon } from '@/components/icons';
 import { SideMenu } from '@/components/side-menu';
 import { ThemedText } from '@/components/themed-text';
-import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
 import { deckMediaFiles, decksWithStatsQuery, deleteDeck } from '@/db/queries';
 import { useNow } from '@/hooks/use-now';
+import { useStreak } from '@/hooks/use-streak';
 import { useTheme } from '@/hooks/use-theme';
 import { deleteMedia } from '@/lib/media-files';
 import { cardsLabel } from '@/lib/format';
@@ -34,6 +36,7 @@ export default function DecksScreen() {
   const now = useNow();
   const dayStart = studyDayStart(new Date(now)).getTime();
   const { data: decks } = useLiveQuery(decksWithStatsQuery(now, dayStart), [now, dayStart]);
+  const { streak } = useStreak(now);
 
   const [menuDeck, setMenuDeck] = useState<DeckMenuTarget | null>(null);
   const [appMenuOpen, setAppMenuOpen] = useState(false);
@@ -105,6 +108,27 @@ export default function DecksScreen() {
           )}
         </Pressable>
         <ThemedText style={styles.headerTitle}>Talie</ThemedText>
+
+        {decks.length > 0 ? (
+          <Pressable
+            onPress={() => router.push('/stats')}
+            hitSlop={Spacing.two}
+            accessibilityRole="button"
+            accessibilityLabel={`Seria ${streak.current}, dziś ${streak.today.answers} z ${streak.today.goal}`}
+            style={({ pressed }) => [styles.goal, { opacity: pressed ? 0.5 : 1 }]}>
+            <ThemedText
+              type="smallBold"
+              style={streak.today.met ? { color: RatingColors.good } : undefined}>
+              Seria {streak.current}
+            </ThemedText>
+            <View style={styles.goalProgress}>
+              <GoalBar today={streak.today} />
+              <ThemedText type="small" themeColor="textSecondary" style={styles.goalCount}>
+                {streak.today.answers}/{streak.today.goal}
+              </ThemedText>
+            </View>
+          </Pressable>
+        ) : null}
       </View>
 
       {/* The drawer overlays only this body, so it never covers the header. */}
@@ -202,6 +226,19 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 20,
     fontWeight: '600',
+  },
+  goal: {
+    marginLeft: 'auto',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+  },
+  goalProgress: {
+    width: 64,
+    gap: Spacing.half,
+  },
+  goalCount: {
+    textAlign: 'center',
   },
   body: {
     flex: 1,

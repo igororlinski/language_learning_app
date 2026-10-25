@@ -1,20 +1,28 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Dropdown } from '@/components/dropdown';
 import { EmptyState } from '@/components/empty-state';
+import { GoalBar } from '@/components/goal-bar';
 import { ThemedText } from '@/components/themed-text';
-import { CardStateColors, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import { CardStateColors, MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
 import {
+  awardBadges,
+  badgeProgress,
+  badgesQuery,
   deckNamesQuery,
   mnemonicCardsQuery,
+  setDailyGoal,
   statsCardsQuery,
   statsLogsQuery,
 } from '@/db/queries';
 import { useNow } from '@/hooks/use-now';
+import { useStreak } from '@/hooks/use-streak';
 import { useTheme } from '@/hooks/use-theme';
+import { BADGE_GROUPS, badgeId, formatCount, shortCount, type BadgeProgress } from '@/lib/badges';
 import { pluralize } from '@/lib/format';
+import { DAILY_GOALS, weekday } from '@/lib/goals';
 import {
   cardStates,
   forecast,
@@ -25,15 +33,17 @@ import {
   recentRetention,
   RETENTION_WINDOW_DAYS,
   STUDY_TIME_DAYS,
-  streakStats,
   studyTime,
   todayStats,
+  WEEKDAYS,
   type CardStates,
   type RetentionStats,
 } from '@/lib/stats';
 
 /**
- * "Statystyki": what the review history says, for every deck or one.
+ * "Statystyki": the daily goal, the streak and the badges, which are the same
+ * for every deck, and under them what the review history says, for every deck
+ * or one.
  *
  * Everything here is read from `review_logs` and `fsrs_state`, which have
  * been complete since the first day, and worked out in `src/lib/stats.ts`.
@@ -52,6 +62,8 @@ const answersLabel = (count: number) =>
 
 const daysLabel = (count: number) => `${count} ${pluralize(count, 'dzień', 'dni', 'dni')}`;
 
+const GOAL_OPTIONS = DAILY_GOALS.map((goal) => ({ value: String(goal), label: answersLabel(goal) }));
+
 export default function StatsScreen() {
   const theme = useTheme();
   const now = useNow();
@@ -66,12 +78,29 @@ export default function StatsScreen() {
   const { data: cardRows } = useLiveQuery(statsCardsQuery(deckId), [deckId]);
   const { data: mnemonicRows } = useLiveQuery(mnemonicCardsQuery(deckId), [deckId]);
 
+  const { days: studyDays, goal, streak } = useStreak(now);
+  const { data: badgeRows } = useLiveQuery(badgesQuery());
+  const earned = new Set(badgeRows.map((row) => row.id));
+
+  // Catches what a session did not: an association made in the card editor,
+  // a deck imported with its history.
+  useEffect(() => {
+    awardBadges();
+  }, []);
+
+  // Read rather than live: a handful of counts, worth redoing only when the
+  // days, the earned badges or the cards move.
+  const progress = useMemo(
+    () => badgeProgress(now),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the rows are the triggers
+    [now, studyDays, badgeRows, cardRows, mnemonicRows]
+  );
+
   const logs = logRows.map((row) => ({ ...row, reviewedAt: row.reviewedAt.getTime() }));
   const cards = cardRows.map((row) => ({ ...row, due: row.due.getTime() }));
   const withMnemonic = new Set(mnemonicRows.map((row) => row.cardId));
 
   const today = todayStats(logs, now);
-  const streak = streakStats(logs, now);
   const time = studyTime(logs, now);
   const days = forecast(cards, now);
   const recent = recentRetention(logs, now);
@@ -90,6 +119,53 @@ export default function StatsScreen() {
     <ScrollView
       style={{ backgroundColor: theme.background }}
       contentContainerStyle={styles.content}>
+      <View style={card}>
+        <ThemedText type="smallBold" themeColor="textSecondary">
+          Cel na dziś
+        </ThemedText>
+        <ThemedText style={[styles.big, streak.today.met ? { color: RatingColors.good } : null]}>
+          {streak.today.answers} / {streak.today.goal}
+        </ThemedText>
+        <GoalBar today={streak.today} height={8} />
+        <Dropdown
+          label="Cel dzienny"
+          value={String(goal)}
+          options={GOAL_OPTIONS}
+          onChange={(value) => setDailyGoal(Number(value))}
+          style={styles.goalPicker}
+        />
+      </View>
+
+      <View style={card}>
+        <ThemedText type="smallBold" themeColor="textSecondary">
+          Seria
+        </ThemedText>
+        <View style={styles.compare}>
+          <View style={styles.half}>
+            <ThemedText style={styles.medium}>{daysLabel(streak.current)}</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              teraz
+            </ThemedText>
+          </View>
+          <View style={styles.half}>
+            <ThemedText style={styles.medium}>{daysLabel(streak.longest)}</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              najdłuższa
+            </ThemedText>
+          </View>
+          <View style={styles.half}>
+            <ThemedText style={styles.medium}>{streak.freezeUsedOn ? 'zużyte' : 'jest'}</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              {streak.freezeUsedOn
+                ? `zamrożenie · ${WEEKDAYS[weekday(streak.freezeUsedOn)]}`
+                : 'zamrożenie'}
+            </ThemedText>
+          </View>
+        </View>
+      </View>
+
+      <Badges progress={progress} earned={earned} />
+
       {decks.length > 1 ? (
         <Dropdown label="Talia" value={deck} options={deckOptions} onChange={setDeck} />
       ) : null}
@@ -98,33 +174,21 @@ export default function StatsScreen() {
         <EmptyState title="Jeszcze nie ma czego liczyć" hint="Dodaj karty i zacznij naukę." />
       ) : (
         <>
-          <View style={styles.row}>
-            <View style={[card, styles.half]}>
-              <ThemedText type="smallBold" themeColor="textSecondary">
-                Dzisiaj
-              </ThemedText>
-              <ThemedText style={styles.big}>{today.answers}</ThemedText>
+          <View style={card}>
+            <ThemedText type="smallBold" themeColor="textSecondary">
+              Dzisiaj
+            </ThemedText>
+            <ThemedText style={styles.big}>{today.answers}</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              {today.answers === 0
+                ? 'Jeszcze nic'
+                : `nowe ${today.new} · nauka ${today.learning} · powtórki ${today.review}`}
+            </ThemedText>
+            {today.correct != null ? (
               <ThemedText type="small" themeColor="textSecondary">
-                {today.answers === 0
-                  ? 'Jeszcze nic'
-                  : `nowe ${today.new} · nauka ${today.learning} · powtórki ${today.review}`}
+                poprawnie {formatPercent(today.correct)}
               </ThemedText>
-              {today.correct != null ? (
-                <ThemedText type="small" themeColor="textSecondary">
-                  poprawnie {formatPercent(today.correct)}
-                </ThemedText>
-              ) : null}
-            </View>
-
-            <View style={[card, styles.half]}>
-              <ThemedText type="smallBold" themeColor="textSecondary">
-                Seria
-              </ThemedText>
-              <ThemedText style={styles.big}>{daysLabel(streak.current)}</ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">
-                najdłuższa: {daysLabel(streak.longest)}
-              </ThemedText>
-            </View>
+            ) : null}
           </View>
 
           <View style={card}>
@@ -261,6 +325,71 @@ function Retention({ stats, big = false }: { stats: RetentionStats; big?: boolea
   );
 }
 
+/**
+ * Every ladder as a row of tiers: earned ones filled, the next one outlined
+ * with how far there is still to go, the rest greyed.
+ */
+function Badges({ progress, earned }: { progress: BadgeProgress; earned: ReadonlySet<string> }) {
+  const theme = useTheme();
+  const total = BADGE_GROUPS.reduce((sum, group) => sum + group.tiers.length, 0);
+
+  return (
+    <View
+      style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+      <ThemedText type="smallBold" themeColor="textSecondary">
+        Odznaki · {earned.size}/{total}
+      </ThemedText>
+
+      {BADGE_GROUPS.map((group) => {
+        const next = group.tiers.find((tier) => !earned.has(badgeId(group.kind, tier)));
+
+        return (
+          <View key={group.kind} style={styles.badgeGroup}>
+            <View style={styles.badgeHeader}>
+              <ThemedText type="small">{group.title}</ThemedText>
+              {next != null ? (
+                <ThemedText type="small" themeColor="textSecondary">
+                  {formatCount(Math.min(progress[group.kind], next))} / {formatCount(next)}
+                </ThemedText>
+              ) : null}
+            </View>
+            <View style={styles.chips}>
+              {group.tiers.map((tier) => {
+                const has = earned.has(badgeId(group.kind, tier));
+                const isNext = tier === next;
+
+                return (
+                  <View
+                    key={tier}
+                    accessible
+                    accessibilityLabel={`${group.label(tier)}${has ? ', zdobyta' : ''}`}
+                    style={[
+                      styles.chip,
+                      has
+                        ? { backgroundColor: theme.accent, borderColor: theme.accent }
+                        : isNext
+                          ? { borderColor: theme.accent }
+                          : {
+                              backgroundColor: theme.backgroundSelected,
+                              borderColor: theme.backgroundSelected,
+                            },
+                    ]}>
+                    <ThemedText
+                      type="small"
+                      style={{ color: has ? theme.onAccent : isNext ? theme.text : theme.textSecondary }}>
+                      {shortCount(tier)}
+                    </ThemedText>
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 const STATE_ROWS: { key: keyof CardStates; label: string }[] = [
   { key: 'new', label: 'Nowe' },
   { key: 'learning', label: 'W nauce' },
@@ -310,9 +439,29 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
   },
-  row: {
+  goalPicker: {
+    marginTop: Spacing.two,
+  },
+  badgeGroup: {
+    gap: Spacing.one,
+    marginTop: Spacing.two,
+  },
+  badgeHeader: {
     flexDirection: 'row',
-    gap: Spacing.three,
+    justifyContent: 'space-between',
+  },
+  chips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.one,
+  },
+  chip: {
+    minWidth: 40,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.half,
+    borderRadius: Radius.small,
+    borderWidth: 1,
+    alignItems: 'center',
   },
   half: {
     flex: 1,

@@ -56,13 +56,6 @@ const remembered = (log: StatsLog) => log.rating !== Rating.Again;
 
 const isLearning = (state: number) => state === State.Learning || state === State.Relearning;
 
-/** A study day as a key: the date its 4:00 falls on. */
-function dayKey(ms: number): string {
-  const day = studyDayStart(new Date(ms));
-
-  return `${day.getFullYear()}-${day.getMonth() + 1}-${day.getDate()}`;
-}
-
 /** The start of the study day `offset` days after the one `now` is in. */
 function shiftedDay(now: number, offset: number): Date {
   const day = studyDayStart(new Date(now));
@@ -94,58 +87,6 @@ export function todayStats(logs: readonly StatsLog[], now: number): TodayStats {
     review: today.filter((log) => log.state === State.Review).length,
     correct: today.length > 0 ? today.filter(remembered).length / today.length : null,
   };
-}
-
-/* ----------------------------------------------------------------- streak */
-
-export type StreakStats = { current: number; longest: number };
-
-/**
- * Days in a row with at least one answer.
- *
- * Today without an answer **does not break** the streak yet — the day is not
- * over, and a streak that reads 0 every morning until the first card is a
- * streak that scolds. It counts back from yesterday then, and breaks only once
- * a whole day has gone by empty.
- */
-export function streakStats(logs: readonly StatsLog[], now: number): StreakStats {
-  const days = new Set(logs.filter((log) => log.reviewedAt <= now).map((log) => dayKey(log.reviewedAt)));
-
-  let current = 0;
-  let offset = days.has(dayKey(now)) ? 0 : -1;
-
-  while (days.has(dayKey(shiftedDay(now, offset).getTime()))) {
-    current += 1;
-    offset -= 1;
-  }
-
-  // The longest run: walk the days that have answers, oldest first, and count
-  // how many follow one another. "Follows" is `setDate(+1)` rather than 24
-  // hours, so a clock change does not break a run.
-  const starts = [...new Set(logs.map((log) => studyDayStart(new Date(log.reviewedAt)).getTime()))]
-    .filter((start) => start <= now)
-    .sort((a, b) => a - b);
-
-  let longest = 0;
-  let run = 0;
-  let previous: Date | null = null;
-
-  for (const start of starts) {
-    const day = new Date(start);
-
-    if (previous) {
-      const expected = new Date(previous);
-      expected.setDate(expected.getDate() + 1);
-      run = expected.getTime() === day.getTime() ? run + 1 : 1;
-    } else {
-      run = 1;
-    }
-
-    longest = Math.max(longest, run);
-    previous = day;
-  }
-
-  return { current, longest };
 }
 
 /* --------------------------------------------------------------- forecast */
@@ -335,7 +276,7 @@ export function cardStates(cards: readonly StatsCard[]): CardStates {
 
 /* ------------------------------------------------------------- labelling */
 
-const WEEKDAYS = ['nd', 'pn', 'wt', 'śr', 'cz', 'pt', 'sb'];
+export const WEEKDAYS = ['nd', 'pn', 'wt', 'śr', 'cz', 'pt', 'sb'];
 
 /** „Dziś", „Jutro", then the short weekday: what a bar in the forecast is called. */
 export function forecastLabel(index: number, start: number): string {

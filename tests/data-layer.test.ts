@@ -72,9 +72,17 @@ import {
   exportDeckPackage,
   importCsvCards,
   importDeckPackage,
+  awardBadges,
+  badgeProgress,
+  badgesQuery,
+  getDailyGoal,
+  setDailyGoal,
+  studyDaysQuery,
   type MediaCopier,
 } from '@/db/queries';
-import { appSettings, cards, decks, fsrsState, reviewLogs } from '@/db/schema';
+import { appSettings, cards, decks, fsrsState, reviewLogs, studyDays } from '@/db/schema';
+import { newlyEarned } from '@/lib/badges';
+import { DEFAULT_DAILY_GOAL, dayKey } from '@/lib/goals';
 import { parseCsv } from '@/lib/csv-import';
 import { jsonBytes, parseDeckPackage } from '@/lib/deck-package';
 import type { MediaKind } from '@/lib/media';
@@ -123,6 +131,7 @@ import migration0022 from '../drizzle/0022_daily_valkyrie.sql';
 import migration0023 from '../drizzle/0023_same_white_queen.sql';
 import migration0024 from '../drizzle/0024_wooden_greymalkin.sql';
 import migration0025 from '../drizzle/0025_bent_obadiah_stane.sql';
+import migration0026 from '../drizzle/0026_loose_supernaut.sql';
 
 const MIGRATIONS = [
   migration0000,
@@ -151,6 +160,7 @@ const MIGRATIONS = [
   migration0023,
   migration0024,
   migration0025,
+  migration0026,
 ];
 
 /** Runs migrations the way the app's migrator does: statement by statement. */
@@ -2250,3 +2260,90 @@ check('drugi import tego samego pliku nic nie dodaje', importCsvCards(csvDeck.id
   added: 0,
   skipped: 3,
 });
+
+group('Cel dzienny i dni nauki');
+
+const goalAt = new Date(2027, 2, 10, 12);
+const goalDay = dayKey(goalAt);
+const dayRow = (day: string) =>
+  db.select().from(studyDays).where(eq(studyDays.day, day)).get() ?? null;
+
+check('bez ustawienia cel domyslny', getDailyGoal(), DEFAULT_DAILY_GOAL);
+
+const goalDeck = createDeck({ name: 'Cel', newPerDay: 10, reviewsPerDay: 10 });
+const goalCards = [1, 2, 3].map((n) => createCard(goalDeck.id, `g${n}`, `G${n}`, goalAt));
+
+setDailyGoal(30, goalAt.getTime());
+check('ustawiony cel wraca', getDailyGoal(), 30);
+check('ustawienie celu nie zaklada dnia bez odpowiedzi', dayRow(goalDay), null);
+
+gradeCard(goalCards[0].id, Rating.Good, goalAt);
+// 2:00 the next night still belongs to the study day of the 10th.
+gradeCard(goalCards[1].id, Rating.Good, new Date(2027, 2, 11, 2));
+check('dwie odpowiedzi w jednym dniu nauki, z obecnym celem', dayRow(goalDay), {
+  day: '2027-03-10',
+  answers: 2,
+  goal: 30,
+});
+
+setDailyGoal(10, goalAt.getTime());
+check('zmiana celu dzis przestawia dzisiejszy wiersz', dayRow(goalDay)?.goal, 10);
+
+gradeCard(goalCards[2].id, Rating.Good, new Date(2027, 2, 12, 12));
+setDailyGoal(50, new Date(2027, 2, 12, 13).getTime());
+check('i tylko dzisiejszy: wczesniejszy dzien zostaje przy swoim', dayRow(goalDay)?.goal, 10);
+
+rollbackCard(goalCards[1].id);
+check('cofniecie odejmuje z dnia, w ktorym padla odpowiedz', dayRow(goalDay)?.answers, 1);
+
+deleteDeck(goalDeck.id);
+check('usuniecie talii nie zabiera dni nauki', [dayRow(goalDay)?.answers, dayRow('2027-03-12')?.answers], [1, 1]);
+check('studyDaysQuery widzi wszystkie dni', studyDaysQuery().all().some((row) => row.day === '2027-03-12'), true);
+
+setDailyGoal(DEFAULT_DAILY_GOAL);
+
+group('Odznaki: przyznawanie');
+
+const badgeAt = new Date(2027, 2, 12, 14).getTime();
+const expectedBadges = newlyEarned(badgeProgress(badgeAt), new Set());
+const firstAward = awardBadges(badgeAt);
+
+check('przyznaje dokladnie to, do czego doszly liczby', firstAward, expectedBadges);
+check('zapisane', badgesQuery().all().map((row) => row.id).sort(), [...expectedBadges].sort());
+check('drugi raz nic', awardBadges(badgeAt), []);
+
+group('Dni nauki: migracja 0026');
+
+/** Its own database: everything up to 0025, answers the old way, then 0026. */
+const daysLegacy = openDatabaseSync(':memory:');
+
+for (const migration of MIGRATIONS.slice(0, MIGRATIONS.indexOf(migration0026))) {
+  applyMigration((sql) => daysLegacy.execSync(sql), migration);
+}
+
+const legacyTimes = [new Date(2027, 2, 10, 12), new Date(2027, 2, 11, 2), new Date(2027, 2, 11, 5)].map((d) =>
+  d.getTime()
+);
+
+daysLegacy.execSync(`
+  INSERT INTO decks (id, name, created_at) VALUES (1, 'A', 0);
+  INSERT INTO cards (id, deck_id, front, back, created_at) VALUES (1, 1, 'a', 'b', 0);
+  INSERT INTO review_logs (card_id, rating, state, due, stability, difficulty, elapsed_days,
+    last_elapsed_days, scheduled_days, reviewed_at)
+  VALUES ${legacyTimes.map((t) => `(1, 3, 2, 0, 0, 0, 0, 0, 0, ${t})`).join(', ')};
+`);
+
+applyMigration((sql) => daysLegacy.execSync(sql), migration0026);
+
+check(
+  'historia rozlozona na dni tak jak w JS, z celem jednej odpowiedzi',
+  daysLegacy
+    .prepareSync('SELECT day, answers, goal FROM study_days ORDER BY day')
+    .executeSync<{ day: string; answers: number; goal: number }>()
+    .getAllSync()
+    .map((row) => [row.day, row.answers, row.goal]),
+  [
+    [dayKey(legacyTimes[0]), 2, 1],
+    [dayKey(legacyTimes[2]), 1, 1],
+  ]
+);

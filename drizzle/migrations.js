@@ -27,6 +27,7 @@ import m0022 from './0022_daily_valkyrie.sql';
 import m0023 from './0023_same_white_queen.sql';
 import m0024 from './0024_wooden_greymalkin.sql';
 import m0025 from './0025_bent_obadiah_stane.sql';
+import m0026 from './0026_loose_supernaut.sql';
 
   export default {
     journal,
@@ -56,7 +57,8 @@ m0021,
 m0022,
 m0023,
 m0024,
-m0025
+m0025,
+m0026
     }
   }
   

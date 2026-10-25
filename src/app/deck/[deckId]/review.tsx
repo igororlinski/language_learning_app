@@ -1,15 +1,20 @@
+import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { CardFaces, cardFacesLayout } from '@/components/card-faces';
 import { Button } from '@/components/button';
 import { DueCounts } from '@/components/due-counts';
+import { GoalBar } from '@/components/goal-bar';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
+import { useNow } from '@/hooks/use-now';
+import { useStreak } from '@/hooks/use-streak';
 import { useTheme } from '@/hooks/use-theme';
-import { formatSchedule } from '@/lib/format';
+import { badgeLabel } from '@/lib/badges';
+import { formatSchedule, pluralize } from '@/lib/format';
 import {
   countQueueStates,
   GRADE_LABELS,
@@ -18,7 +23,7 @@ import {
   Rating,
   type Grade,
 } from '@/lib/scheduler';
-import { deckLanguages } from '@/db/queries';
+import { awardBadges, badgesQuery, deckLanguages } from '@/db/queries';
 import { speechVoice } from '@/lib/speech';
 import { useReviewStore } from '@/stores/review-store';
 
@@ -76,6 +81,20 @@ export default function ReviewScreen() {
   );
 
   const current = queue[0];
+  const finished = current == null && answered > 0;
+
+  const now = useNow();
+  const { streak } = useStreak(now);
+
+  // Awarded when the last card is answered; the summary then shows whatever
+  // was earned since the session opened, read back from the table.
+  const [openedAt] = useState(() => Date.now());
+  const { data: badgeRows } = useLiveQuery(badgesQuery());
+  const newBadges = badgeRows.filter((row) => row.earnedAt.getTime() >= openedAt);
+
+  useEffect(() => {
+    if (finished) awardBadges();
+  }, [finished]);
 
   // Recomputed per card so the buttons show the interval each answer would set.
   // The instant is carried along with it: the labels have to be measured against
@@ -198,6 +217,42 @@ export default function ReviewScreen() {
             </View>
           ) : null}
 
+          <View
+            style={[
+              styles.summaryBlock,
+              { backgroundColor: theme.backgroundElement, borderColor: theme.border },
+            ]}>
+            <View style={styles.summaryGoalRow}>
+              <ThemedText
+                type="smallBold"
+                style={streak.today.met ? { color: RatingColors.good } : undefined}>
+                {streak.today.met ? 'Cel na dziś zrobiony' : 'Cel na dziś'}
+              </ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                {streak.today.answers}/{streak.today.goal}
+              </ThemedText>
+            </View>
+            <GoalBar today={streak.today} height={8} />
+            <ThemedText type="small" themeColor="textSecondary">
+              Seria {streak.current} {pluralize(streak.current, 'dzień', 'dni', 'dni')}
+            </ThemedText>
+          </View>
+
+          {newBadges.length > 0 ? (
+            <View
+              style={[
+                styles.summaryBlock,
+                { backgroundColor: theme.backgroundHighlight, borderColor: theme.border },
+              ]}>
+              <ThemedText type="smallBold">
+                {newBadges.length === 1 ? 'Nowa odznaka' : 'Nowe odznaki'}
+              </ThemedText>
+              {newBadges.map((row) => (
+                <ThemedText key={row.id}>{badgeLabel(row.id) ?? row.id}</ThemedText>
+              ))}
+            </View>
+          ) : null}
+
           <Button title="Wróć do talii" onPress={() => router.back()} style={styles.summaryButton} />
         </View>
       )}
@@ -269,6 +324,18 @@ const styles = StyleSheet.create({
   summaryNumber: {
     fontSize: 22,
     fontWeight: '700',
+  },
+  summaryBlock: {
+    alignSelf: 'stretch',
+    gap: Spacing.two,
+    padding: Spacing.three,
+    borderRadius: Radius.large,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  summaryGoalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
   },
   summaryButton: {
     alignSelf: 'stretch',
