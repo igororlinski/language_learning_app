@@ -539,8 +539,8 @@ export const aiUsage = sqliteTable(
 );
 
 /**
- * One row per study day with an answer: how many there were, and the daily
- * goal that day was held to (`src/lib/goals.ts`).
+ * One row per study day with an answer: how many there were, how long they
+ * took, and the daily goal that day was held to (`src/lib/goals.ts`).
  *
  * Counted here rather than from `review_logs`, for two reasons. Deleting a deck
  * cascades into its answers, and a streak that a tidy-up can break is not one
@@ -551,11 +551,15 @@ export const aiUsage = sqliteTable(
  * transactions. `day` is the local date the study day starts on (`YYYY-MM-DD`,
  * 4:00 rollover). Migration 0026 filled it from the history with a goal of one
  * answer — the rule the streak had before there was a goal.
+ *
+ * `study_ms` (migration 0027) is the sum of the day's `review_logs.duration_ms`,
+ * already capped at a minute each; it is what friends see as study time.
  */
 export const studyDays = sqliteTable('study_days', {
   day: text('day').primaryKey(),
   answers: integer('answers').notNull().default(0),
   goal: integer('goal').notNull(),
+  studyMs: integer('study_ms').notNull().default(0),
 });
 
 /**

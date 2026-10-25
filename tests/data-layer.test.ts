@@ -132,6 +132,7 @@ import migration0023 from '../drizzle/0023_same_white_queen.sql';
 import migration0024 from '../drizzle/0024_wooden_greymalkin.sql';
 import migration0025 from '../drizzle/0025_bent_obadiah_stane.sql';
 import migration0026 from '../drizzle/0026_loose_supernaut.sql';
+import migration0027 from '../drizzle/0027_boring_wiccan.sql';
 
 const MIGRATIONS = [
   migration0000,
@@ -161,6 +162,7 @@ const MIGRATIONS = [
   migration0024,
   migration0025,
   migration0026,
+  migration0027,
 ];
 
 /** Runs migrations the way the app's migrator does: statement by statement. */
@@ -2277,13 +2279,14 @@ setDailyGoal(30, goalAt.getTime());
 check('ustawiony cel wraca', getDailyGoal(), 30);
 check('ustawienie celu nie zaklada dnia bez odpowiedzi', dayRow(goalDay), null);
 
-gradeCard(goalCards[0].id, Rating.Good, goalAt);
+gradeCard(goalCards[0].id, Rating.Good, goalAt, 4000);
 // 2:00 the next night still belongs to the study day of the 10th.
-gradeCard(goalCards[1].id, Rating.Good, new Date(2027, 2, 11, 2));
-check('dwie odpowiedzi w jednym dniu nauki, z obecnym celem', dayRow(goalDay), {
+gradeCard(goalCards[1].id, Rating.Good, new Date(2027, 2, 11, 2), 90_000);
+check('dwie odpowiedzi w jednym dniu nauki, z obecnym celem i czasem (przycietym do minuty)', dayRow(goalDay), {
   day: '2027-03-10',
   answers: 2,
   goal: 30,
+  studyMs: 64_000,
 });
 
 setDailyGoal(10, goalAt.getTime());
@@ -2294,7 +2297,9 @@ setDailyGoal(50, new Date(2027, 2, 12, 13).getTime());
 check('i tylko dzisiejszy: wczesniejszy dzien zostaje przy swoim', dayRow(goalDay)?.goal, 10);
 
 rollbackCard(goalCards[1].id);
-check('cofniecie odejmuje z dnia, w ktorym padla odpowiedz', dayRow(goalDay)?.answers, 1);
+check('cofniecie odejmuje z dnia, w ktorym padla odpowiedz', [dayRow(goalDay)?.answers, dayRow(goalDay)?.studyMs], [
+  1, 4000,
+]);
 
 deleteDeck(goalDeck.id);
 check('usuniecie talii nie zabiera dni nauki', [dayRow(goalDay)?.answers, dayRow('2027-03-12')?.answers], [1, 1]);
@@ -2324,6 +2329,7 @@ for (const migration of MIGRATIONS.slice(0, MIGRATIONS.indexOf(migration0026))) 
 const legacyTimes = [new Date(2027, 2, 10, 12), new Date(2027, 2, 11, 2), new Date(2027, 2, 11, 5)].map((d) =>
   d.getTime()
 );
+const legacyDurations = ['5000', 'NULL', '7000'];
 
 daysLegacy.execSync(`
   INSERT INTO decks (id, name, created_at) VALUES (1, 'A', 0);
@@ -2332,6 +2338,9 @@ daysLegacy.execSync(`
     last_elapsed_days, scheduled_days, reviewed_at)
   VALUES ${legacyTimes.map((t) => `(1, 3, 2, 0, 0, 0, 0, 0, 0, ${t})`).join(', ')};
 `);
+legacyTimes.forEach((t, index) =>
+  daysLegacy.execSync(`UPDATE review_logs SET duration_ms = ${legacyDurations[index]} WHERE reviewed_at = ${t}`)
+);
 
 applyMigration((sql) => daysLegacy.execSync(sql), migration0026);
 
@@ -2345,5 +2354,22 @@ check(
   [
     [dayKey(legacyTimes[0]), 2, 1],
     [dayKey(legacyTimes[2]), 1, 1],
+  ]
+);
+
+group('Czas nauki dnia: migracja 0027');
+
+applyMigration((sql) => daysLegacy.execSync(sql), migration0027);
+
+check(
+  'czas z historii, odpowiedzi bez pomiaru nic nie dodaja',
+  daysLegacy
+    .prepareSync('SELECT day, study_ms FROM study_days ORDER BY day')
+    .executeSync<{ day: string; study_ms: number }>()
+    .getAllSync()
+    .map((row) => [row.day, row.study_ms]),
+  [
+    [dayKey(legacyTimes[0]), 5000],
+    [dayKey(legacyTimes[2]), 7000],
   ]
 );

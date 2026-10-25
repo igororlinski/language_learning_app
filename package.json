@@ -53,6 +53,7 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "node tests/run.mjs",
+    "test:server": "npm --prefix server test",
     "db:generate": "drizzle-kit generate"
   },
   "private": true,

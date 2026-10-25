@@ -1,0 +1,20 @@
+# Friends and the weekly ranking (stage C). See src/index.ts for the API.
+#
+#   cd server && npm install
+#   npm test                    # node:sqlite in place of D1, no Cloudflare
+#   npm run db:migrate:local && npm run dev
+#
+# Deploying needs the real database first:
+#   npx wrangler d1 create fiszki   → put its id below
+#   npm run db:migrate:remote && npm run deploy
+
+name = "fiszki-server"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fiszki"
+# Placeholder until `wrangler d1 create`; `wrangler dev --local` does not mind it.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"

@@ -190,6 +190,13 @@
       "when": 1792956779955,
       "tag": "0026_loose_supernaut",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1792960162415,
+      "tag": "0027_boring_wiccan",
+      "breakpoints": true
     }
   ]
 }

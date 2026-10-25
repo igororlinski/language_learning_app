@@ -2378,6 +2378,11 @@ export function gradeCard(
       deck ? toScheduling(deck) : undefined
     );
 
+    const duration =
+      durationMs == null || !Number.isFinite(durationMs)
+        ? null
+        : Math.round(Math.min(Math.max(durationMs, 0), MAX_ANSWER_MS));
+
     tx.update(fsrsState).set(toStateValues(next)).where(eq(fsrsState.cardId, cardId)).run();
 
     tx.insert(reviewLogs)
@@ -2393,10 +2398,7 @@ export function gradeCard(
         scheduledDays: log.scheduled_days,
         learningSteps: log.learning_steps,
         reviewedAt: log.review,
-        durationMs:
-          durationMs == null || !Number.isFinite(durationMs)
-            ? null
-            : Math.round(Math.min(Math.max(durationMs, 0), MAX_ANSWER_MS)),
+        durationMs: duration,
       })
       .run();
 
@@ -2407,10 +2409,14 @@ export function gradeCard(
     );
 
     tx.insert(studyDays)
-      .values({ day: dayKey(log.review), answers: 1, goal })
+      .values({ day: dayKey(log.review), answers: 1, goal, studyMs: duration ?? 0 })
       .onConflictDoUpdate({
         target: studyDays.day,
-        set: { answers: sql`${studyDays.answers} + 1`, goal },
+        set: {
+          answers: sql`${studyDays.answers} + 1`,
+          goal,
+          studyMs: sql`${studyDays.studyMs} + ${duration ?? 0}`,
+        },
       })
       .run();
 
@@ -2446,7 +2452,10 @@ export function rollbackCard(cardId: number) {
     // Taken back from the day the answer was given, which after midnight may
     // no longer be today. The goal stays as it was.
     tx.update(studyDays)
-      .set({ answers: sql`max(${studyDays.answers} - 1, 0)` })
+      .set({
+        answers: sql`max(${studyDays.answers} - 1, 0)`,
+        studyMs: sql`max(${studyDays.studyMs} - ${logRow.durationMs ?? 0}, 0)`,
+      })
       .where(eq(studyDays.day, dayKey(logRow.reviewedAt)))
       .run();
 
