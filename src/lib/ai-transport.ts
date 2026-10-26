@@ -134,7 +134,7 @@ export async function send(
     body,
     timeoutMs = REQUEST_TIMEOUT_MS,
   }: {
-    method?: 'GET' | 'POST';
+    method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
     headers?: Record<string, string>;
     body?: unknown;
     timeoutMs?: number;

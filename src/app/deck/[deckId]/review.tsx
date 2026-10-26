@@ -15,6 +15,7 @@ import { useStreak } from '@/hooks/use-streak';
 import { useTheme } from '@/hooks/use-theme';
 import { badgeLabel } from '@/lib/badges';
 import { formatSchedule, pluralize } from '@/lib/format';
+import { syncStats } from '@/lib/friends-store';
 import {
   countQueueStates,
   GRADE_LABELS,
@@ -92,8 +93,12 @@ export default function ReviewScreen() {
   const { data: badgeRows } = useLiveQuery(badgesQuery());
   const newBadges = badgeRows.filter((row) => row.earnedAt.getTime() >= openedAt);
 
+  // Then the day goes up to friends, badges included; in the background.
   useEffect(() => {
-    if (finished) awardBadges();
+    if (!finished) return;
+
+    awardBadges();
+    void syncStats();
   }, [finished]);
 
   // Recomputed per card so the buttons show the interval each answer would set.
