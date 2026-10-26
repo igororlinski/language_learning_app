@@ -11,10 +11,8 @@ import { studyDayStart } from '@/lib/study-day';
 /** Answers a day, for anyone who has not picked a goal. */
 export const DEFAULT_DAILY_GOAL = 20;
 
-/** The goals on offer. A list rather than a number field: nobody needs 37. */
-export const DAILY_GOALS = [10, 20, 30, 50, 75, 100, 150, 200] as const;
-
-const MAX_DAILY_GOAL = 1000;
+/** The most a goal can be typed as — what the friends server accepts too. */
+export const MAX_DAILY_GOAL = 1000;
 
 /** The stored goal, or the default for anything that is not a sensible one. */
 export function parseDailyGoal(value: string | null | undefined): number {
@@ -30,9 +28,6 @@ function parseGoal(value: string | null | undefined): number | null {
 }
 
 /* ------------------------------------------------------------- light days */
-
-/** What a lighter day can ask for instead. */
-export const LIGHT_GOALS = [5, 10, 15, 20, 30, 50, 75, 100] as const;
 
 /**
  * The goal as it is set: one number for every day, and a smaller one for the
@@ -59,12 +54,8 @@ export function parseLightDays(value: string | null | undefined): number[] {
 /** The stored lighter goal, or null when none was picked. */
 export const parseLightGoal = (value: string | null | undefined): number | null => parseGoal(value);
 
-/** About half the goal, from the list, until a lighter goal is picked. */
-export function defaultLightGoal(goal: number): number {
-  const fitting = LIGHT_GOALS.filter((light) => light <= goal / 2);
-
-  return Math.min(goal, fitting.at(-1) ?? LIGHT_GOALS[0]);
-}
+/** Half the goal, rounded down, until a lighter goal is typed in. */
+export const defaultLightGoal = (goal: number): number => Math.max(1, Math.floor(goal / 2));
 
 /** Whether a day is one of the lighter ones. */
 export const isLightDay = (plan: GoalPlan, day: string): boolean =>

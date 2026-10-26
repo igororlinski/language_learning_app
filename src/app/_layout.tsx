@@ -69,6 +69,7 @@ export default function RootLayout() {
             <Stack.Screen name="stats" options={{ title: 'Statystyki' }} />
             <Stack.Screen name="backup" options={{ title: 'Import i eksport' }} />
             <Stack.Screen name="friends" options={{ title: 'Znajomi' }} />
+            <Stack.Screen name="ranking" options={{ title: 'Ranking' }} />
             <Stack.Screen name="deck/[deckId]/index" options={{ title: 'Talia' }} />
             <Stack.Screen
               name="deck/[deckId]/review"

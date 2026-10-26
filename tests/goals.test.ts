@@ -104,8 +104,8 @@ group('Lzejsze dni');
 check('dni z zapisu, bez powtorzen i smieci', parseLightDays('[6, 0, 6, 7, "x", 2.5]'), [0, 6]);
 check('zly zapis to brak dni', [parseLightDays('nie'), parseLightDays(null), parseLightDays('{}')], [[], [], []]);
 check('lzejszy cel z zapisu albo nic', [parseLightGoal('5'), parseLightGoal(null), parseLightGoal('0')], [5, null, null]);
-check('domyslnie mniej wiecej polowa', [defaultLightGoal(20), defaultLightGoal(50), defaultLightGoal(10), defaultLightGoal(5)], [
-  10, 20, 5, 5,
+check('domyslnie polowa, w dol, co najmniej 1', [defaultLightGoal(20), defaultLightGoal(37), defaultLightGoal(1)], [
+  10, 18, 1,
 ]);
 
 // The 24th of October 2026 is a Saturday, the 21st a Wednesday.

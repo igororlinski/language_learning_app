@@ -1,13 +1,14 @@
 {
-  // The server and its tests in one project. Node runs the tests straight from
-  // the .ts files (type stripping), so imports carry their `.ts` extension and
-  // only erasable syntax is allowed — no enums, no namespaces.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2023"],
-    "types": ["node"],
+    "lib": [
+      "ES2023"
+    ],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
@@ -15,5 +16,9 @@
     "erasableSyntaxOnly": true,
     "skipLibCheck": true
   },
-  "include": ["src", "test"]
+  "include": [
+    "src",
+    "test"
+  ],
+  "extends": "expo/tsconfig.base"
 }

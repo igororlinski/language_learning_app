@@ -130,6 +130,23 @@ export function MenuIcon({ size = 20, color, style }: IconProps) {
   );
 }
 
+/**
+ * A podium — second, first, third — for the ranking. Three views standing on
+ * one line, so it answers to `color` like the rest of these.
+ */
+export function PodiumIcon({ size = 20, color, style }: IconProps) {
+  const gap = Math.max(1, size / 14);
+  const step = { flex: 1, backgroundColor: color, borderTopLeftRadius: gap, borderTopRightRadius: gap };
+
+  return (
+    <View style={[{ width: size, height: size * 0.8, flexDirection: 'row', alignItems: 'flex-end', gap }, style]}>
+      <View style={[step, { height: '62%' }]} />
+      <View style={[step, { height: '100%' }]} />
+      <View style={[step, { height: '42%' }]} />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',

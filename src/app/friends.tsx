@@ -1,16 +1,13 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, Share, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Alert, RefreshControl, ScrollView, Share, StyleSheet, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 
 import { Button } from '@/components/button';
-import { SegmentedControl } from '@/components/segmented-control';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
-import { MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { badgeLabel } from '@/lib/badges';
-import { pluralize } from '@/lib/format';
 import {
   addFriend,
   createAccount,
@@ -23,27 +20,18 @@ import {
   replaceFriendCode,
   type Account,
   type Person,
-  type RankingPeriod,
 } from '@/lib/friends';
 import { saveAccount, syncStats, useAccount } from '@/lib/friends-store';
-import { formatDuration } from '@/lib/stats';
 
 /**
- * "Znajomi": an account on our server, friends added by code, and their
- * ranking by points — a day's goal for every day it was met — this week, this
- * month or all time.
+ * "Znajomi": an account on our server and friends added by code. Their
+ * ranking is its own screen, opened from "Statystyki" (`ranking.tsx`).
  *
  * Nothing the app needs for studying waits on this screen. Without a network
  * it says so and the rest of the app carries on; the numbers go up again with
  * the next upload.
  */
 export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
-
-const PERIODS: { value: RankingPeriod; label: string }[] = [
-  { value: 'week', label: 'Tydzień' },
-  { value: 'month', label: 'Miesiąc' },
-  { value: 'all', label: 'Od początku' },
-];
 
 const failure = (error: unknown) =>
   error instanceof FriendsError ? error.message : error instanceof Error ? error.message : String(error);
@@ -178,11 +166,9 @@ function SignIn({ onCreated }: { onCreated: () => void }) {
 function SignedIn({ account, revealCode }: { account: Account; revealCode: boolean }) {
   const theme = useTheme();
 
-  const [period, setPeriod] = useState<RankingPeriod>('week');
-  const [people, setPeople] = useState<Person[] | null>(null);
+  const [friends, setFriends] = useState<Person[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [expanded, setExpanded] = useState<string | null>(null);
 
   const [friendCode, setFriendCode] = useState('');
   const [adding, setAdding] = useState(false);
@@ -193,23 +179,21 @@ function SignedIn({ account, revealCode }: { account: Account; revealCode: boole
   const [revealed, setRevealed] = useState(revealCode);
   const [busy, setBusy] = useState(false);
 
-  // Our own numbers go up first, so the row marked "ty" is today's.
+  // The ranking is the one list of friends the server gives; the numbers in it
+  // belong to the "Ranking" screen. Ours go up first, as there.
   const load = useCallback(async () => {
     await syncStats();
 
     try {
-      setPeople(await fetchLeaderboard(account, Date.now(), period));
+      const people = await fetchLeaderboard(account, Date.now());
+      setFriends(
+        people.filter((person) => !person.me).sort((a, b) => a.name.localeCompare(b.name, 'pl'))
+      );
       setLoadError(null);
     } catch (error) {
       setLoadError(failure(error));
     }
-  }, [account, period]);
-
-  // A spinner rather than last period's numbers under this period's name.
-  const choosePeriod = (next: RankingPeriod) => {
-    setPeople(null);
-    setPeriod(next);
-  };
+  }, [account]);
 
   useFocusEffect(
     useCallback(() => {
@@ -260,7 +244,6 @@ function SignedIn({ account, revealCode }: { account: Account; revealCode: boole
       () =>
         void act('Nie usunięto', async () => {
           await removeFriend(account, person.id);
-          setExpanded(null);
           await load();
         }),
       true
@@ -287,16 +270,10 @@ function SignedIn({ account, revealCode }: { account: Account; revealCode: boole
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}>
       <View style={card}>
         <ThemedText type="smallBold" themeColor="textSecondary">
-          Ranking
+          Znajomi{friends && friends.length > 0 ? ` · ${friends.length}` : ''}
         </ThemedText>
-        <SegmentedControl<RankingPeriod>
-          value={period}
-          options={PERIODS}
-          onChange={choosePeriod}
-          accessibilityLabel="Okres rankingu"
-        />
 
-        {people == null ? (
+        {friends == null ? (
           loadError ? (
             <>
               <ThemedText type="small" style={{ color: theme.danger }}>
@@ -314,17 +291,15 @@ function SignedIn({ account, revealCode }: { account: Account; revealCode: boole
                 {loadError}
               </ThemedText>
             ) : null}
-            {people.map((person, index) => (
-              <Row
+            {friends.map((person, index) => (
+              <View
                 key={person.id}
-                place={index + 1}
-                person={person}
-                open={expanded === person.id}
-                onToggle={() => setExpanded(expanded === person.id ? null : person.id)}
-                onRemove={() => unfriend(person)}
-              />
+                style={[styles.friend, index > 0 ? styles.friendRule : null, { borderTopColor: theme.border }]}>
+                <ThemedText style={[styles.name, styles.grow]}>{person.name}</ThemedText>
+                <Button title="Usuń" variant="ghost" disabled={busy} onPress={() => unfriend(person)} />
+              </View>
             ))}
-            {people.length <= 1 ? (
+            {friends.length === 0 ? (
               <ThemedText type="small" themeColor="textSecondary">
                 Jeszcze nikogo tu nie ma.
               </ThemedText>
@@ -480,89 +455,6 @@ function SignedIn({ account, revealCode }: { account: Account; revealCode: boole
   );
 }
 
-/* -------------------------------------------------------------------- row */
-
-const daysLabel = (count: number) => `${count} ${pluralize(count, 'dzień', 'dni', 'dni')}`;
-
-const pointsLabel = (count: number) => `${count} ${pluralize(count, 'punkt', 'punkty', 'punktów')}`;
-
-/** One person in the ranking; tapped, it opens their badges (and, for a friend, removal). */
-function Row({
-  place,
-  person,
-  open,
-  onToggle,
-  onRemove,
-}: {
-  place: number;
-  person: Person;
-  open: boolean;
-  onToggle: () => void;
-  onRemove: () => void;
-}) {
-  const theme = useTheme();
-
-  const details = [
-    person.streak > 0 ? `seria ${daysLabel(person.streak)}` : null,
-    person.todayMet ? 'cel dziś ✓' : null,
-    person.goalDays ? `${daysLabel(person.goalDays)} z celem` : null,
-    person.studyMs > 0 ? formatDuration(person.studyMs) : null,
-  ].filter(Boolean);
-
-  const labels = person.badges.map(badgeLabel).filter((label): label is string => label != null);
-
-  return (
-    <View style={[styles.row, { borderTopColor: theme.border }]}>
-      <Pressable
-        onPress={onToggle}
-        accessibilityRole="button"
-        accessibilityLabel={`${place}. ${person.name}, ${pointsLabel(person.points)}`}
-        style={({ pressed }) => [styles.rowMain, { opacity: pressed ? 0.6 : 1 }]}>
-        <ThemedText style={styles.place} themeColor="textSecondary">
-          {place}.
-        </ThemedText>
-        <View style={styles.grow}>
-          <ThemedText style={[styles.personName, person.me ? { color: theme.accent } : null]}>
-            {person.me ? `${person.name} (ty)` : person.name}
-          </ThemedText>
-          {details.length > 0 ? (
-            <ThemedText type="small" themeColor="textSecondary">
-              {details.join(' · ')}
-            </ThemedText>
-          ) : null}
-        </View>
-        <ThemedText style={[styles.score, person.points > 0 ? { color: RatingColors.good } : null]}>
-          {person.points} pkt
-        </ThemedText>
-      </Pressable>
-
-      {open ? (
-        <View style={styles.rowDetails}>
-          {labels.length > 0 ? (
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              Odznaki · {labels.length}
-            </ThemedText>
-          ) : null}
-          {labels.length > 0 ? (
-            <View style={styles.chips}>
-              {labels.map((label) => (
-                <View key={label} style={[styles.chip, { backgroundColor: theme.backgroundSelected }]}>
-                  <ThemedText type="small">{label}</ThemedText>
-                </View>
-              ))}
-            </View>
-          ) : (
-            <ThemedText type="small" themeColor="textSecondary">
-              Bez odznak
-            </ThemedText>
-          )}
-          {person.me ? null : <Button title="Usuń ze znajomych" variant="danger" onPress={onRemove} />}
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
@@ -613,39 +505,13 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     borderRadius: Radius.medium,
   },
-  row: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingTop: Spacing.two,
-    gap: Spacing.two,
-  },
-  rowMain: {
+  friend: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
   },
-  place: {
-    width: 28,
-    fontWeight: '600',
-  },
-  personName: {
-    fontWeight: '600',
-  },
-  score: {
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  rowDetails: {
-    paddingLeft: 28 + Spacing.two,
-    gap: Spacing.two,
-  },
-  chips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.one,
-  },
-  chip: {
-    paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.half,
-    borderRadius: Radius.small,
+  friendRule: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: Spacing.two,
   },
 });

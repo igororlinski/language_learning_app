@@ -1,10 +1,13 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
+import { Stack, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Dropdown } from '@/components/dropdown';
 import { EmptyState } from '@/components/empty-state';
 import { GoalBar } from '@/components/goal-bar';
+import { PodiumIcon } from '@/components/icons';
+import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { CardStateColors, MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
 import {
@@ -24,7 +27,7 @@ import { useStreak } from '@/hooks/use-streak';
 import { useTheme } from '@/hooks/use-theme';
 import { BADGE_GROUPS, badgeId, formatCount, shortCount, type BadgeProgress } from '@/lib/badges';
 import { pluralize } from '@/lib/format';
-import { DAILY_GOALS, dayKey, goalOn, isLightDay, LIGHT_GOALS } from '@/lib/goals';
+import { dayKey, goalOn, isLightDay, MAX_DAILY_GOAL } from '@/lib/goals';
 import {
   cardStates,
   forecast,
@@ -64,13 +67,12 @@ const answersLabel = (count: number) =>
 
 const daysLabel = (count: number) => `${count} ${pluralize(count, 'dzień', 'dni', 'dni')}`;
 
-const GOAL_OPTIONS = DAILY_GOALS.map((goal) => ({ value: String(goal), label: answersLabel(goal) }));
-
 /** The week as it is lived in Poland, Monday first; the numbers are `weekday`'s. */
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 export default function StatsScreen() {
   const theme = useTheme();
+  const router = useRouter();
   const now = useNow();
 
   const [deck, setDeck] = useState(ALL_DECKS);
@@ -87,11 +89,6 @@ export default function StatsScreen() {
   const lightToday = isLightDay(plan, dayKey(now));
   // Any light day of the week tells what the lighter goal comes to now.
   const lightGoal = goalOn({ ...plan, lightDays: WEEK_ORDER }, dayKey(now));
-  // A lighter goal only ever offers less than the everyday one — plus the one
-  // in force, which a goal lowered since can have caught up with.
-  const lightOptions = LIGHT_GOALS.filter((light) => light < plan.goal || light === lightGoal).map(
-    (light) => ({ value: String(light), label: answersLabel(light) })
-  );
 
   const toggleLightDay = (day: number) =>
     setLightDays(
@@ -138,7 +135,21 @@ export default function StatsScreen() {
   return (
     <ScrollView
       style={{ backgroundColor: theme.background }}
-      contentContainerStyle={styles.content}>
+      contentContainerStyle={styles.content}
+      keyboardShouldPersistTaps="handled">
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <Pressable
+              onPress={() => router.push('/ranking')}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Ranking ze znajomymi">
+              <PodiumIcon size={22} color={theme.accent} />
+            </Pressable>
+          ),
+        }}
+      />
       <View style={card}>
         <ThemedText type="smallBold" themeColor="textSecondary">
           Cel na dziś
@@ -152,13 +163,7 @@ export default function StatsScreen() {
           </ThemedText>
         ) : null}
         <GoalBar today={streak.today} height={8} />
-        <Dropdown
-          label="Cel dzienny"
-          value={String(plan.goal)}
-          options={GOAL_OPTIONS}
-          onChange={(value) => setDailyGoal(Number(value))}
-          style={styles.goalPicker}
-        />
+        <GoalInput label="Cel dzienny" value={plan.goal} max={MAX_DAILY_GOAL} onSave={setDailyGoal} />
 
         <ThemedText type="smallBold" themeColor="textSecondary" style={styles.goalPicker}>
           Lżejsze dni
@@ -187,14 +192,9 @@ export default function StatsScreen() {
             );
           })}
         </View>
-        {plan.lightDays.length > 0 && lightOptions.length > 0 ? (
-          <Dropdown
-            label="Cel w lżejsze dni"
-            value={String(lightGoal)}
-            options={lightOptions}
-            onChange={(value) => setLightGoal(Number(value))}
-            style={styles.goalPicker}
-          />
+        {/* Never more than the everyday goal: a lighter day asks for less. */}
+        {plan.lightDays.length > 0 ? (
+          <GoalInput label="Cel w lżejsze dni" value={lightGoal} max={plan.goal} onSave={setLightGoal} />
         ) : null}
       </View>
 
@@ -440,6 +440,47 @@ function Badges({ progress, earned }: { progress: BadgeProgress; earned: Readonl
           </View>
         );
       })}
+    </View>
+  );
+}
+
+/**
+ * A goal typed in. Saved when the typing ends — on "done" or on leaving the
+ * field — rather than on every digit: a goal of 1 on the way to 15 would
+ * otherwise mark today met for a moment. Anything outside 1…max is put back.
+ */
+function GoalInput({
+  label,
+  value,
+  max,
+  onSave,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  onSave: (goal: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const typed = Number(draft);
+  const valid = draft != null && /^\d+$/.test(draft) && typed >= 1 && typed <= max;
+
+  const commit = () => {
+    if (valid && typed !== value) onSave(typed);
+    setDraft(null);
+  };
+
+  return (
+    <View style={styles.goalPicker}>
+      <TextField
+        label={label}
+        value={draft ?? String(value)}
+        onChangeText={setDraft}
+        onEndEditing={commit}
+        keyboardType="number-pad"
+        returnKeyType="done"
+        maxLength={String(max).length}
+        error={draft != null && !valid ? `Od 1 do ${max}` : undefined}
+      />
     </View>
   );
 }
