@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
 import { useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Dropdown } from '@/components/dropdown';
 import { EmptyState } from '@/components/empty-state';
@@ -14,6 +14,8 @@ import {
   deckNamesQuery,
   mnemonicCardsQuery,
   setDailyGoal,
+  setLightDays,
+  setLightGoal,
   statsCardsQuery,
   statsLogsQuery,
 } from '@/db/queries';
@@ -22,7 +24,7 @@ import { useStreak } from '@/hooks/use-streak';
 import { useTheme } from '@/hooks/use-theme';
 import { BADGE_GROUPS, badgeId, formatCount, shortCount, type BadgeProgress } from '@/lib/badges';
 import { pluralize } from '@/lib/format';
-import { DAILY_GOALS, weekday } from '@/lib/goals';
+import { DAILY_GOALS, dayKey, goalOn, isLightDay, LIGHT_GOALS } from '@/lib/goals';
 import {
   cardStates,
   forecast,
@@ -64,6 +66,9 @@ const daysLabel = (count: number) => `${count} ${pluralize(count, 'dzień', 'dni
 
 const GOAL_OPTIONS = DAILY_GOALS.map((goal) => ({ value: String(goal), label: answersLabel(goal) }));
 
+/** The week as it is lived in Poland, Monday first; the numbers are `weekday`'s. */
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
 export default function StatsScreen() {
   const theme = useTheme();
   const now = useNow();
@@ -78,7 +83,22 @@ export default function StatsScreen() {
   const { data: cardRows } = useLiveQuery(statsCardsQuery(deckId), [deckId]);
   const { data: mnemonicRows } = useLiveQuery(mnemonicCardsQuery(deckId), [deckId]);
 
-  const { days: studyDays, goal, streak } = useStreak(now);
+  const { days: studyDays, plan, streak } = useStreak(now);
+  const lightToday = isLightDay(plan, dayKey(now));
+  // Any light day of the week tells what the lighter goal comes to now.
+  const lightGoal = goalOn({ ...plan, lightDays: WEEK_ORDER }, dayKey(now));
+  // A lighter goal only ever offers less than the everyday one — plus the one
+  // in force, which a goal lowered since can have caught up with.
+  const lightOptions = LIGHT_GOALS.filter((light) => light < plan.goal || light === lightGoal).map(
+    (light) => ({ value: String(light), label: answersLabel(light) })
+  );
+
+  const toggleLightDay = (day: number) =>
+    setLightDays(
+      plan.lightDays.includes(day)
+        ? plan.lightDays.filter((light) => light !== day)
+        : [...plan.lightDays, day]
+    );
   const { data: badgeRows } = useLiveQuery(badgesQuery());
   const earned = new Set(badgeRows.map((row) => row.id));
 
@@ -126,14 +146,56 @@ export default function StatsScreen() {
         <ThemedText style={[styles.big, streak.today.met ? { color: RatingColors.good } : null]}>
           {streak.today.answers} / {streak.today.goal}
         </ThemedText>
+        {lightToday ? (
+          <ThemedText type="small" themeColor="textSecondary">
+            lżejszy dzień
+          </ThemedText>
+        ) : null}
         <GoalBar today={streak.today} height={8} />
         <Dropdown
           label="Cel dzienny"
-          value={String(goal)}
+          value={String(plan.goal)}
           options={GOAL_OPTIONS}
           onChange={(value) => setDailyGoal(Number(value))}
           style={styles.goalPicker}
         />
+
+        <ThemedText type="smallBold" themeColor="textSecondary" style={styles.goalPicker}>
+          Lżejsze dni
+        </ThemedText>
+        <View style={styles.chips}>
+          {WEEK_ORDER.map((day) => {
+            const on = plan.lightDays.includes(day);
+
+            return (
+              <Pressable
+                key={day}
+                onPress={() => toggleLightDay(day)}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: on }}
+                accessibilityLabel={`Lżejszy dzień: ${WEEKDAYS[day]}`}
+                style={[
+                  styles.chip,
+                  on
+                    ? { backgroundColor: theme.accent, borderColor: theme.accent }
+                    : { borderColor: theme.border },
+                ]}>
+                <ThemedText type="small" style={{ color: on ? theme.onAccent : theme.text }}>
+                  {WEEKDAYS[day]}
+                </ThemedText>
+              </Pressable>
+            );
+          })}
+        </View>
+        {plan.lightDays.length > 0 && lightOptions.length > 0 ? (
+          <Dropdown
+            label="Cel w lżejsze dni"
+            value={String(lightGoal)}
+            options={lightOptions}
+            onChange={(value) => setLightGoal(Number(value))}
+            style={styles.goalPicker}
+          />
+        ) : null}
       </View>
 
       <View style={card}>
@@ -151,14 +213,6 @@ export default function StatsScreen() {
             <ThemedText style={styles.medium}>{daysLabel(streak.longest)}</ThemedText>
             <ThemedText type="small" themeColor="textSecondary">
               najdłuższa
-            </ThemedText>
-          </View>
-          <View style={styles.half}>
-            <ThemedText style={styles.medium}>{streak.freezeUsedOn ? 'zużyte' : 'jest'}</ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">
-              {streak.freezeUsedOn
-                ? `zamrożenie · ${WEEKDAYS[weekday(streak.freezeUsedOn)]}`
-                : 'zamrożenie'}
             </ThemedText>
           </View>
         </View>

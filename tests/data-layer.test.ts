@@ -69,6 +69,8 @@ import {
   backupFolderFrom,
   lastBackupFrom,
   setLastBackup,
+  phoneBackupState,
+  putPhoneBackupState,
   exportDeckPackage,
   importCsvCards,
   importDeckPackage,
@@ -77,6 +79,10 @@ import {
   badgesQuery,
   getDailyGoal,
   setDailyGoal,
+  appSettingsQuery,
+  setLightDays,
+  setLightGoal,
+  goalPlanFrom,
   studyDaysQuery,
   type MediaCopier,
 } from '@/db/queries';
@@ -1976,7 +1982,23 @@ check(
   ['2026-10-24T10:00:00.000Z', FOLDER]
 );
 
+// A restore brings the backup's own settings — written before its date was —
+// and the phone's state goes back over them.
+const phone = phoneBackupState();
+setLastBackup(new Date('2026-10-20T10:00:00Z'), 'content://inny');
+putPhoneBackupState(phone);
+check(
+  'po przywroceniu zostaje data i folder telefonu',
+  [lastBackupFrom(settingsNow())?.toISOString(), backupFolderFrom(settingsNow())],
+  ['2026-10-24T10:00:00.000Z', FOLDER]
+);
+
 db.delete(appSettings).where(inArray(appSettings.key, ['backup.last-at', 'backup.folder'])).run();
+putPhoneBackupState(phoneBackupState());
+check('telefon bez kopii zostaje bez kopii', [lastBackupFrom(settingsNow()), backupFolderFrom(settingsNow())], [null, null]);
+setLastBackup(new Date('2026-10-20T10:00:00Z'), 'content://inny');
+putPhoneBackupState({ 'backup.last-at': null, 'backup.folder': null });
+check('a cudza data z kopii znika', [lastBackupFrom(settingsNow()), backupFolderFrom(settingsNow())], [null, null]);
 
 group('Licznik zuzycia AI na telefonie');
 
@@ -2304,6 +2326,31 @@ check('cofniecie odejmuje z dnia, w ktorym padla odpowiedz', [dayRow(goalDay)?.a
 deleteDeck(goalDeck.id);
 check('usuniecie talii nie zabiera dni nauki', [dayRow(goalDay)?.answers, dayRow('2027-03-12')?.answers], [1, 1]);
 check('studyDaysQuery widzi wszystkie dni', studyDaysQuery().all().some((row) => row.day === '2027-03-12'), true);
+
+group('Lzejsze dni');
+
+// The 13th of March 2027 is a Saturday, the 15th a Monday.
+const lightAt = new Date(2027, 2, 13, 12);
+setDailyGoal(20, lightAt.getTime());
+setLightDays([6, 0], lightAt.getTime());
+check('lzejszy dzien bez wybranego celu: polowa', getDailyGoal(lightAt.getTime()), 10);
+check('zwykly dzien: zwykly cel', getDailyGoal(new Date(2027, 2, 15, 12).getTime()), 20);
+
+const lightDeck = createDeck({ name: 'Lzej', newPerDay: 10, reviewsPerDay: 10 });
+const lightCard = createCard(lightDeck.id, 'l', 'L', lightAt);
+gradeCard(lightCard.id, Rating.Good, lightAt);
+check('odpowiedz w lzejszy dzien zapisuje lzejszy cel', dayRow('2027-03-13')?.goal, 10);
+
+setLightGoal(5, lightAt.getTime());
+check('zmiana lzejszego celu przestawia dzisiejszy wiersz', dayRow('2027-03-13')?.goal, 5);
+setLightDays([], lightAt.getTime());
+check('bez lzejszych dni dzis wraca do zwyklego celu', dayRow('2027-03-13')?.goal, 20);
+check('ustawienia wracaja z bazy', goalPlanFrom(appSettingsQuery().all()), {
+  goal: 20,
+  lightDays: [],
+  lightGoal: 5,
+});
+deleteDeck(lightDeck.id);
 
 setDailyGoal(DEFAULT_DAILY_GOAL);
 

@@ -101,7 +101,7 @@ export function syncStats(now = Date.now()): Promise<void> {
 
       const stats = statsUpload(
         studyDaysQuery().all(),
-        getDailyGoal(),
+        getDailyGoal(now),
         badgesQuery()
           .all()
           .map((row) => row.id),

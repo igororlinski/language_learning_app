@@ -1,7 +1,7 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
 
-import { appSettingsQuery, dailyGoalFrom, studyDaysQuery } from '@/db/queries';
-import { streak } from '@/lib/goals';
+import { appSettingsQuery, goalPlanFrom, studyDaysQuery } from '@/db/queries';
+import { dayKey, goalOn, streak } from '@/lib/goals';
 
 /**
  * Today's goal and the streak, live: an answer, an undo or a new goal shows
@@ -11,7 +11,9 @@ import { streak } from '@/lib/goals';
 export function useStreak(now: number) {
   const { data: days } = useLiveQuery(studyDaysQuery());
   const { data: settings } = useLiveQuery(appSettingsQuery());
-  const goal = dailyGoalFrom(settings);
+  const plan = goalPlanFrom(settings);
+  // What today is held to: the lighter goal on a lighter day.
+  const goal = goalOn(plan, dayKey(now));
 
-  return { days, goal, streak: streak(days, goal, now) };
+  return { days, plan, goal, streak: streak(days, goal, now) };
 }

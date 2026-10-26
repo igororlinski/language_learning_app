@@ -277,6 +277,33 @@ check('z zapisem: dwie pozycje', hasIpa.actions.length, 2);
 hasIpa.actions[1]?.onPress();
 check('druga go usuwa', hasIpa.cleared(), true);
 
+// A template's transcription still to come can be turned off for one card —
+// before there are any words, too.
+let skipped = false;
+const pendingIpa = phoneticMenu({
+  scope: 'answer',
+  languages: { front: ['pl'], back: 'pt-PT' },
+  speech: null,
+  hasText: false,
+  current: null,
+  make: () => {},
+  clear: () => {},
+  show: () => {},
+  pending: 'pt-PT',
+  skip: () => {
+    skipped = true;
+  },
+});
+
+check('zapis z szablonu: druga pozycja go wylacza', pendingIpa.map((action) => action.label), [
+  'Zapis fonetyczny',
+  'Nie dopisuj zapisu fonetycznego',
+]);
+check('i dziala bez tekstu', pendingIpa[1]?.disabled ?? false, false);
+pendingIpa[1]?.onPress();
+check('wylacza tylko te karte', skipped, true);
+check('bez zapisu z szablonu nie ma czego wylaczac', soleIpa.actions.length, 1);
+
 group('Trybik talii: domyslny zapis fonetyczny');
 
 // The same choice of one language as reading aloud, under its own labels —

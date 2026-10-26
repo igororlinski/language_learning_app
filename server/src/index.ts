@@ -1,5 +1,5 @@
 /**
- * The app's server: anonymous accounts, friends and the weekly ranking.
+ * The app's server: anonymous accounts, friends and their ranking.
  *
  * It holds **numbers only** — per study day: answers, the goal, study time —
  * plus a name, a streak and badge ids. No deck names, no card content. The
@@ -14,7 +14,7 @@
  *   PUT    /v1/me/stats          Stats           → 204
  *   POST   /v1/friends           { friendCode }  → 201 (200 if already) { friend: { id, name } }
  *   DELETE /v1/friends/:id                       → 204
- *   GET    /v1/leaderboard?week=&today=          → { week, people: Person[] }
+ *   GET    /v1/leaderboard?period=&today=        → { period, from, people: Person[] }
  *
  * Everything but `POST /v1/accounts` takes `Authorization: Bearer <recovery
  * code>`. Errors are `{ error: '<code>' }` with a fitting status; the app turns
@@ -31,18 +31,27 @@ import {
 } from './codes.ts';
 import type { D1Database, Env } from './db.ts';
 import { MAX_FRIENDS, SIGNUPS_PER_IP, WRONG_CODES_PER_DAY } from './limits.ts';
-import { cleanName, isDayKey, KEEP_DAYS, parseStats, shiftDay, utcDay } from './validate.ts';
+import {
+  cleanName,
+  isDayKey,
+  KEEP_DAYS,
+  monthStart,
+  parseStats,
+  shiftDay,
+  utcDay,
+  weekStart,
+} from './validate.ts';
 
 /** Bodies are a name or two weeks of numbers; anything bigger is not ours. */
 const MAX_BODY_BYTES = 16_384;
 
 /**
  * A streak is shown only while it can still be alive: the phone uploads after
- * every session and on every start, so one last sent more than two days before
- * the viewer's today belongs to someone who has stopped — two missed days in a
- * row are past what one freeze a week can cover, save across a week's turn.
+ * every session and on every start, so one last sent before yesterday belongs
+ * to someone who has stopped — a whole day without the goal ends a streak, and
+ * yesterday's can still be carried on today.
  */
-const STREAK_FRESH_DAYS = 2;
+const STREAK_FRESH_DAYS = 1;
 
 type User = { id: string; name: string; friendCode: string };
 
@@ -285,8 +294,21 @@ async function saveStats(db: D1Database, user: User, body: unknown, now: number)
 
   await db.batch([
     db
-      .prepare('UPDATE users SET goal = ?, streak = ?, streak_day = ?, badges = ?, seen_at = ? WHERE id = ?')
-      .bind(stats.goal, stats.streak, stats.today, JSON.stringify(stats.badges), now, user.id),
+      .prepare(
+        `UPDATE users SET goal = ?, streak = ?, streak_day = ?, badges = ?, seen_at = ?,
+           points = coalesce(?, points), study_ms = coalesce(?, study_ms)
+         WHERE id = ?`
+      )
+      .bind(
+        stats.goal,
+        stats.streak,
+        stats.today,
+        JSON.stringify(stats.badges),
+        now,
+        stats.points,
+        stats.studyMs,
+        user.id
+      ),
     ...stats.days.map((day) =>
       db
         .prepare(
@@ -357,12 +379,21 @@ async function addFriend(db: D1Database, user: User, body: unknown, now: number)
 
 /* ------------------------------------------------------------ leaderboard */
 
+export type Period = 'week' | 'month' | 'all';
+
+const PERIODS: readonly Period[] = ['week', 'month', 'all'];
+
 export type Person = {
   id: string;
   name: string;
   me: boolean;
-  /** Days of the week with the goal met — what the ranking is by. */
-  goalDays: number;
+  /**
+   * What the ranking is by: a day's goal, for every day of the period the
+   * goal was met — so a bigger goal is worth more, and only a met one counts.
+   */
+  points: number;
+  /** Days of the period with the goal met; null for all time. */
+  goalDays: number | null;
   /** The goal set now; null before the first upload. */
   goal: number | null;
   todayMet: boolean;
@@ -372,37 +403,54 @@ export type Person = {
 };
 
 /**
- * The viewer and their friends over one week, best first: days with the goal
- * met, then the current streak, then by name.
+ * The viewer and their friends over one period, best first: points, then the
+ * current streak, then by name.
  *
- * `week` (its Monday) and `today` are the **viewer's** study days. Everyone's
- * days are their own phone's local dates, so with friends in one country they
- * line up; across time zones a day is off by a few hours, and that is fine for
- * a game between friends.
+ * `period` is this week (from Monday), this month or all time; `today` is the
+ * **viewer's** study day, and the period runs up to it. Everyone's days are
+ * their own phone's local dates, so with friends in one country they line up;
+ * across time zones a day is off by a few hours, and that is fine for a game
+ * between friends.
+ *
+ * Week and month are counted here, from the days; all time is what each phone
+ * last sent, worked out from its whole history — the server keeps a month.
  */
 async function leaderboard(db: D1Database, user: User, url: URL): Promise<Response> {
-  const week = url.searchParams.get('week');
+  const asked = url.searchParams.get('period') ?? 'week';
   const today = url.searchParams.get('today');
 
-  if (!isDayKey(week) || !isDayKey(today)) throw new HttpError(400, 'bad-day');
+  if (!isDayKey(today)) throw new HttpError(400, 'bad-day');
+  if (!PERIODS.includes(asked as Period)) throw new HttpError(400, 'bad-period');
 
-  const weekEnd = shiftDay(week, 6);
+  const period = asked as Period;
+  const from = period === 'week' ? weekStart(today) : period === 'month' ? monthStart(today) : null;
   const circle = 'SELECT ? UNION SELECT friend_id FROM friends WHERE user_id = ?';
 
   const [people, days] = await Promise.all([
     db
       .prepare(
-        `SELECT id, name, goal, streak, streak_day AS streakDay, badges FROM users
+        `SELECT id, name, goal, streak, streak_day AS streakDay, badges, points,
+           study_ms AS studyMs FROM users
          WHERE id IN (${circle})`
       )
       .bind(user.id, user.id)
-      .all<{ id: string; name: string; goal: number | null; streak: number; streakDay: string | null; badges: string }>(),
+      .all<{
+        id: string;
+        name: string;
+        goal: number | null;
+        streak: number;
+        streakDay: string | null;
+        badges: string;
+        points: number;
+        studyMs: number;
+      }>(),
     db
       .prepare(
         `SELECT user_id AS userId, day, answers, goal, study_ms AS studyMs FROM days
          WHERE user_id IN (${circle}) AND day >= ? AND day <= ?`
       )
-      .bind(user.id, user.id, week, weekEnd)
+      // All time still reads today, for "cel dziś ✓".
+      .bind(user.id, user.id, from ?? today, today)
       .all<{ userId: string; day: string; answers: number; goal: number; studyMs: number }>(),
   ]);
 
@@ -411,23 +459,25 @@ async function leaderboard(db: D1Database, user: User, url: URL): Promise<Respon
 
   const ranked: Person[] = people.results.map((person) => {
     const own = days.results.filter((row) => row.userId === person.id);
+    const metDays = own.filter(met);
 
     return {
       id: person.id,
       name: person.name,
       me: person.id === user.id,
-      goalDays: own.filter(met).length,
+      points: from ? metDays.reduce((sum, row) => sum + row.goal, 0) : person.points,
+      goalDays: from ? metDays.length : null,
       goal: person.goal,
       todayMet: own.some((row) => row.day === today && met(row)),
       streak: person.streakDay != null && person.streakDay >= freshSince ? person.streak : 0,
-      studyMs: own.reduce((sum, row) => sum + row.studyMs, 0),
+      studyMs: from ? own.reduce((sum, row) => sum + row.studyMs, 0) : person.studyMs,
       badges: parseBadges(person.badges),
     };
   });
 
-  ranked.sort((a, b) => b.goalDays - a.goalDays || b.streak - a.streak || a.name.localeCompare(b.name, 'pl'));
+  ranked.sort((a, b) => b.points - a.points || b.streak - a.streak || a.name.localeCompare(b.name, 'pl'));
 
-  return json({ week, people: ranked });
+  return json({ period, from, people: ranked });
 }
 
 function parseBadges(value: string): string[] {

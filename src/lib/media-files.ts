@@ -90,7 +90,7 @@ export async function saveGeneratedImage(kind: MediaKind, base64: string): Promi
   const file = new File(directory(kind), fileName);
 
   file.create({ overwrite: true, intermediates: true });
-  file.write(base64, { encoding: 'base64' });
+  await file.write(base64, { encoding: 'base64' });
 
   if (!withinSizeLimit(kind, file.size)) {
     const size = file.size;

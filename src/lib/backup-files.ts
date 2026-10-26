@@ -6,7 +6,7 @@ import { migrate } from 'drizzle-orm/expo-sqlite/migrator';
 import migrations from '@drizzle/migrations';
 
 import { db, sqliteDb } from '@/db/client';
-import { backupCounts, setLastBackup } from '@/db/queries';
+import { backupCounts, phoneBackupState, putPhoneBackupState, setLastBackup } from '@/db/queries';
 import {
   backupFileName,
   backupManifest,
@@ -82,7 +82,7 @@ export function* fileChunks(file: File): Generator<Uint8Array> {
 
   try {
     for (;;) {
-      const chunk = handle.readBytes(CHUNK);
+      const chunk = handle.readBytesSync(CHUNK);
       if (chunk.length === 0) return;
       yield chunk;
       if (chunk.length < CHUNK) return;
@@ -122,7 +122,7 @@ async function writeBackupInto(handle: FileHandle): Promise<BackupManifest> {
       { name: DATABASE_ENTRY, compress: true, chunks: () => [database] },
       ...media,
     ],
-    (chunk) => handle.writeBytes(chunk)
+    (chunk) => handle.writeBytesSync(chunk)
   );
 
   return manifest;
@@ -271,7 +271,7 @@ function stagedFile(directory: string, fileName: string): ArchiveSink {
 
   const handle = file.open(FileMode.WriteOnly);
 
-  return { write: (chunk) => handle.writeBytes(chunk), close: () => handle.close() };
+  return { write: (chunk) => handle.writeBytesSync(chunk), close: () => handle.close() };
 }
 
 /** The newest migration a database has had, or null when it is not one of ours. */
@@ -366,12 +366,14 @@ export async function restoreBackup(file: File): Promise<BackupManifest> {
   // "Cofnij przywracanie", and the database in memory for a failure below.
   await writeBackup(safetyFile());
   const before = sqliteDb.serializeSync();
+  const phone = phoneBackupState();
 
   try {
     backupDatabaseSync({ sourceDatabase: restored, destDatabase: sqliteDb });
     restored.closeSync();
     sqliteDb.execSync('PRAGMA foreign_keys = ON;');
     await migrate(db, migrations);
+    putPhoneBackupState(phone);
     swapMedia();
   } catch (error) {
     const previous = deserializeDatabaseSync(before);

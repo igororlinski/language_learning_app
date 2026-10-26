@@ -76,6 +76,10 @@ check('czas dnia nie przekracza doby', upload.days[2].studyMs, 86_400_000);
 check('seria liczona na telefonie: 23, 24 i dziś', upload.streak, 3);
 check('odznaki bez powtórzeń i bez śmieci', upload.badges, ['streak-3', 'goalDays-1']);
 check('cel spoza zakresu przycięty', statsUpload([], 5000, [], NOW).goal, 1000);
+// 11th, 12th, 23rd and 24th met their 20 (the 11th too: all time is every day);
+// today's 12 meets the goal of 10 set now.
+check('punkty od początku: cel każdego dnia z celem, ze wszystkich dni', upload.points, 4 * 20 + 10);
+check('czas od początku: ze wszystkich dni, każdy przycięty do doby', upload.studyMs, 1000 + 86_400_000 + 60_000);
 
 const put = await withStub({ status: 204, body: null }, () => uploadStats(ACCOUNT, upload));
 
@@ -153,22 +157,38 @@ const board = await withStub(
     body: {
       week: '2026-10-19',
       people: [
-        { id: 'c'.repeat(32), name: 'Ewa', me: false, goalDays: 5, todayMet: true, streak: 9, studyMs: 1, badges: ['streak-7', 3] },
+        {
+          id: 'c'.repeat(32),
+          name: 'Ewa',
+          me: false,
+          points: 120,
+          goalDays: 5,
+          todayMet: true,
+          streak: 9,
+          studyMs: 1,
+          badges: ['streak-7', 3],
+        },
         { id: '', name: 'bez id' },
-        { id: 'a'.repeat(32), name: 'Ola', me: true, goalDays: 'dużo' },
+        { id: 'a'.repeat(32), name: 'Ola', me: true, points: 'dużo', goalDays: 'dużo' },
+        { id: 'b'.repeat(32), name: 'Ala', goalDays: null },
       ],
     },
   },
   outcomeOf(() => fetchLeaderboard(ACCOUNT, NOW))
 );
 
-check('ranking: tydzień od poniedziałku i dzisiejszy dzień', board.sent?.url, `${SERVER_URL}/v1/leaderboard?week=2026-10-19&today=2026-10-25`);
+check('ranking: tydzień i dzisiejszy dzień', board.sent?.url, `${SERVER_URL}/v1/leaderboard?period=week&today=2026-10-25`);
 
 const people = JSON.parse(board.outcome) as ReturnType<typeof parseLeaderboard>;
 
-check('ranking: wiersz bez id wypada', people.map((person) => person.name), ['Ewa', 'Ola']);
+check('ranking: wiersz bez id wypada', people.map((person) => person.name), ['Ewa', 'Ola', 'Ala']);
 check('ranking: odznaki to same napisy', people[0].badges, ['streak-7']);
-check('ranking: liczba, która nie jest liczbą, to zero', people[1].goalDays, 0);
+check('ranking: punkty', people[0].points, 120);
+check('ranking: liczba, która nie jest liczbą, to zero', [people[1].points, people[1].goalDays], [0, 0]);
+check('ranking: od początku nie ma dni z celem', people[2].goalDays, null);
+
+const monthly = await withStub({ status: 200, body: { people: [] } }, () => fetchLeaderboard(ACCOUNT, NOW, 'month'));
+check('ranking: okres w adresie', monthly.sent?.url, `${SERVER_URL}/v1/leaderboard?period=month&today=2026-10-25`);
 check('ranking: „ja” tylko przy true', [people[0].me, people[1].me], [false, true]);
 
 const broken = await withStub({ status: 200, body: { week: '2026-10-19' } }, outcomeOf(() => fetchLeaderboard(ACCOUNT, NOW)));

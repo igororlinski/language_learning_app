@@ -39,7 +39,14 @@ import {
   type PackageTemplate,
 } from '@/lib/deck-package';
 import type { CsvCard } from '@/lib/csv-import';
-import { dayKey, parseDailyGoal } from '@/lib/goals';
+import {
+  dayKey,
+  goalOn,
+  parseDailyGoal,
+  parseLightDays,
+  parseLightGoal,
+  type GoalPlan,
+} from '@/lib/goals';
 import { dayProgress, newlyEarned, type BadgeProgress } from '@/lib/badges';
 import { MATURE_DAYS } from '@/lib/stats';
 
@@ -1262,31 +1269,67 @@ export function mnemonicCardsQuery(deckId: number | null) {
 /* --------------------------------------------------- daily goal and badges */
 
 const DAILY_GOAL_KEY = 'goal.answers';
+const LIGHT_DAYS_KEY = 'goal.light-days';
+const LIGHT_GOAL_KEY = 'goal.light-answers';
+const GOAL_KEYS = [DAILY_GOAL_KEY, LIGHT_DAYS_KEY, LIGHT_GOAL_KEY];
 
-/** The daily goal, out of the settings rows (`appSettingsQuery`). */
-export function dailyGoalFrom(rows: readonly { key: string; value: string }[]): number {
-  return parseDailyGoal(rows.find((row) => row.key === DAILY_GOAL_KEY)?.value);
+type SettingRow = { key: string; value: string };
+
+/** The goal as set — the everyday one and the lighter days — out of the settings rows. */
+export function goalPlanFrom(rows: readonly SettingRow[]): GoalPlan {
+  const value = (key: string) => rows.find((row) => row.key === key)?.value;
+
+  return {
+    goal: parseDailyGoal(value(DAILY_GOAL_KEY)),
+    lightDays: parseLightDays(value(LIGHT_DAYS_KEY)),
+    lightGoal: parseLightGoal(value(LIGHT_GOAL_KEY)),
+  };
 }
 
-export function getDailyGoal(): number {
-  return dailyGoalFrom(appSettingsQuery().all());
+/** The goal today is held to, out of the settings rows (`appSettingsQuery`). */
+export function dailyGoalFrom(rows: readonly SettingRow[], now = Date.now()): number {
+  return goalOn(goalPlanFrom(rows), dayKey(now));
+}
+
+export function getDailyGoal(now = Date.now()): number {
+  return dailyGoalFrom(appSettingsQuery().all(), now);
 }
 
 /**
- * Sets the daily goal from today on. Today's row, if there is one, takes the
- * new goal at once — today is measured by what is set now — and every earlier
- * day keeps the goal it had.
+ * Stores one of the goal settings, from today on. Today's row, if there is
+ * one, takes the goal today is now held to at once — today is measured by
+ * what is set now — and every earlier day keeps the goal it had.
  */
-export function setDailyGoal(goal: number, now = Date.now()): void {
-  const value = parseDailyGoal(String(goal));
-
+function setGoalSetting(key: string, value: string, now: number): void {
   db.transaction((tx) => {
     tx.insert(appSettings)
-      .values({ key: DAILY_GOAL_KEY, value: String(value) })
-      .onConflictDoUpdate({ target: appSettings.key, set: { value: String(value) } })
+      .values({ key, value })
+      .onConflictDoUpdate({ target: appSettings.key, set: { value } })
       .run();
-    tx.update(studyDays).set({ goal: value }).where(eq(studyDays.day, dayKey(now))).run();
+
+    const today = dayKey(now);
+    const goal = goalOn(
+      goalPlanFrom(tx.select().from(appSettings).where(inArray(appSettings.key, GOAL_KEYS)).all()),
+      today
+    );
+
+    tx.update(studyDays).set({ goal }).where(eq(studyDays.day, today)).run();
   });
+}
+
+export function setDailyGoal(goal: number, now = Date.now()): void {
+  setGoalSetting(DAILY_GOAL_KEY, String(parseDailyGoal(String(goal))), now);
+}
+
+/** The weekdays held to the lighter goal (0 for Sunday … 6 for Saturday). */
+export function setLightDays(days: readonly number[], now = Date.now()): void {
+  setGoalSetting(LIGHT_DAYS_KEY, JSON.stringify(parseLightDays(JSON.stringify(days))), now);
+}
+
+export function setLightGoal(goal: number, now = Date.now()): void {
+  const value = parseLightGoal(String(goal));
+
+  if (value != null) setGoalSetting(LIGHT_GOAL_KEY, String(value), now);
 }
 
 /** Every study day with an answer, for the streak and the goal (`src/lib/goals.ts`). */
@@ -1308,7 +1351,7 @@ export function badgeProgress(now = Date.now()): BadgeProgress {
     .get();
 
   return {
-    ...dayProgress(studyDaysQuery().all(), getDailyGoal(), now),
+    ...dayProgress(studyDaysQuery().all(), getDailyGoal(now), now),
     mature: mature?.count ?? 0,
     mnemonics: mnemonicCardsQuery(null).all().length,
   };
@@ -1359,6 +1402,36 @@ export function lastBackupFrom(rows: readonly { key: string; value: string }[]):
 /** The folder the last backup was saved into — where the picker opens next time. */
 export function backupFolderFrom(rows: readonly { key: string; value: string }[]): string | null {
   return rows.find((row) => row.key === BACKUP_FOLDER_KEY)?.value || null;
+}
+
+/**
+ * „Ostatnia kopia" and the folder it went to are facts about this phone, not
+ * part of the data: a backup is written before its own date is recorded, so it
+ * carries the date of the one before it. A restore keeps the phone's.
+ */
+export type PhoneBackupState = Record<typeof LAST_BACKUP_KEY | typeof BACKUP_FOLDER_KEY, string | null>;
+
+export function phoneBackupState(): PhoneBackupState {
+  const rows = appSettingsQuery().all();
+  const value = (key: string) => rows.find((row) => row.key === key)?.value ?? null;
+
+  return { [LAST_BACKUP_KEY]: value(LAST_BACKUP_KEY), [BACKUP_FOLDER_KEY]: value(BACKUP_FOLDER_KEY) };
+}
+
+/** Puts the phone's own backup state back over whatever a restore brought. */
+export function putPhoneBackupState(state: PhoneBackupState): void {
+  db.transaction((tx) => {
+    for (const [key, value] of Object.entries(state)) {
+      if (value == null) {
+        tx.delete(appSettings).where(eq(appSettings.key, key)).run();
+      } else {
+        tx.insert(appSettings)
+          .values({ key, value })
+          .onConflictDoUpdate({ target: appSettings.key, set: { value } })
+          .run();
+      }
+    }
+  });
 }
 
 export function setLastBackup(at: Date, folder?: string): void {
@@ -2405,7 +2478,8 @@ export function gradeCard(
     // The day's count, held to the goal set now — so a goal changed later in
     // the day is what today is measured by, and earlier days keep theirs.
     const goal = dailyGoalFrom(
-      tx.select().from(appSettings).where(eq(appSettings.key, DAILY_GOAL_KEY)).all()
+      tx.select().from(appSettings).where(inArray(appSettings.key, GOAL_KEYS)).all(),
+      log.review.getTime()
     );
 
     tx.insert(studyDays)

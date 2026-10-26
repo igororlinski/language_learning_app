@@ -4,6 +4,7 @@ import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, Share,
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 
 import { Button } from '@/components/button';
+import { SegmentedControl } from '@/components/segmented-control';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
@@ -22,19 +23,27 @@ import {
   replaceFriendCode,
   type Account,
   type Person,
+  type RankingPeriod,
 } from '@/lib/friends';
 import { saveAccount, syncStats, useAccount } from '@/lib/friends-store';
 import { formatDuration } from '@/lib/stats';
 
 /**
- * "Znajomi": an account on our server, friends added by code, and this week's
- * ranking by days with the goal met.
+ * "Znajomi": an account on our server, friends added by code, and their
+ * ranking by points — a day's goal for every day it was met — this week, this
+ * month or all time.
  *
  * Nothing the app needs for studying waits on this screen. Without a network
  * it says so and the rest of the app carries on; the numbers go up again with
  * the next upload.
  */
 export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
+
+const PERIODS: { value: RankingPeriod; label: string }[] = [
+  { value: 'week', label: 'Tydzień' },
+  { value: 'month', label: 'Miesiąc' },
+  { value: 'all', label: 'Od początku' },
+];
 
 const failure = (error: unknown) =>
   error instanceof FriendsError ? error.message : error instanceof Error ? error.message : String(error);
@@ -169,6 +178,7 @@ function SignIn({ onCreated }: { onCreated: () => void }) {
 function SignedIn({ account, revealCode }: { account: Account; revealCode: boolean }) {
   const theme = useTheme();
 
+  const [period, setPeriod] = useState<RankingPeriod>('week');
   const [people, setPeople] = useState<Person[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -188,12 +198,18 @@ function SignedIn({ account, revealCode }: { account: Account; revealCode: boole
     await syncStats();
 
     try {
-      setPeople(await fetchLeaderboard(account, Date.now()));
+      setPeople(await fetchLeaderboard(account, Date.now(), period));
       setLoadError(null);
     } catch (error) {
       setLoadError(failure(error));
     }
-  }, [account]);
+  }, [account, period]);
+
+  // A spinner rather than last period's numbers under this period's name.
+  const choosePeriod = (next: RankingPeriod) => {
+    setPeople(null);
+    setPeriod(next);
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -271,8 +287,14 @@ function SignedIn({ account, revealCode }: { account: Account; revealCode: boole
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}>
       <View style={card}>
         <ThemedText type="smallBold" themeColor="textSecondary">
-          Ranking · ten tydzień
+          Ranking
         </ThemedText>
+        <SegmentedControl<RankingPeriod>
+          value={period}
+          options={PERIODS}
+          onChange={choosePeriod}
+          accessibilityLabel="Okres rankingu"
+        />
 
         {people == null ? (
           loadError ? (
@@ -462,6 +484,8 @@ function SignedIn({ account, revealCode }: { account: Account; revealCode: boole
 
 const daysLabel = (count: number) => `${count} ${pluralize(count, 'dzień', 'dni', 'dni')}`;
 
+const pointsLabel = (count: number) => `${count} ${pluralize(count, 'punkt', 'punkty', 'punktów')}`;
+
 /** One person in the ranking; tapped, it opens their badges (and, for a friend, removal). */
 function Row({
   place,
@@ -481,8 +505,8 @@ function Row({
   const details = [
     person.streak > 0 ? `seria ${daysLabel(person.streak)}` : null,
     person.todayMet ? 'cel dziś ✓' : null,
+    person.goalDays ? `${daysLabel(person.goalDays)} z celem` : null,
     person.studyMs > 0 ? formatDuration(person.studyMs) : null,
-    person.badges.length > 0 ? `odznaki ${person.badges.length}` : null,
   ].filter(Boolean);
 
   const labels = person.badges.map(badgeLabel).filter((label): label is string => label != null);
@@ -492,7 +516,7 @@ function Row({
       <Pressable
         onPress={onToggle}
         accessibilityRole="button"
-        accessibilityLabel={`${place}. ${person.name}, ${person.goalDays} z 7 dni z celem`}
+        accessibilityLabel={`${place}. ${person.name}, ${pointsLabel(person.points)}`}
         style={({ pressed }) => [styles.rowMain, { opacity: pressed ? 0.6 : 1 }]}>
         <ThemedText style={styles.place} themeColor="textSecondary">
           {place}.
@@ -507,13 +531,18 @@ function Row({
             </ThemedText>
           ) : null}
         </View>
-        <ThemedText style={[styles.score, person.goalDays > 0 ? { color: RatingColors.good } : null]}>
-          {person.goalDays}/7
+        <ThemedText style={[styles.score, person.points > 0 ? { color: RatingColors.good } : null]}>
+          {person.points} pkt
         </ThemedText>
       </Pressable>
 
       {open ? (
         <View style={styles.rowDetails}>
+          {labels.length > 0 ? (
+            <ThemedText type="smallBold" themeColor="textSecondary">
+              Odznaki · {labels.length}
+            </ThemedText>
+          ) : null}
           {labels.length > 0 ? (
             <View style={styles.chips}>
               {labels.map((label) => (

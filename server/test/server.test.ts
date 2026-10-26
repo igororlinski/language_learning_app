@@ -52,8 +52,7 @@ async function signUp(call: ReturnType<typeof clientFor>, name: string, ip?: str
   return reply.body as { id: string; name: string; friendCode: string; recoveryCode: string };
 }
 
-// The viewer's week: Monday 19 October 2026 to Sunday the 25th.
-const WEEK = '2026-10-19';
+// The viewer's week runs from Monday 19 October 2026; today is the Thursday.
 const TODAY = '2026-10-22';
 
 const day = (key: string, answers: number, goal = 20, studyMs = 60_000) => ({ day: key, answers, goal, studyMs });
@@ -67,8 +66,13 @@ const stats = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const board = async (call: ReturnType<typeof clientFor>, token: string, today = TODAY): Promise<Person[]> => {
-  const reply = await call('GET', `/v1/leaderboard?week=${WEEK}&today=${today}`, { token });
+const board = async (
+  call: ReturnType<typeof clientFor>,
+  token: string,
+  today = TODAY,
+  period = 'week'
+): Promise<Person[]> => {
+  const reply = await call('GET', `/v1/leaderboard?period=${period}&today=${today}`, { token });
   assert.equal(reply.status, 200);
 
   return reply.body.people;
@@ -292,30 +296,90 @@ describe('statystyki i ranking', () => {
     });
   });
 
-  it('ranking po dniach z celem, potem serii, potem nazwie', async () => {
+  it('ranking po punktach, potem serii, potem nazwie', async () => {
     const { call, account, ola, ewa } = await friends();
 
-    // Igor: 19 and 20 met, 21 short, 22 met → 3 days.
+    // Igor: 19 and 20 met, 21 short, 22 met → three goals of 20, 60 points.
     await call('PUT', '/v1/me/stats', { token: account.recoveryCode, body: stats() });
-    // Ola: three days too, a longer streak.
+    // Ola: three days too, the same points, a longer streak.
     await call('PUT', '/v1/me/stats', {
       token: ola.recoveryCode,
-      body: stats({ streak: 9, days: [day('2026-10-19', 10, 10), day('2026-10-20', 10, 10), day('2026-10-21', 12, 10)] }),
+      body: stats({ streak: 9, days: [day('2026-10-19', 20), day('2026-10-20', 20), day('2026-10-21', 22)] }),
     });
     // Ewa: nothing sent yet.
 
     const people = await board(call, account.recoveryCode);
 
     assert.deepEqual(
-      people.map((p) => [p.name, p.goalDays, p.streak, p.me]),
+      people.map((p) => [p.name, p.points, p.goalDays, p.streak, p.me]),
       [
-        ['Ola', 3, 9, false],
-        ['Igor', 3, 4, true],
-        ['Ewa', 0, 0, false],
+        ['Ola', 60, 3, 9, false],
+        ['Igor', 60, 3, 4, true],
+        ['Ewa', 0, 0, 0, false],
       ]
     );
     assert.equal(people.find((p) => p.name === 'Ewa')?.goal, null);
     assert.equal(ewa.name, 'Ewa');
+  });
+
+  it('punkty to cel dnia: wiekszy cel jest wart wiecej, niespelniony nic', async () => {
+    const { call, account, ola } = await friends();
+
+    // Igor: three days of 20 → 60. Ola: four days, but of 10 → 40, and one short.
+    await call('PUT', '/v1/me/stats', { token: account.recoveryCode, body: stats() });
+    await call('PUT', '/v1/me/stats', {
+      token: ola.recoveryCode,
+      body: stats({
+        days: [day('2026-10-19', 10, 10), day('2026-10-20', 10, 10), day('2026-10-21', 9, 10), day(TODAY, 30, 10)],
+      }),
+    });
+
+    const people = await board(call, account.recoveryCode);
+
+    assert.deepEqual(
+      people.filter((p) => p.points > 0).map((p) => [p.name, p.points, p.goalDays]),
+      [
+        ['Igor', 60, 3],
+        ['Ola', 30, 3],
+      ]
+    );
+  });
+
+  it('miesiac liczy od pierwszego, od poczatku — to, co przyslal telefon', async () => {
+    const { call, account } = await setup();
+    await call('PUT', '/v1/me/stats', {
+      token: account.recoveryCode,
+      body: stats({
+        points: 500,
+        studyMs: 7_200_000,
+        days: [day('2026-10-12', 50, 20, 1000), day('2026-10-21', 20, 20, 2000), day(TODAY, 3, 20, 500)],
+      }),
+    });
+
+    const [week] = await board(call, account.recoveryCode);
+    const [month] = await board(call, account.recoveryCode, TODAY, 'month');
+    const [all] = await board(call, account.recoveryCode, TODAY, 'all');
+
+    assert.deepEqual([week.points, week.goalDays, week.studyMs], [20, 1, 2500], 'tydzien od poniedzialku');
+    assert.deepEqual([month.points, month.goalDays, month.studyMs], [40, 2, 3500], 'miesiac od 1.');
+    assert.deepEqual([all.points, all.goalDays, all.studyMs], [500, null, 7_200_000], 'od poczatku');
+    assert.equal(all.todayMet, false, 'dzis i tak z dni');
+
+    // A phone that does not send totals leaves the last ones alone.
+    await call('PUT', '/v1/me/stats', { token: account.recoveryCode, body: stats() });
+    assert.equal((await board(call, account.recoveryCode, TODAY, 'all'))[0].points, 500);
+  });
+
+  it('zle punkty albo okres — 400', async () => {
+    const { call, account } = await setup();
+
+    for (const bad of [{ points: -1 }, { points: 1.5 }, { studyMs: 'x' }]) {
+      const reply = await call('PUT', '/v1/me/stats', { token: account.recoveryCode, body: stats(bad) });
+      assert.equal(reply.status, 400, JSON.stringify(bad));
+    }
+
+    const reply = await call('GET', `/v1/leaderboard?period=rok&today=${TODAY}`, { token: account.recoveryCode });
+    assert.deepEqual([reply.status, reply.body], [400, { error: 'bad-period' }]);
   });
 
   it('dzis, czas nauki tygodnia i odznaki', async () => {
@@ -364,8 +428,8 @@ describe('statystyki i ranking', () => {
     const { call, account } = await setup();
     await call('PUT', '/v1/me/stats', { token: account.recoveryCode, body: stats({ streak: 12 }) });
 
-    assert.equal((await board(call, account.recoveryCode, shiftDay(TODAY, 2)))[0].streak, 12, 'dwa dni — moze trwac');
-    assert.equal((await board(call, account.recoveryCode, shiftDay(TODAY, 3)))[0].streak, 0, 'trzy — nie');
+    assert.equal((await board(call, account.recoveryCode, shiftDay(TODAY, 1)))[0].streak, 12, 'wczorajsza — moze trwac');
+    assert.equal((await board(call, account.recoveryCode, shiftDay(TODAY, 2)))[0].streak, 0, 'sprzed dwoch dni — nie');
   });
 
   it('obcy nie widzi nikogo poza soba', async () => {

@@ -23,7 +23,7 @@ import {
  * computer can open, and `fflate` rather than a native module because Expo Go
  * has no zip of its own. Everything here works on chunks of bytes and never
  * touches a file: the phone side (`backup-files.ts`) feeds it from
- * `FileHandle.readBytes` and drains it into `writeBytes`, and the tests feed it
+ * `FileHandle.readBytesSync` and drains it into `writeBytesSync`, and the tests feed it
  * from memory. Chunks matter — a backup with videos is hundreds of megabytes,
  * and holding it whole in memory is how a phone kills an app.
  *

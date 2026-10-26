@@ -303,14 +303,13 @@ export default function BackupScreen() {
             Eksport talii
           </ThemedText>
 
-          {deckList.length > 1 ? (
-            <Dropdown
-              label="Talia"
-              value={String(exportDeck.id)}
-              options={deckList.map((deck) => ({ value: String(deck.id), label: deck.name }))}
-              onChange={setExportDeckId}
-            />
-          ) : null}
+          {/* Shown with a single deck too: what goes into the file is named. */}
+          <Dropdown
+            label="Talia"
+            value={String(exportDeck.id)}
+            options={deckList.map((deck) => ({ value: String(deck.id), label: deck.name }))}
+            onChange={setExportDeckId}
+          />
 
           <SegmentedControl<Progress>
             value={progress}

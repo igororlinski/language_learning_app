@@ -1,8 +1,15 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
-import { Stack, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Stack, useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
+import { useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  StyleSheet,
+  View,
+  type TextInputInstance,
+} from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { ScrollViewContainer } from 'react-native-reorderable-list';
 
@@ -35,6 +42,7 @@ import {
   newCardFields,
   newCardLayout,
   newCardPhoneticLanguages,
+  type PhoneticLanguages,
   newCardSpeech,
   setCardTagNames,
   textSourceFrom,
@@ -425,7 +433,9 @@ export default function CardEditorScreen() {
     text: string,
     speech: string | null,
     current: string | null,
-    set: (phonetic: string | null) => void
+    set: (phonetic: string | null) => void,
+    pending: string | null = null,
+    skip?: () => void
   ): SheetAction[] =>
     phoneticMenu({
       scope,
@@ -437,6 +447,8 @@ export default function CardEditorScreen() {
       clear: () => set(null),
       show: showMenu,
       blocked: textBlocked,
+      pending,
+      skip,
     });
 
   /**
@@ -560,6 +572,14 @@ export default function CardEditorScreen() {
   const setRowPhonetic = (key: string, phonetic: string | null) =>
     setRows((current) =>
       current.map((row) => (row.kind === 'extra' && row.key === key ? { ...row, phonetic } : row))
+    );
+
+  /** This card goes without the transcription its template asks for in one field. */
+  const skipRowPhonetic = (key: string) =>
+    setRows((current) =>
+      current.map((row) =>
+        row.kind === 'extra' && row.key === key ? { ...row, phoneticLanguage: null } : row
+      )
     );
 
   const removeRow = (key: string) =>
@@ -1225,8 +1245,15 @@ export default function CardEditorScreen() {
       // kanapkę" aloud is how you catch the phone mangling it before fifty
       // cards carry the same mistake.
       ...speechActions('mnemonic', row.speech, (code) => setRowSpeech(key, code)),
-      ...phoneticActions(key, 'mnemonic', row.value, row.speech, row.phonetic, (phonetic) =>
-        setRowPhonetic(key, phonetic)
+      ...phoneticActions(
+        key,
+        'mnemonic',
+        row.value,
+        row.speech,
+        row.phonetic,
+        (phonetic) => setRowPhonetic(key, phonetic),
+        row.phoneticLanguage,
+        () => skipRowPhonetic(key)
       ),
     ];
   };
@@ -1253,41 +1280,35 @@ export default function CardEditorScreen() {
     [back, backPhonetic, backSpeech, cardTags, front, frontPhonetic, frontSpeech, rows]
   );
 
-  const saved = useRef(signature);
-  const navigation = useNavigation();
+  const [saved, setSaved] = useState(signature);
 
-  useEffect(
-    () =>
-      // The same navigation event the deck screen uses to end its selection: it
-      // covers the header arrow, the phone's back button and the swipe alike.
-      navigation.addListener('beforeRemove', (event) => {
-        if (signature === saved.current) return;
+  // The same guard the deck screen uses to end its selection: it covers the
+  // header arrow, the phone's back button and the swipe alike. Leaving on
+  // purpose — after a save or a delete — calls `allowLeaving` first, because
+  // the guard only learns that the form is clean on the next render.
+  const allowLeaving = usePreventRemove(signature !== saved, ({ repeat }) => {
+    Alert.alert(
+      'Porzucić zmiany?',
+      'Wpisana treść i wybrane pliki przepadną.',
+      [
+        { text: 'Wróć do edycji', style: 'cancel' },
+        {
+          text: 'Porzuć',
+          style: 'destructive',
+          onPress: () => {
+            // Files copied here point at no row in the database, so leaving
+            // without saving is exactly what makes them rubbish.
+            deleteMedia(imported.current);
+            imported.current = [];
 
-        event.preventDefault();
-
-        Alert.alert(
-          'Porzucić zmiany?',
-          'Wpisana treść i wybrane pliki przepadną.',
-          [
-            { text: 'Wróć do edycji', style: 'cancel' },
-            {
-              text: 'Porzuć',
-              style: 'destructive',
-              onPress: () => {
-                // Files copied here point at no row in the database, so leaving
-                // without saving is exactly what makes them rubbish.
-                deleteMedia(imported.current);
-                imported.current = [];
-
-                navigation.dispatch(event.data.action);
-              },
-            },
-          ],
-          { cancelable: true }
-        );
-      }),
-    [navigation, signature]
-  );
+            setSaved(signature);
+            repeat();
+          },
+        },
+      ],
+      { cancelable: true }
+    );
+  });
 
   /**
    * Starts this new card over from another of the deck's templates.
@@ -1301,11 +1322,12 @@ export default function CardEditorScreen() {
     if (nextId === templateId) return;
 
     const apply = () => {
-      const untouched = signature === saved.current;
+      const untouched = signature === saved;
       const speech = newCardSpeech(deckId, nextId);
       const nextRows = buildRows(newCardLayout(deckId, nextId), newCardFields(deckId, nextId));
 
       setTemplateId(nextId);
+      setPhoneticTemplate(newCardPhoneticLanguages(deckId, nextId));
       setRows(nextRows);
       setFrontSpeech(speech.frontSpeech);
       setBackSpeech(speech.backSpeech);
@@ -1313,13 +1335,15 @@ export default function CardEditorScreen() {
       // A form nobody has touched is still untouched after a switch: picking a
       // template is not an edit worth asking about on the way out.
       if (untouched) {
-        saved.current = draftSignature(
-          front,
-          back,
-          nextRows,
-          cardTags,
-          { front: speech.frontSpeech, back: speech.backSpeech },
-          { front: frontPhonetic, back: backPhonetic }
+        setSaved(
+          draftSignature(
+            front,
+            back,
+            nextRows,
+            cardTags,
+            { front: speech.frontSpeech, back: speech.backSpeech },
+            { front: frontPhonetic, back: backPhonetic }
+          )
         );
       }
     };
@@ -1344,7 +1368,7 @@ export default function CardEditorScreen() {
     );
   };
 
-  const questionInput = useRef<TextInput>(null);
+  const questionInput = useRef<TextInputInstance>(null);
   // Only the question is required: plenty of cards are a prompt with a picture
   // or a recording for an answer, and some are a prompt with nothing at all.
   const canSave = front.trim().length > 0;
@@ -1354,9 +1378,8 @@ export default function CardEditorScreen() {
    * saved — the deck's template. An edited card has none: the template only
    * ever decides how a card starts.
    */
-  const phoneticTemplate = useMemo(
-    () => (cardId ? { front: null, back: null } : newCardPhoneticLanguages(deckId, templateId)),
-    [cardId, deckId, templateId]
+  const [phoneticTemplate, setPhoneticTemplate] = useState<PhoneticLanguages>(() =>
+    cardId ? { front: null, back: null } : newCardPhoneticLanguages(deckId, templateId)
   );
 
   /** A save waiting on the transcriptions the deck's template asked for. */
@@ -1463,7 +1486,8 @@ export default function CardEditorScreen() {
       );
 
       // Saved, so leaving is not abandoning anything.
-      saved.current = signature;
+      setSaved(signature);
+      allowLeaving();
       router.back();
       return;
     }
@@ -1518,9 +1542,11 @@ export default function CardEditorScreen() {
 
     setFrontSpeech(template.frontSpeech);
     setBackSpeech(template.backSpeech);
-    // A transcription is of this card's words, and the next card has none.
+    // A transcription is of this card's words, and the next card has none;
+    // what the template asks of the next one starts over, too.
     setFrontPhonetic(null);
     setBackPhonetic(null);
+    setPhoneticTemplate(newCardPhoneticLanguages(deckId, templateId));
     // The tags stay on for the next card: a batch typed in one go is usually
     // one batch of tags too, and taking them off is one tap.
     // The next card in the batch starts from the deck's default layout again.
@@ -1533,10 +1559,12 @@ export default function CardEditorScreen() {
     // The form the next card starts from is what "saved" means from here on —
     // it is empty, but the tags kept for the batch would otherwise read as an
     // unsaved edit the moment the back arrow was touched.
-    saved.current = draftSignature('', '', nextRows, cardTags, {
-      front: template.frontSpeech,
-      back: template.backSpeech,
-    });
+    setSaved(
+      draftSignature('', '', nextRows, cardTags, {
+        front: template.frontSpeech,
+        back: template.backSpeech,
+      })
+    );
 
     setSavedCount((count) => count + 1);
     questionInput.current?.focus();
@@ -1566,7 +1594,8 @@ export default function CardEditorScreen() {
           deleteMedia([...files, ...imported.current]);
 
           // The card is gone; there is nothing left to abandon.
-          saved.current = signature;
+          setSaved(signature);
+          allowLeaving();
           router.back();
         },
       },
@@ -1613,6 +1642,7 @@ export default function CardEditorScreen() {
     phonetic: string | null,
     setPhonetic: (phonetic: string | null) => void,
     pendingLanguage: string | null,
+    skipPending: () => void,
     extra?: ReactNode
   ) => {
     const problem = speech ? voiceProblem(speech) : null;
@@ -1654,7 +1684,16 @@ export default function CardEditorScreen() {
                 title: label,
                 actions: [
                   ...speechActions(scope, speech, setSpeech),
-                  ...phoneticActions(key, scope, text, speech, phonetic, setPhonetic),
+                  ...phoneticActions(
+                    key,
+                    scope,
+                    text,
+                    speech,
+                    phonetic,
+                    setPhonetic,
+                    pendingLanguage,
+                    skipPending
+                  ),
                 ],
               })
             }
@@ -1737,7 +1776,12 @@ export default function CardEditorScreen() {
             isQuestion ? setFrontSpeech : setBackSpeech,
             isQuestion ? frontPhonetic : backPhonetic,
             isQuestion ? setFrontPhonetic : setBackPhonetic,
-            isQuestion ? phoneticTemplate.front : phoneticTemplate.back
+            isQuestion ? phoneticTemplate.front : phoneticTemplate.back,
+            () =>
+              setPhoneticTemplate((current) => ({
+                ...current,
+                [isQuestion ? 'front' : 'back']: null,
+              }))
           )}
         </>
       );
@@ -2095,6 +2139,7 @@ export default function CardEditorScreen() {
           row.phonetic,
           (phonetic) => setRowPhonetic(row.key, phonetic),
           row.phoneticLanguage,
+          () => skipRowPhonetic(row.key),
           removeAction(rowInfo.label, row.key)
         )}
       </>

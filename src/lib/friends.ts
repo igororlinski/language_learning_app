@@ -1,8 +1,8 @@
 import { AiError, send, type Reply } from '@/lib/ai-transport';
-import { dayKey, shiftDay, streak, weekKey, type StudyDay } from '@/lib/goals';
+import { dayKey, shiftDay, streak, totalPoints, type StudyDay } from '@/lib/goals';
 
 /**
- * Friends and the weekly ranking: what the app sends to our server
+ * Friends and their ranking: what the app sends to our server
  * (`server/`), what it accepts back, and what each failure is called.
  *
  * Pure, like `ai-text.ts`: the account itself lives in secure storage
@@ -32,6 +32,8 @@ export const UPLOAD_DAYS = 14;
 const DAY_MS = 86_400_000;
 const MAX_ANSWERS = 100_000;
 const MAX_GOAL = 1000;
+const MAX_POINTS = 1_000_000_000;
+const MAX_STUDY_MS = 1_000_000_000_000;
 
 /* ----------------------------------------------------------------- errors */
 
@@ -212,6 +214,9 @@ export type StatsUpload = {
   streak: number;
   badges: string[];
   days: { day: string; answers: number; goal: number; studyMs: number }[];
+  /** All-time totals for the all-time ranking: the server keeps only a month of days. */
+  points: number;
+  studyMs: number;
 };
 
 const clamp = (value: number, min: number, max: number) =>
@@ -219,12 +224,13 @@ const clamp = (value: number, min: number, max: number) =>
 
 /**
  * What goes to the server: today, the goal, the streak as this phone counts
- * it (with the freeze, which the server knows nothing about), the badges, and
- * the last two weeks of `study_days`.
+ * it, the badges, the last two weeks of `study_days`, and the all-time points
+ * and study time out of every day there is.
  *
- * Today is held to the goal set now, as everywhere else; past days to their
- * own. Every value is brought within what the server accepts, because it
- * refuses a whole upload for one value out of range.
+ * Today is held to the goal it is held to now (a lighter one on a lighter
+ * day), as everywhere else; past days to their own. Every value is brought
+ * within what the server accepts, because it refuses a whole upload for one
+ * value out of range.
  */
 export function statsUpload(
   days: readonly (StudyDay & { studyMs: number })[],
@@ -249,6 +255,12 @@ export function statsUpload(
         goal: clamp(row.day === today ? goal : row.goal, 1, MAX_GOAL),
         studyMs: clamp(row.studyMs, 0, DAY_MS),
       })),
+    points: clamp(totalPoints(days, goal, now), 0, MAX_POINTS),
+    studyMs: clamp(
+      days.reduce((sum, row) => sum + clamp(row.studyMs, 0, DAY_MS), 0),
+      0,
+      MAX_STUDY_MS
+    ),
   };
 }
 
@@ -258,12 +270,17 @@ export async function uploadStats(account: Account, stats: StatsUpload): Promise
 
 /* ------------------------------------------------------------ leaderboard */
 
+/** This week (from Monday), this month (from the 1st), or all time. */
+export type RankingPeriod = 'week' | 'month' | 'all';
+
 export type Person = {
   id: string;
   name: string;
   me: boolean;
-  /** Days of this week with the goal met — what the ranking is by. */
-  goalDays: number;
+  /** A day's goal for every day of the period it was met — what the ranking is by. */
+  points: number;
+  /** Days of the period with the goal met; null for all time. */
+  goalDays: number | null;
   todayMet: boolean;
   streak: number;
   studyMs: number;
@@ -290,7 +307,8 @@ export function parseLeaderboard(body: unknown): Person[] {
         id,
         name,
         me: row.me === true,
-        goalDays: count(row.goalDays),
+        points: count(row.points),
+        goalDays: row.goalDays == null ? null : count(row.goalDays),
         todayMet: row.todayMet === true,
         streak: count(row.streak),
         studyMs: count(row.studyMs),
@@ -300,10 +318,13 @@ export function parseLeaderboard(body: unknown): Person[] {
   });
 }
 
-/** This week (Monday to Sunday) for the viewer and their friends, best first. */
-export async function fetchLeaderboard(account: Account, now: number): Promise<Person[]> {
-  const today = dayKey(now);
-  const query = `week=${weekKey(today)}&today=${today}`;
+/** One period for the viewer and their friends, best first, up to the viewer's today. */
+export async function fetchLeaderboard(
+  account: Account,
+  now: number,
+  period: RankingPeriod = 'week'
+): Promise<Person[]> {
+  const query = `period=${period}&today=${dayKey(now)}`;
 
   return parseLeaderboard(await call(`/v1/leaderboard?${query}`, { code: account.recoveryCode }));
 }

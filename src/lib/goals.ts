@@ -5,7 +5,7 @@ import { studyDayStart } from '@/lib/study-day';
  *
  * Pure, like `stats.ts`: `study_days` is read by the queries, and everything
  * that decides whether a day counted — where it ends, which goal it is held
- * to, when a freeze covers it — is decided here, where tests can reach it.
+ * to — is decided here, where tests can reach it.
  */
 
 /** Answers a day, for anyone who has not picked a goal. */
@@ -18,9 +18,66 @@ const MAX_DAILY_GOAL = 1000;
 
 /** The stored goal, or the default for anything that is not a sensible one. */
 export function parseDailyGoal(value: string | null | undefined): number {
+  return parseGoal(value) ?? DEFAULT_DAILY_GOAL;
+}
+
+function parseGoal(value: string | null | undefined): number | null {
   const goal = Number(value);
 
-  return Number.isInteger(goal) && goal >= 1 && goal <= MAX_DAILY_GOAL ? goal : DEFAULT_DAILY_GOAL;
+  return value != null && Number.isInteger(goal) && goal >= 1 && goal <= MAX_DAILY_GOAL
+    ? goal
+    : null;
+}
+
+/* ------------------------------------------------------------- light days */
+
+/** What a lighter day can ask for instead. */
+export const LIGHT_GOALS = [5, 10, 15, 20, 30, 50, 75, 100] as const;
+
+/**
+ * The goal as it is set: one number for every day, and a smaller one for the
+ * weekdays picked as lighter (0 for Sunday … 6 for Saturday, like `weekday`).
+ * `lightGoal` is null until one is picked.
+ */
+export type GoalPlan = { goal: number; lightDays: readonly number[]; lightGoal: number | null };
+
+/** The stored weekdays — a JSON list — or none for anything else. */
+export function parseLightDays(value: string | null | undefined): number[] {
+  try {
+    const parsed: unknown = JSON.parse(value ?? '[]');
+
+    if (!Array.isArray(parsed)) return [];
+
+    const days = parsed.filter((day): day is number => Number.isInteger(day) && day >= 0 && day <= 6);
+
+    return [...new Set(days)].sort();
+  } catch {
+    return [];
+  }
+}
+
+/** The stored lighter goal, or null when none was picked. */
+export const parseLightGoal = (value: string | null | undefined): number | null => parseGoal(value);
+
+/** About half the goal, from the list, until a lighter goal is picked. */
+export function defaultLightGoal(goal: number): number {
+  const fitting = LIGHT_GOALS.filter((light) => light <= goal / 2);
+
+  return Math.min(goal, fitting.at(-1) ?? LIGHT_GOALS[0]);
+}
+
+/** Whether a day is one of the lighter ones. */
+export const isLightDay = (plan: GoalPlan, day: string): boolean =>
+  plan.lightDays.includes(weekday(day));
+
+/**
+ * The goal a day is held to. A lighter day never asks for more than the rest:
+ * a lighter goal left above a goal lowered later is the goal.
+ */
+export function goalOn(plan: GoalPlan, day: string): number {
+  if (!isLightDay(plan, day)) return plan.goal;
+
+  return Math.min(plan.goal, plan.lightGoal ?? defaultLightGoal(plan.goal));
 }
 
 /* ------------------------------------------------------------------- days */
@@ -73,8 +130,6 @@ export type Streak = {
   current: number;
   longest: number;
   today: { answers: number; goal: number; met: boolean };
-  /** The day this week's freeze went on, or null while it is still there. */
-  freezeUsedOn: string | null;
 };
 
 /**
@@ -83,12 +138,7 @@ export type Streak = {
  * Every past day is held to **its own** goal, the one stored with it; today is
  * held to the goal set now, so changing it changes today and nothing before.
  * Today short of the goal **does not break** the streak — the day is not over.
- *
- * **One freeze a week** (Monday to Sunday): the first missed day of a week,
- * while there is a streak to save, is covered instead of ending it. A covered
- * day keeps the streak but does not add to it. Freezes are not saved up — an
- * unused one is gone on Monday — and none is spent with no streak running.
- * The week's freeze is spent even if a second miss ends the streak anyway.
+ * Any earlier day short of its goal does.
  */
 export function streak(days: readonly StudyDay[], goal: number, now: number): Streak {
   const today = dayKey(now);
@@ -103,33 +153,34 @@ export function streak(days: readonly StudyDay[], goal: number, now: number): St
 
   let run = 0;
   let longest = 0;
-  const spent = new Map<string, string>();
 
   if (first) {
     for (let day = first; day < today; day = shiftDay(day, 1)) {
       const row = byDay.get(day);
-      const week = weekKey(day);
 
-      if (row && row.answers > 0 && row.answers >= row.goal) {
-        run += 1;
-      } else if (run > 0 && !spent.has(week)) {
-        spent.set(week, day);
-      } else {
-        run = 0;
-      }
-
+      run = row && row.answers > 0 && row.answers >= row.goal ? run + 1 : 0;
       longest = Math.max(longest, run);
     }
   }
 
   if (met) run += 1;
 
-  return {
-    current: run,
-    longest: Math.max(longest, run),
-    today: { answers, goal, met },
-    freezeUsedOn: spent.get(weekKey(today)) ?? null,
-  };
+  return { current: run, longest: Math.max(longest, run), today: { answers, goal, met } };
+}
+
+/**
+ * Points for the ranking: a day's goal for every day the goal was met — each
+ * past day by its own goal, today by the one it is held to now, as with the
+ * streak. A bigger goal is worth more; a day short of it is worth nothing.
+ */
+export function totalPoints(days: readonly StudyDay[], goal: number, now: number): number {
+  const today = dayKey(now);
+
+  return days.reduce((sum, row) => {
+    if (row.day === today) return row.answers >= goal ? sum + goal : sum;
+
+    return row.day < today && row.answers > 0 && row.answers >= row.goal ? sum + row.goal : sum;
+  }, 0);
 }
 
 /** Days on which the goal was met, today included once it is. */

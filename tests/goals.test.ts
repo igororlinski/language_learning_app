@@ -1,6 +1,6 @@
 /**
- * The daily goal, the streak it keeps and the freeze that covers a missed day,
- * then the badges built on them. Times are local, like the study day.
+ * The daily goal, its lighter days and the streak it keeps, then the badges
+ * built on them. Times are local, like the study day.
  */
 import {
   BADGE_GROUPS,
@@ -14,11 +14,17 @@ import {
 import {
   DEFAULT_DAILY_GOAL,
   dayKey,
+  defaultLightGoal,
   goalDays,
+  goalOn,
   goalShare,
+  isLightDay,
   parseDailyGoal,
+  parseLightDays,
+  parseLightGoal,
   shiftDay,
   streak,
+  totalPoints,
   weekKey,
   type StudyDay,
 } from '@/lib/goals';
@@ -68,7 +74,6 @@ check('trzy dni z celem i dzis jeszcze nic: dzien trwa, seria 3', streak([row(18
   current: 3,
   longest: 3,
   today: { answers: 0, goal: 20, met: false },
-  freezeUsedOn: null,
 });
 check('dzis cel spelniony dolicza dzien', streak([row(19), row(20), row(21)], 20, at(21)).current, 3);
 check('dzis ponizej celu nie dolicza', streak([row(20), row(21, 19)], 20, at(21)).current, 1);
@@ -79,39 +84,49 @@ check('podniesienie celu nie psuje wczorajszych dni', streak(raised, 50, at(21))
   current: 2,
   longest: 2,
   today: { answers: 20, goal: 50, met: false },
-  freezeUsedOn: null,
 });
 check('obnizenie celu liczy dzis od razu', streak(raised, 10, at(21)).current, 3);
 check('dzien z zerem odpowiedzi nie spelnia nawet celu 0', streak([row(20, 0, 0)], 20, at(21)).current, 0);
 
-group('Seria: zamrozenie raz w tygodniu');
+group('Seria: dzien bez celu przerywa');
 
-// Monday 19 to Wednesday 21, Tuesday missed.
-const oneMiss = streak([row(17), row(18), row(19), row(21)], 20, at(21, 13));
-check('jeden dzien przerwy w tygodniu: seria trwa, przerwa sie nie dolicza', oneMiss.current, 4);
-check('zamrozenie z tego tygodnia zuzyte we wtorek', oneMiss.freezeUsedOn, key(20));
-
+check('jeden dzien przerwy przerywa serie', streak([row(17), row(18), row(19), row(21)], 20, at(21, 13)).current, 1);
+check('wczoraj pusty, dzis jeszcze nic: serii nie ma', streak([row(18), row(19)], 20, at(21)).current, 0);
+check('wczoraj z celem, dzis jeszcze nic: seria trwa', streak([row(19), row(20)], 20, at(21)).current, 2);
 check(
-  'druga przerwa w tym samym tygodniu przerywa',
-  streak([row(19), row(21), row(23)], 20, at(23, 13)).current,
-  1
+  'przerwa: najdluzsza zostaje',
+  streak([row(12), row(13), row(14), row(17), row(20)], 20, at(21)),
+  { current: 1, longest: 3, today: { answers: 0, goal: 20, met: false } }
 );
+
+group('Lzejsze dni');
+
+check('dni z zapisu, bez powtorzen i smieci', parseLightDays('[6, 0, 6, 7, "x", 2.5]'), [0, 6]);
+check('zly zapis to brak dni', [parseLightDays('nie'), parseLightDays(null), parseLightDays('{}')], [[], [], []]);
+check('lzejszy cel z zapisu albo nic', [parseLightGoal('5'), parseLightGoal(null), parseLightGoal('0')], [5, null, null]);
+check('domyslnie mniej wiecej polowa', [defaultLightGoal(20), defaultLightGoal(50), defaultLightGoal(10), defaultLightGoal(5)], [
+  10, 20, 5, 5,
+]);
+
+// The 24th of October 2026 is a Saturday, the 21st a Wednesday.
+const weekend = { goal: 20, lightDays: [6, 0], lightGoal: null };
+check('sobota jest lzejsza, sroda nie', [isLightDay(weekend, key(24)), isLightDay(weekend, key(21))], [true, false]);
+check('w lzejszy dzien domyslnie polowa', goalOn(weekend, key(24)), 10);
+check('w zwykly dzien zwykly cel', goalOn(weekend, key(21)), 20);
+check('wybrany lzejszy cel', goalOn({ ...weekend, lightGoal: 5 }, key(25)), 5);
+check('lzejszy nigdy nie wiekszy od zwyklego', goalOn({ ...weekend, lightGoal: 30 }, key(24)), 20);
 check(
-  'przerwa w niedziele i w poniedzialek: dwa tygodnie, dwa zamrozenia',
-  streak([row(16), row(17), row(20)], 20, at(20, 13)).current,
+  'seria liczy lzejszy dzien wobec jego wlasnego celu',
+  streak([row(23), row(24, 10, 10), row(25, 10, 10)], 20, at(26)).current,
   3
 );
-check('wczoraj pusty, dzis jeszcze nic: zamrozenie trzyma serie', streak([row(18), row(19)], 20, at(21)).current, 2);
-check(
-  'nie ma serii, nie ma czego ratowac — zamrozenie zostaje',
-  streak([row(12)], 20, at(21)).freezeUsedOn,
-  null
-);
-check(
-  'dwa dni przerwy w jednym tygodniu: najdluzsza zostaje',
-  streak([row(12), row(13), row(14), row(17), row(20)], 20, at(21)),
-  { current: 1, longest: 3, today: { answers: 0, goal: 20, met: false }, freezeUsedOn: null }
-);
+
+group('Punkty');
+
+check('punkty: cel kazdego dnia z celem', totalPoints([row(19), row(20, 10, 10), row(21, 5)], 20, at(22)), 30);
+check('dzis wobec celu ustawionego teraz', totalPoints([row(22, 15)], 15, at(22)), 15);
+check('dzis ponizej celu nic', totalPoints([row(22, 14)], 15, at(22)), 0);
+check('wiekszy cel jest wart wiecej', totalPoints([row(19, 50, 50)], 20, at(22)), 50);
 
 group('Dni z celem');
 

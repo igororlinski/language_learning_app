@@ -84,7 +84,7 @@ async function writeDeck(deckId: number, withProgress: boolean, handle: FileHand
       { name: DECK_ENTRY, compress: true, chunks: () => [jsonBytes(pkg)] },
       ...media,
     ],
-    (chunk) => handle.writeBytes(chunk)
+    (chunk) => handle.writeBytesSync(chunk)
   );
 }
 
@@ -198,7 +198,7 @@ function stagedFile(directory: string, fileName: string): ArchiveSink {
 
   const handle = file.open(FileMode.WriteOnly);
 
-  return { write: (chunk) => handle.writeBytes(chunk), close: () => handle.close() };
+  return { write: (chunk) => handle.writeBytesSync(chunk), close: () => handle.close() };
 }
 
 /**
