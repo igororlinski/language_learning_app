@@ -139,10 +139,13 @@ export default function DecksScreen() {
           style={styles.list}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={
-            <EmptyState
-              title="Nie masz jeszcze żadnej talii"
-              hint={'Talia to zbiór fiszek na jeden temat — np. „Angielski B2” albo „Anatomia”.'}
-            />
+            <>
+              <EmptyState
+                title="Nie masz jeszcze żadnej talii"
+                hint={'Talia to zbiór fiszek na jeden temat — np. „Angielski B2” albo „Anatomia”.'}
+              />
+              <Button title="O tej aplikacji" variant="ghost" onPress={() => router.push('/about')} />
+            </>
           }
           renderItem={({ item }) => {
             // Counters and the tap target both read the capped numbers, so the
@@ -192,6 +195,7 @@ export default function DecksScreen() {
             { label: 'Statystyki', onPress: () => router.push('/stats') },
             { label: 'Znajomi', onPress: () => router.push('/friends') },
             { label: 'Import i eksport', onPress: () => router.push('/backup') },
+            { label: 'O tej aplikacji', onPress: () => router.push('/about') },
           ]}
         />
       </View>

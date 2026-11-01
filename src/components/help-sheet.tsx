@@ -1,8 +1,9 @@
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { HelpBody } from '@/components/help-body';
 import { ThemedText } from '@/components/themed-text';
-import { HELP_TOPICS, type HelpBlock, type HelpTopicId } from '@/constants/help';
+import { HELP_TOPICS, type HelpTopicId } from '@/constants/help';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -43,9 +44,7 @@ export function HelpSheet({ visible, topic, onClose }: HelpSheetProps) {
 
           <ThemedText style={styles.title}>{title}</ThemedText>
           <ScrollView contentContainerStyle={styles.body}>
-            {body.map((block, index) => (
-              <Block key={index} block={block} />
-            ))}
+            <HelpBody body={body} />
           </ScrollView>
 
           <Pressable
@@ -62,28 +61,6 @@ export function HelpSheet({ visible, topic, onClose }: HelpSheetProps) {
         </Pressable>
       </Pressable>
     </Modal>
-  );
-}
-
-function Block({ block }: { block: HelpBlock }) {
-  if (typeof block === 'string') {
-    return <ThemedText style={styles.paragraph}>{block}</ThemedText>;
-  }
-
-  const numbered = 'steps' in block;
-  const items = numbered ? block.steps : block.list;
-
-  return (
-    <View style={styles.items}>
-      {items.map((item, index) => (
-        <View key={index} style={styles.item}>
-          <ThemedText themeColor="textSecondary" style={styles.marker}>
-            {numbered ? `${index + 1}.` : '•'}
-          </ThemedText>
-          <ThemedText style={styles.itemText}>{item}</ThemedText>
-        </View>
-      ))}
-    </View>
   );
 }
 
@@ -118,28 +95,6 @@ const styles = StyleSheet.create({
   body: {
     paddingHorizontal: Spacing.four,
     paddingBottom: Spacing.two,
-    gap: Spacing.three,
-  },
-  paragraph: {
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  items: {
-    gap: Spacing.two,
-  },
-  item: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-  },
-  marker: {
-    fontSize: 15,
-    lineHeight: 22,
-    minWidth: 16,
-  },
-  itemText: {
-    flex: 1,
-    fontSize: 15,
-    lineHeight: 22,
   },
   close: {
     marginTop: Spacing.three,

@@ -102,6 +102,87 @@ export const HELP_TOPICS = {
       'Dzień bez spełnionego celu przerywa serię. Dzisiejszy dzień przerywa ją dopiero, gdy minie — do 4:00 rano możesz go jeszcze uratować.',
     ],
   },
+
+  // „O tej aplikacji” — rozdziały w kolejności z `ABOUT_CHAPTERS`.
+  // TODO: prawdziwa treść zamiast lorem ipsum.
+  'about.intro': {
+    title: 'Czym jest ta aplikacja',
+    body: [
+      'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.',
+      'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.',
+    ],
+  },
+
+  'about.decks': {
+    title: 'Talie i karty',
+    body: [
+      'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.',
+      { list: ['Lorem ipsum dolor sit amet.', 'Consectetur adipiscing elit.', 'Sed do eiusmod tempor.'] },
+    ],
+  },
+
+  'about.review': {
+    title: 'Nauka i oceny',
+    body: [
+      'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.',
+      { steps: ['Lorem ipsum dolor sit amet.', 'Consectetur adipiscing elit.', 'Sed do eiusmod tempor.'] },
+    ],
+  },
+
+  'about.mnemonics': {
+    title: 'Skojarzenia fonetyczne',
+    body: [
+      'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.',
+      'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.',
+    ],
+  },
+
+  'about.ai': {
+    title: 'AI i klucze',
+    body: [
+      'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.',
+      { list: ['Lorem ipsum dolor sit amet.', 'Consectetur adipiscing elit.', 'Sed do eiusmod tempor.'] },
+    ],
+  },
+
+  'about.goals': {
+    title: 'Cel, seria i odznaki',
+    body: [
+      'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.',
+      'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.',
+    ],
+  },
+
+  'about.friends': {
+    title: 'Znajomi i ranking',
+    body: [
+      'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.',
+      'Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.',
+    ],
+  },
+
+  'about.backup': {
+    title: 'Kopia zapasowa i przenoszenie talii',
+    body: [
+      'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.',
+      { steps: ['Lorem ipsum dolor sit amet.', 'Consectetur adipiscing elit.', 'Sed do eiusmod tempor.'] },
+    ],
+  },
 } as const satisfies Record<string, HelpTopic>;
 
 export type HelpTopicId = keyof typeof HELP_TOPICS;
+
+/**
+ * The chapters of "O tej aplikacji", in reading order. Each is an ordinary
+ * topic, so any of them can also sit behind a "?" on the screen it is about.
+ */
+export const ABOUT_CHAPTERS: readonly HelpTopicId[] = [
+  'about.intro',
+  'about.decks',
+  'about.review',
+  'about.mnemonics',
+  'about.ai',
+  'about.goals',
+  'about.friends',
+  'about.backup',
+];
