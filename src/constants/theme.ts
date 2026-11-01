@@ -9,6 +9,8 @@ export const Colors = {
     background: '#F5F6F8',
     backgroundElement: '#FFFFFF',
     backgroundSelected: '#E8EBEF',
+    /** A tile inside a card — a shade off the card, lighter than the screen behind it in the dark. */
+    backgroundTile: '#F3F4F6',
     /** Warm tint marking the two mandatory fields in the layout editors. */
     backgroundHighlight: '#FBEEE8',
     border: '#E1E4E9',
@@ -22,6 +24,7 @@ export const Colors = {
     background: '#0E0F11',
     backgroundElement: '#1A1C1F',
     backgroundSelected: '#26292D',
+    backgroundTile: '#222528',
     backgroundHighlight: '#2C211D',
     border: '#2A2D31',
     accent: '#5A8DF6',

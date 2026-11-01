@@ -2,6 +2,15 @@ import { DEFAULT_NEW_PER_DAY, DEFAULT_REVIEWS_PER_DAY } from '@/db/schema';
 import { DEFAULT_DAILY_GOAL } from '@/lib/goals';
 import { MIN_SAMPLES } from '@/lib/fsrs-optimizer';
 import {
+  GROWTH_WEEKS,
+  MATURE_DAYS,
+  MAX_ANSWER_MS,
+  MIN_ANSWERS,
+  RETENTION_SLACK,
+  RETENTION_WINDOW_DAYS,
+  STUDY_TIME_DAYS,
+} from '@/lib/stats';
+import {
   DEFAULT_LEARNING_STEPS,
   DEFAULT_RELEARNING_STEPS,
   DEFAULT_RETENTION,
@@ -100,6 +109,98 @@ export const HELP_TOPICS = {
     body: [
       'Liczba dni z rzędu, w których cel był spełniony.',
       'Dzień bez spełnionego celu przerywa serię. Dzisiejszy dzień przerywa ją dopiero, gdy minie — do 4:00 rano możesz go jeszcze uratować.',
+    ],
+  },
+
+  'stats.today': {
+    title: 'Dzisiaj',
+    body: [
+      'Ile razy dziś oceniłeś kartę w wybranej talii — przy „Wszystkie talie” we wszystkich razem. Dzień zaczyna się o 4:00.',
+      {
+        list: [
+          'Nowe — pierwsze odpowiedzi na karty, których jeszcze nie widziałeś.',
+          'Nauka — karty w krokach nauki: świeżo poznane albo zapomniane i uczone od nowa.',
+          'Powtórki — karty już nauczone, które wróciły po kilku dniach.',
+          'Poprawnie — jaka część dzisiejszych odpowiedzi to nie „Znowu”.',
+        ],
+      },
+    ],
+  },
+
+  'stats.time': {
+    title: 'Czas nauki',
+    body: [
+      `Ile czasu spędziłeś nad kartami przez ostatnie ${STUDY_TIME_DAYS} dni — od pokazania karty do jej oceny. Jedna odpowiedź liczy się najwyżej ${MAX_ANSWER_MS / 1000} sekund, żeby telefon odłożony na stół z otwartą kartą nie zawyżał wyniku.`,
+      'Słupki to kolejne dni, dzisiejszy po prawej. Odpowiedzi sprzed 23 października 2026 nie były mierzone i się nie liczą.',
+    ],
+  },
+
+  'stats.forecast': {
+    title: 'Do powtórki',
+    body: [
+      'Ile kart wróci do powtórki każdego dnia — na tydzień albo miesiąc naprzód.',
+      {
+        list: [
+          'Dziś — wszystko, co już czeka, razem z zaległymi i kartami w krokach nauki.',
+          'Nowe karty nie są liczone: wchodzą według dziennego limitu talii, nie według daty.',
+          'Limit powtórek też nie jest odejmowany, żeby było widać prawdziwą górę kart — choćby przed wyjazdem.',
+        ],
+      },
+    ],
+  },
+
+  'stats.retention': {
+    title: 'Zapamiętane',
+    body: [
+      `Jaka część powtórek z ostatnich ${RETENTION_WINDOW_DAYS} dni skończyła się czymś innym niż „Znowu” — czyli jak często pamiętasz kartę, gdy wraca. Kroki nauki się nie liczą: odpowiedź po dziesięciu minutach nic nie mówi o pamięci.`,
+      'Kreska na pasku to cel talii — „Jak często wracają karty” w jej ustawieniach. Przy wszystkich taliach to średnia, ważona tym, z której talii były powtórki.',
+      {
+        list: [
+          'Na celu — algorytm trafia z odstępami.',
+          `Trochę poniżej celu — do ${Math.round(RETENTION_SLACK * 100)} punktów procentowych pod kreską; zwykle wahanie.`,
+          'Poniżej celu — odstępy są za długie dla twojej pamięci. Pomaga „Optymalizuj” w ustawieniach talii, gdy uzbiera się historia.',
+        ],
+      },
+      `Procent pojawia się od ${MIN_ANSWERS} powtórek — z mniejszej liczby byłby przypadkiem.`,
+    ],
+  },
+
+  'stats.grades': {
+    title: 'Oceny',
+    body: [
+      `Jak rozkładały się twoje oceny przez ostatnie ${RETENTION_WINDOW_DAYS} dni, osobno dla powtórek i dla nauki.`,
+      {
+        list: [
+          'W powtórkach większość powinna być „Dobre”. „Trudne” to wciąż zapamiętana karta, tylko z wysiłkiem.',
+          '„Łatwe” warto zostawić na karty naprawdę oczywiste — każde mocno wydłuża następny odstęp.',
+          'W nauce dużo „Znowu” jest normalne: tak działają kroki nauki.',
+        ],
+      },
+    ],
+  },
+
+  'stats.mnemonics': {
+    title: 'Skojarzenia a pamięć',
+    body: [
+      'Porównanie, jak często pamiętasz w powtórkach karty ze skojarzeniem, a jak te bez — z całej historii. Duża liczba to różnica w punktach procentowych.',
+      'To wskazówka, nie dowód: skojarzenia zwykle dostają słowa, które szły najgorzej, a karta liczy się jako „ze skojarzeniem” także za odpowiedzi sprzed jego dodania.',
+      `Wynik pojawia się, gdy obie strony mają po ${MIN_ANSWERS} powtórek.`,
+    ],
+  },
+
+  'stats.collection': {
+    title: 'Karty',
+    body: [
+      'Gdzie są twoje karty na drodze od nowej do zapamiętanej na długo.',
+      {
+        list: [
+          'Nowe — jeszcze nie widziane.',
+          'W nauce — w krokach nauki albo uczone od nowa po zapomnieniu.',
+          `Młode — w powtórkach, z odstępem krótszym niż ${MATURE_DAYS} dni.`,
+          `Dojrzałe — w powtórkach, z odstępem ${MATURE_DAYS} dni lub dłuższym: tych zwykle się już nie zapomina.`,
+        ],
+      },
+      `Słupki pokazują, jak było na koniec każdego z ostatnich ${GROWTH_WEEKS} tygodni — odtworzone z historii odpowiedzi. Karta bez żadnej odpowiedzi, na przykład z importu CSV, pojawia się w nich dopiero po pierwszej.`,
     ],
   },
 

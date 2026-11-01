@@ -4,26 +4,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { BadgeBoard } from '@/components/badge-board';
-import { BarChart } from '@/components/bar-chart';
 import { Dropdown } from '@/components/dropdown';
 import { EmptyState } from '@/components/empty-state';
 import { WithHelp } from '@/components/help-button';
 import { CheckIcon, FlameIcon, GearIcon, PodiumIcon } from '@/components/icons';
-import { Meter } from '@/components/meter';
 import { ProgressRing } from '@/components/progress-ring';
-import { SegmentedControl } from '@/components/segmented-control';
-import { StackedBar } from '@/components/stacked-bar';
+import { StudyStats } from '@/components/study-stats';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
-import {
-  CardStateColors,
-  FlameColors,
-  MaxContentWidth,
-  QueueColors,
-  Radius,
-  RatingColors,
-  Spacing,
-} from '@/constants/theme';
+import { FlameColors, MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
 import {
   awardBadges,
   badgeProgress,
@@ -39,8 +28,7 @@ import {
 import { useNow } from '@/hooks/use-now';
 import { useStreak } from '@/hooks/use-streak';
 import { useTheme } from '@/hooks/use-theme';
-import { GRADE_LABELS, Rating } from '@/lib/scheduler';
-import { formatDate, pluralize, shortMonth } from '@/lib/format';
+import { pluralize } from '@/lib/format';
 import {
   dayKey,
   goalOn,
@@ -50,32 +38,7 @@ import {
   weekStrip,
   type WeekDay,
 } from '@/lib/goals';
-import {
-  cardStates,
-  collectionGrowth,
-  forecast,
-  FORECAST_DAYS,
-  FORECAST_LONG_DAYS,
-  forecastLabel,
-  formatDuration,
-  formatGap,
-  formatPercent,
-  GROWTH_WEEKS,
-  mnemonicComparison,
-  mnemonicGap,
-  ratingMix,
-  recentRetention,
-  RETENTION_WINDOW_DAYS,
-  retentionTone,
-  STUDY_TIME_DAYS,
-  studyTime,
-  studyTimeByDay,
-  todayStats,
-  WEEKDAYS,
-  type CardStates,
-  type RatingSplit,
-  type RetentionStats,
-} from '@/lib/stats';
+import { WEEKDAYS } from '@/lib/stats';
 
 /**
  * "Statystyki": the daily goal, the streak and the badges, which are the same
@@ -83,47 +46,17 @@ import {
  * or one.
  *
  * Everything here is read from `review_logs` and `fsrs_state`, which have
- * been complete since the first day, and worked out in `src/lib/stats.ts`.
- * The bars are plain `View`s, like the meters on "Ustawienia AI" — one chart
- * is no reason to bring back a native SVG dependency.
+ * been complete since the first day, and worked out in `src/lib/stats.ts`;
+ * the per-deck cards are `StudyStats`. The bars are plain `View`s, like the
+ * meters on "Ustawienia AI" — one chart is no reason to bring back a native
+ * SVG dependency.
  */
 export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
 
 /** The Dropdown's value for "every deck". */
 const ALL_DECKS = '';
 
-const FORECAST_HEIGHT = 96;
-
-const STUDY_CHART_HEIGHT = 48;
-
-const GROWTH_HEIGHT = 80;
-
-type Horizon = '7' | '30';
-
-const HORIZONS: { value: Horizon; label: string }[] = [
-  { value: String(FORECAST_DAYS) as Horizon, label: `${FORECAST_DAYS} dni` },
-  { value: String(FORECAST_LONG_DAYS) as Horizon, label: `${FORECAST_LONG_DAYS} dni` },
-];
-
-/** The grades in the order of the buttons, in the buttons' colours. */
-const GRADE_PARTS = [
-  { key: 'again', label: GRADE_LABELS[Rating.Again], color: RatingColors.again },
-  { key: 'hard', label: GRADE_LABELS[Rating.Hard], color: RatingColors.hard },
-  { key: 'good', label: GRADE_LABELS[Rating.Good], color: RatingColors.good },
-  { key: 'easy', label: GRADE_LABELS[Rating.Easy], color: RatingColors.easy },
-] as const;
-
-/** Today's answers by where the cards were, in the queue's colours. */
-const TODAY_PARTS = [
-  { key: 'new', label: 'nowe', color: 'new' },
-  { key: 'learning', label: 'nauka', color: 'learning' },
-  { key: 'review', label: 'powtórki', color: 'review' },
-] as const;
-
 const RING_SIZE = 124;
-
-const answersLabel = (count: number) =>
-  `${count} ${pluralize(count, 'odpowiedź', 'odpowiedzi', 'odpowiedzi')}`;
 
 const daysLabel = (count: number) => `${count} ${pluralize(count, 'dzień', 'dni', 'dni')}`;
 
@@ -150,7 +83,6 @@ export default function StatsScreen() {
   const lightToday = isLightDay(plan, dayKey(now));
   // Set once and left alone, so folded away behind the cog.
   const [goalSettings, setGoalSettings] = useState(false);
-  const [horizon, setHorizon] = useState<Horizon>(String(FORECAST_DAYS) as Horizon);
   // Any light day of the week tells what the lighter goal comes to now.
   const lightGoal = goalOn({ ...plan, lightDays: WEEK_ORDER }, dayKey(now));
 
@@ -181,21 +113,6 @@ export default function StatsScreen() {
   const cards = cardRows.map((row) => ({ ...row, due: row.due.getTime() }));
   const withMnemonic = new Set(mnemonicRows.map((row) => row.cardId));
 
-  const today = todayStats(logs, now);
-  const time = studyTime(logs, now);
-  const timeByDay = studyTimeByDay(logs, now);
-  const days = forecast(cards, now, Number(horizon));
-  const dueTotal = days.reduce((sum, day) => sum + day.count, 0);
-  const busiest = days.reduce((top, day) => (day.count > top.count ? day : top), days[0]);
-  const recent = recentRetention(logs, now);
-  const mnemonics = mnemonicComparison(logs, withMnemonic);
-  const gap = mnemonicGap(mnemonics);
-  const states = cardStates(cards);
-  const ratings = ratingMix(logs, now);
-  const growth = collectionGrowth(logs, cards, now);
-  const grownFirst = growth[0];
-  const grownLast = growth[growth.length - 1];
-  const matured = grownLast.mature - grownFirst.mature;
 
   const deckOptions = [
     { value: ALL_DECKS, label: 'Wszystkie talie' },
@@ -334,281 +251,9 @@ export default function StatsScreen() {
       {cards.length === 0 && logs.length === 0 ? (
         <EmptyState title="Jeszcze nie ma czego liczyć" hint="Dodaj karty i zacznij naukę." />
       ) : (
-        <>
-          <View style={card}>
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              Dzisiaj
-            </ThemedText>
-            <ThemedText style={styles.big}>{today.answers}</ThemedText>
-            {today.answers === 0 ? (
-              <ThemedText type="small" themeColor="textSecondary">
-                Jeszcze nic
-              </ThemedText>
-            ) : (
-              <View style={styles.legend}>
-                {TODAY_PARTS.map((part) => (
-                  <View key={part.key} style={styles.legendItem}>
-                    <View style={[styles.dot, { backgroundColor: QueueColors[part.color] }]} />
-                    <ThemedText type="small">
-                      {part.label} <ThemedText type="smallBold">{today[part.key]}</ThemedText>
-                    </ThemedText>
-                  </View>
-                ))}
-              </View>
-            )}
-            {today.correct != null ? (
-              <ThemedText type="small" themeColor="textSecondary">
-                poprawnie {formatPercent(today.correct)}
-              </ThemedText>
-            ) : null}
-          </View>
-
-          <View style={card}>
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              Czas nauki · {STUDY_TIME_DAYS} dni
-            </ThemedText>
-            {time.week == null ? (
-              <ThemedText type="small" themeColor="textSecondary">
-                Jeszcze nie zmierzony
-              </ThemedText>
-            ) : (
-              <>
-                <ThemedText style={styles.big}>{formatDuration(time.week)}</ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  dziś {time.today == null ? '—' : formatDuration(time.today)}
-                  {time.perAnswer == null ? '' : ` · ${formatDuration(time.perAnswer)} na odpowiedź`}
-                </ThemedText>
-                <View style={styles.chart}>
-                  <BarChart
-                    height={STUDY_CHART_HEIGHT}
-                    bars={timeByDay.map((day, index) => ({
-                      key: day.start,
-                      value: day.ms,
-                      label: index === timeByDay.length - 1 ? 'Dziś' : WEEKDAYS[new Date(day.start).getDay()],
-                      highlight: index === timeByDay.length - 1,
-                    }))}
-                  />
-                </View>
-              </>
-            )}
-          </View>
-
-          <View style={card}>
-            <View style={styles.cardHeader}>
-              <ThemedText type="smallBold" themeColor="textSecondary">
-                Do powtórki
-              </ThemedText>
-              <View style={styles.switch}>
-                <SegmentedControl
-                  size="small"
-                  value={horizon}
-                  options={HORIZONS}
-                  onChange={setHorizon}
-                  accessibilityLabel="Zakres prognozy"
-                />
-              </View>
-            </View>
-            <ThemedText style={styles.big}>{dueTotal}</ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">
-              {pluralize(dueTotal, 'karta', 'karty', 'kart')} w {daysLabel(days.length)}, dziś{' '}
-              {days[0].count}
-              {/* A month's bars carry no numbers, so the heaviest day is named. */}
-              {days.length > FORECAST_DAYS && busiest.count > 0
-                ? ` · najwięcej ${busiest.count}, ${formatDate(new Date(busiest.start), new Date(now))}`
-                : ''}
-            </ThemedText>
-            <View style={styles.chart}>
-              <BarChart
-                height={FORECAST_HEIGHT}
-                showValues
-                bars={days.map((day, index) => ({
-                  key: day.start,
-                  value: day.count,
-                  label:
-                    days.length === FORECAST_DAYS
-                      ? forecastLabel(index, day.start)
-                      : index === 0
-                        ? 'Dziś'
-                        : index % 7 === 0 && index <= days.length - 5
-                          ? formatDate(new Date(day.start), new Date(now))
-                          : '',
-                  highlight: index === 0,
-                }))}
-              />
-            </View>
-          </View>
-
-          <View style={card}>
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              Zapamiętane · ostatnie {RETENTION_WINDOW_DAYS} dni
-            </ThemedText>
-            <RetentionRow stats={recent} big />
-          </View>
-
-          <View style={card}>
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              Oceny · ostatnie {RETENTION_WINDOW_DAYS} dni
-            </ThemedText>
-            <RatingRow title="Powtórki" split={ratings.review} />
-            <RatingRow title="Nauka" split={ratings.learning} />
-          </View>
-
-          {/* The one number Anki cannot show, so it wears the warm background
-              the association field wears in the "+" sheet. */}
-          <View style={[card, { backgroundColor: theme.backgroundHighlight }]}>
-            <View style={styles.cardHeader}>
-              <ThemedText type="smallBold" themeColor="textSecondary">
-                Skojarzenia a pamięć
-              </ThemedText>
-              {gap != null ? (
-                <View
-                  style={[
-                    styles.gap,
-                    {
-                      backgroundColor:
-                        gap > 0 ? RatingColors.good : gap < 0 ? RatingColors.again : theme.backgroundSelected,
-                    },
-                  ]}>
-                  <ThemedText type="smallBold" style={{ color: gap === 0 ? theme.text : '#FFFFFF' }}>
-                    {formatGap(gap)}
-                  </ThemedText>
-                </View>
-              ) : null}
-            </View>
-            <View style={styles.rows}>
-              <View>
-                <ThemedText style={styles.compareTitle}>Ze skojarzeniem</ThemedText>
-                <RetentionRow stats={mnemonics.with} />
-              </View>
-              <View>
-                <ThemedText style={styles.compareTitle}>Bez skojarzenia</ThemedText>
-                <RetentionRow stats={mnemonics.without} muted />
-              </View>
-            </View>
-          </View>
-
-          <View style={card}>
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              Postęp · {GROWTH_WEEKS} tygodni
-            </ThemedText>
-            {grownLast.learned + grownLast.mature === 0 && grownFirst.learned + grownFirst.mature === 0 ? (
-              <ThemedText type="small" themeColor="textSecondary">
-                Jeszcze bez historii
-              </ThemedText>
-            ) : (
-              <>
-                <ThemedText style={styles.big}>{grownLast.mature}</ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  {pluralize(grownLast.mature, 'dojrzała karta', 'dojrzałe karty', 'dojrzałych kart')}
-                  {matured !== 0 ? ` · ${matured > 0 ? '+' : '−'}${Math.abs(matured)} w ${GROWTH_WEEKS} tygodni` : ''}
-                </ThemedText>
-                <View style={styles.chart}>
-                  <BarChart
-                    height={GROWTH_HEIGHT}
-                    thin
-                    bars={growth.map((week, index) => ({
-                      key: week.at,
-                      value: week.learned + week.mature,
-                      stack: [
-                        { value: week.mature, color: CardStateColors.mature },
-                        { value: week.learned, color: CardStateColors.young },
-                      ],
-                      // A month's name under its first week.
-                      label:
-                        index === 0 ||
-                        new Date(week.at).getMonth() !== new Date(growth[index - 1].at).getMonth()
-                          ? shortMonth(new Date(week.at))
-                          : '',
-                      highlight: index === growth.length - 1,
-                    }))}
-                  />
-                </View>
-                <View style={styles.legend}>
-                  <View style={styles.legendItem}>
-                    <View style={[styles.dot, { backgroundColor: CardStateColors.mature }]} />
-                    <ThemedText type="small">
-                      dojrzałe <ThemedText type="smallBold">{grownLast.mature}</ThemedText>
-                    </ThemedText>
-                  </View>
-                  <View style={styles.legendItem}>
-                    <View style={[styles.dot, { backgroundColor: CardStateColors.young }]} />
-                    <ThemedText type="small">
-                      w nauce i młode <ThemedText type="smallBold">{grownLast.learned}</ThemedText>
-                    </ThemedText>
-                  </View>
-                </View>
-              </>
-            )}
-          </View>
-
-          <View style={card}>
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              Karty · {cards.length}
-            </ThemedText>
-            <States states={states} />
-          </View>
-        </>
+        <StudyStats logs={logs} cards={cards} withMnemonic={withMnemonic} now={now} />
       )}
     </ScrollView>
-  );
-}
-
-const TONE_COLOR = {
-  good: RatingColors.good,
-  close: RatingColors.hard,
-  low: RatingColors.again,
-} as const;
-
-/**
- * A retention figure with the count it stands on, always, and a bar with the
- * target marked across it: green at or over the target, amber just under,
- * red well under. With too few answers, the count alone — a percentage from
- * five answers would be read as if it meant something. `muted` draws the bar
- * grey, for the side of a comparison that is not the point.
- */
-function RetentionRow({
-  stats,
-  big = false,
-  muted = false,
-}: {
-  stats: RetentionStats;
-  big?: boolean;
-  muted?: boolean;
-}) {
-  const theme = useTheme();
-  const number = big ? styles.big : styles.medium;
-
-  if (stats.rate == null) {
-    return (
-      <>
-        <ThemedText style={number} themeColor="textSecondary">
-          —
-        </ThemedText>
-        <ThemedText type="small" themeColor="textSecondary">
-          {stats.answers === 0
-            ? 'Brak powtórek'
-            : `Za mało danych · ${answersLabel(stats.answers)}`}
-        </ThemedText>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <ThemedText style={number}>{formatPercent(stats.rate)}</ThemedText>
-      <Meter
-        share={stats.rate}
-        color={muted ? theme.textSecondary : TONE_COLOR[retentionTone(stats.rate, stats.target)]}
-        trackColor={theme.backgroundSelected}
-        marker={stats.target}
-        markerColor={theme.text}
-        style={styles.retentionMeter}
-      />
-      <ThemedText type="small" themeColor="textSecondary">
-        {stats.target != null ? `cel ${formatPercent(stats.target)} · ` : ''}
-        {answersLabel(stats.answers)}
-      </ThemedText>
-    </>
   );
 }
 
@@ -709,77 +354,6 @@ function GoalInput({
   );
 }
 
-/**
- * One kind of answer by grade: a bar in the buttons' colours, and under each
- * colour its name and share — percentages, so a month of answers and a week
- * read alike.
- */
-function RatingRow({ title, split }: { title: string; split: RatingSplit }) {
-  return (
-    <View style={styles.ratingRow}>
-      <View style={styles.cardHeader}>
-        <ThemedText style={styles.compareTitle}>{title}</ThemedText>
-        <ThemedText type="small" themeColor="textSecondary">
-          {split.total === 0 ? 'brak odpowiedzi' : answersLabel(split.total)}
-        </ThemedText>
-      </View>
-      <StackedBar
-        height={14}
-        parts={GRADE_PARTS.map((part) => ({ key: part.key, value: split[part.key], color: part.color }))}
-      />
-      <View style={styles.ratingLegend}>
-        {GRADE_PARTS.map((part) => (
-          <View key={part.key} style={styles.ratingItem}>
-            <View style={styles.legendItem}>
-              <View style={[styles.dot, { backgroundColor: part.color }]} />
-              <ThemedText type="small" themeColor="textSecondary">
-                {part.label}
-              </ThemedText>
-            </View>
-            <ThemedText style={styles.ratingShare}>
-              {split.total === 0 ? '—' : formatPercent(split[part.key] / split.total)}
-            </ThemedText>
-          </View>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-const STATE_ROWS: { key: keyof CardStates; label: string }[] = [
-  { key: 'new', label: 'Nowe' },
-  { key: 'learning', label: 'W nauce' },
-  { key: 'young', label: 'Młode' },
-  { key: 'mature', label: 'Dojrzałe' },
-];
-
-/** One stacked bar and a legend under it. */
-function States({ states }: { states: CardStates }) {
-  return (
-    <>
-      <View style={styles.stack}>
-        <StackedBar
-          parts={STATE_ROWS.map((row) => ({
-            key: row.key,
-            value: states[row.key],
-            color: CardStateColors[row.key],
-          }))}
-        />
-      </View>
-      <View style={styles.legend}>
-        {STATE_ROWS.map((row) => (
-          <View key={row.key} style={styles.legendItem}>
-            <View style={[styles.dot, { backgroundColor: CardStateColors[row.key] }]} />
-            <ThemedText type="small">
-              {row.label} <ThemedText type="smallBold">{states[row.key]}</ThemedText>
-            </ThemedText>
-          </View>
-        ))}
-      </View>
-    </>
-  );
-}
-
 const styles = StyleSheet.create({
   content: {
     flexGrow: 1,
@@ -869,78 +443,5 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
     borderRadius: Radius.large,
     borderWidth: StyleSheet.hairlineWidth,
-  },
-  // The two sizes a number comes in on this screen; digits all one width, so
-  // a count going up does not shuffle what stands beside it.
-  big: {
-    fontSize: 28,
-    lineHeight: 34,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  medium: {
-    fontSize: 22,
-    lineHeight: 28,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  chart: {
-    marginTop: Spacing.three,
-  },
-  retentionMeter: {
-    marginVertical: Spacing.two,
-  },
-  rows: {
-    gap: Spacing.three,
-    marginTop: Spacing.two,
-  },
-  compareTitle: {
-    fontWeight: '600',
-  },
-  gap: {
-    paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.half,
-    borderRadius: Radius.small,
-  },
-  stack: {
-    marginTop: Spacing.two,
-  },
-  switch: {
-    width: 148,
-  },
-  ratingRow: {
-    gap: Spacing.two,
-    marginTop: Spacing.two,
-  },
-  ratingLegend: {
-    flexDirection: 'row',
-  },
-  ratingItem: {
-    flex: 1,
-    gap: Spacing.half,
-  },
-  ratingShare: {
-    fontSize: 17,
-    lineHeight: 22,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-    paddingLeft: 10 + Spacing.one,
-  },
-  legend: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    columnGap: Spacing.three,
-    rowGap: Spacing.one,
-    marginTop: Spacing.two,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.one,
-  },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
   },
 });

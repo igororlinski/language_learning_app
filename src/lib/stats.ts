@@ -152,6 +152,13 @@ export function forecast(
 
 export const STUDY_TIME_DAYS = 7;
 
+/**
+ * The longest an answer is allowed to count for. A card left on screen while
+ * the phone sat on the table is not ten minutes of study; Anki caps it at a
+ * minute too ("maximum answer seconds"), so the two read alike.
+ */
+export const MAX_ANSWER_MS = 60_000;
+
 export type StudyTime = {
   /** Null when nothing today was timed — not zero, which would be a claim. */
   today: number | null;
@@ -323,9 +330,12 @@ export function mnemonicGap(comparison: MnemonicComparison): number | null {
   return Math.round(comparison.with.rate * 100) - Math.round(comparison.without.rate * 100);
 }
 
+/** `+12`, `−3`, `0` — a change, with a real minus sign. */
+export const formatSigned = (count: number): string =>
+  `${count > 0 ? '+' : count < 0 ? '−' : ''}${Math.abs(count)}`;
+
 /** `+12 pkt proc.`, `−3 pkt proc.` — a gap between two percentages. */
-export const formatGap = (points: number): string =>
-  `${points > 0 ? '+' : points < 0 ? '−' : ''}${Math.abs(points)} pkt proc.`;
+export const formatGap = (points: number): string => `${formatSigned(points)} pkt proc.`;
 
 /* ---------------------------------------------------------------- ratings */
 
@@ -373,8 +383,10 @@ export function ratingMix(logs: readonly StatsLog[], now: number): RatingMix {
 export type GrowthWeek = {
   /** The moment the bar shows the collection at — the end of its week, `now` for the last. */
   at: number;
-  /** Cards started and not yet mature: in learning steps or in review under three weeks. */
-  learned: number;
+  /** In learning or relearning steps. */
+  learning: number;
+  /** In review with an interval under `MATURE_DAYS`. */
+  young: number;
   mature: number;
 };
 
@@ -394,7 +406,8 @@ export function collectionGrowth(
 ): GrowthWeek[] {
   const weeks: GrowthWeek[] = Array.from({ length: GROWTH_WEEKS }, (_, index) => ({
     at: shiftedDay(now, (index + 1 - GROWTH_WEEKS) * 7).getTime() + (now - studyDayStart(new Date(now)).getTime()),
-    learned: 0,
+    learning: 0,
+    young: 0,
     mature: 0,
   }));
   weeks[weeks.length - 1].at = now;
@@ -427,8 +440,9 @@ export function collectionGrowth(
       const { state, days } = after(last);
       if (state === State.New) continue;
 
-      if (state === State.Review && days >= MATURE_DAYS) week.mature += 1;
-      else week.learned += 1;
+      if (isLearning(state)) week.learning += 1;
+      else if (days >= MATURE_DAYS) week.mature += 1;
+      else week.young += 1;
     }
   }
 

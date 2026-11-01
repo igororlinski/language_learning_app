@@ -11,6 +11,7 @@ import {
   forecastLabel,
   formatDuration,
   formatGap,
+  formatSigned,
   formatPercent,
   MIN_ANSWERS,
   mnemonicComparison,
@@ -298,18 +299,19 @@ const growth = collectionGrowth(
 
 check('dwanascie tygodni, ostatni to teraz', [growth.length, growth.at(-1)?.at], [12, NOW]);
 check('co tydzien rano, jak teraz', growth.at(-2)?.at, NOW - 7 * DAY);
-check('przed pierwsza odpowiedzia nic', growth[0], { at: growth[0].at, learned: 0, mature: 0 });
+check('przed pierwsza odpowiedzia nic', growth[0], { at: growth[0].at, learning: 0, young: 0, mature: 0 });
 check(
   'karta uczona, potem dojrzala; druga dochodzi; wyzerowana znika',
-  growth.slice(-6).map((week) => [week.learned, week.mature]),
+  growth.slice(-6).map((week) => [week.learning, week.young, week.mature]),
   [
-    [1, 0],
-    [1, 0],
-    [0, 1],
-    [1, 1],
-    [1, 1],
-    [1, 1],
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+    [0, 1, 1],
+    [0, 1, 1],
+    [0, 1, 1],
   ]
 );
-check('karta spoza talii pominieta', collectionGrowth([log(NOW - DAY, { cardId: 9 })], [], NOW).at(-1)?.learned, 0);
+check('karta spoza talii pominieta', collectionGrowth([log(NOW - DAY, { cardId: 9 })], [], NOW).at(-1)?.young, 0);
+check('zmiana ze znakiem', [formatSigned(50), formatSigned(-4), formatSigned(0)], ['+50', '−4', '0']);
 

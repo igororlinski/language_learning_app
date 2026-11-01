@@ -42,7 +42,7 @@ export function SegmentedControl<T extends string>({
     <View
       accessibilityRole="radiogroup"
       accessibilityLabel={accessibilityLabel}
-      style={[styles.track, { backgroundColor: theme.background, borderColor: theme.border }]}>
+      style={[styles.track, { backgroundColor: theme.backgroundTile, borderColor: theme.border }]}>
       {options.map((option) => {
         const selected = option.value === value;
 

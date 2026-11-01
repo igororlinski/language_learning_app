@@ -12,7 +12,7 @@ export type ChartBar = {
    * The bar in coloured layers, bottom first, instead of one accent block;
    * `value` is still their total.
    */
-  stack?: readonly { value: number; color: string }[];
+  stack?: readonly { amount: number; color: string }[];
   /** Under the bar: the day it stands for. Empty for a bar left unnamed. */
   label: string;
   /** Today's bar — full accent and a bold label; the rest are paler. */
@@ -79,8 +79,8 @@ export function BarChart({ bars, height, showValues = false, thin = false }: Bar
                     ? [...bar.stack]
                         .reverse()
                         .map((layer, index) =>
-                          layer.value > 0 ? (
-                            <View key={index} style={{ flex: layer.value, backgroundColor: layer.color }} />
+                          layer.amount > 0 ? (
+                            <View key={index} style={{ flex: layer.amount, backgroundColor: layer.color }} />
                           ) : null
                         )
                     : null}

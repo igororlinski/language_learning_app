@@ -48,7 +48,7 @@ import {
   type GoalPlan,
 } from '@/lib/goals';
 import { dayProgress, newlyEarned, type BadgeProgress } from '@/lib/badges';
-import { MATURE_DAYS } from '@/lib/stats';
+import { MATURE_DAYS, MAX_ANSWER_MS } from '@/lib/stats';
 
 import {
   remainingAllowance,
@@ -2445,12 +2445,8 @@ export function restoreCardStates(rows: FsrsStateRow[]) {
   });
 }
 
-/**
- * The longest an answer is allowed to count for. A card left on screen while
- * the phone sat on the table is not ten minutes of study; Anki caps it at a
- * minute too ("maximum answer seconds"), so the two read alike.
- */
-export const MAX_ANSWER_MS = 60_000;
+// Lives with the statistics it shapes; exported here too for the callers that had it.
+export { MAX_ANSWER_MS };
 
 /**
  * Runs the card through FSRS and persists both the new state and the review
