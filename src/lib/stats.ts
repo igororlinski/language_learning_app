@@ -453,15 +453,24 @@ export function collectionGrowth(
 
 export type CardStates = { new: number; learning: number; young: number; mature: number };
 
+export type CardStage = keyof CardStates;
+
+/**
+ * Where one card is on its way: not seen yet, in learning steps, in review
+ * under three weeks, or past them. The same split everywhere a card's state
+ * is drawn — the card list's stripe and the counts on "Statystyki".
+ */
+export function cardStage(state: number | null | undefined, scheduledDays: number | null | undefined): CardStage {
+  if (state == null || state === State.New) return 'new';
+  if (isLearning(state)) return 'learning';
+
+  return (scheduledDays ?? 0) >= MATURE_DAYS ? 'mature' : 'young';
+}
+
 export function cardStates(cards: readonly StatsCard[]): CardStates {
   const counts: CardStates = { new: 0, learning: 0, young: 0, mature: 0 };
 
-  for (const card of cards) {
-    if (card.state === State.New) counts.new += 1;
-    else if (isLearning(card.state)) counts.learning += 1;
-    else if (card.scheduledDays >= MATURE_DAYS) counts.mature += 1;
-    else counts.young += 1;
-  }
+  for (const card of cards) counts[cardStage(card.state, card.scheduledDays)] += 1;
 
   return counts;
 }

@@ -4,6 +4,7 @@
  */
 import { Rating, State } from '@/lib/scheduler';
 import {
+  cardStage,
   cardStates,
   collectionGrowth,
   forecast,
@@ -314,4 +315,18 @@ check(
 );
 check('karta spoza talii pominieta', collectionGrowth([log(NOW - DAY, { cardId: 9 })], [], NOW).at(-1)?.young, 0);
 check('zmiana ze znakiem', [formatSigned(50), formatSigned(-4), formatSigned(0)], ['+50', '−4', '0']);
+group('Statystyki: etap karty');
+
+check(
+  'nowa, w nauce, ponowna nauka, mloda, dojrzala',
+  [
+    cardStage(State.New, 0),
+    cardStage(State.Learning, 0),
+    cardStage(State.Relearning, 0),
+    cardStage(State.Review, 20),
+    cardStage(State.Review, 21),
+  ],
+  ['new', 'learning', 'learning', 'young', 'mature']
+);
+check('bez stanu to nowa', cardStage(null, null), 'new');
 

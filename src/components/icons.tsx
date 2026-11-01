@@ -307,6 +307,38 @@ export function PencilIcon({ size = 18, color, style }: IconProps) {
   );
 }
 
+/** A magnifying glass, for search: a ring and its handle. */
+export function SearchIcon({ size = 18, color, style }: IconProps) {
+  const stroke = Math.max(1.5, size * 0.12);
+  const ring = size * 0.66;
+
+  return (
+    <View style={[{ width: size, height: size }, style]}>
+      <View
+        style={{
+          width: ring,
+          height: ring,
+          borderRadius: ring / 2,
+          borderWidth: stroke,
+          borderColor: color,
+        }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          right: size * 0.04,
+          bottom: size * 0.1,
+          width: stroke,
+          height: size * 0.36,
+          borderRadius: stroke / 2,
+          backgroundColor: color,
+          transform: [{ rotate: '-45deg' }],
+        }}
+      />
+    </View>
+  );
+}
+
 /** A plus, for adding: two rounded bars crossing. */
 export function PlusIcon({ size = 18, color, style }: IconProps) {
   const stroke = Math.max(2, size * 0.14);

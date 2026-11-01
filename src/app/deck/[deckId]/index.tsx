@@ -1,17 +1,16 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
 import { Stack, useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { Alert, FlatList, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 
 import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { Button } from '@/components/button';
 import { DueCounts } from '@/components/due-counts';
-import { Dropdown, type DropdownOption } from '@/components/dropdown';
 import { EmptyState } from '@/components/empty-state';
-import { TextField } from '@/components/text-field';
+import { CheckIcon, PlusIcon, SearchIcon } from '@/components/icons';
 import { ThemedText } from '@/components/themed-text';
 import { useToast } from '@/components/toast';
-import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import { CardStateColors, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
   cardsInDeckQuery,
   cardsMediaFiles,
@@ -42,19 +41,30 @@ import { cardsLabel, formatDate, formatDue } from '@/lib/format';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 import { filterCards } from '@/lib/search';
 import { filterByTags } from '@/lib/tags';
-import { STATE_LABELS, State } from '@/lib/scheduler';
+import { cardStage, type CardStage } from '@/lib/stats';
 
 /**
  * What the "⋯" sheet is showing: the things that can be done to the selection,
  * or the list of decks to copy or move it into. One sheet swaps its contents
  * rather than opening a second modal — see `SheetAction.keepOpen`.
  */
-type MenuView = 'deck' | 'actions' | 'copy' | 'move';
+type MenuView = 'deck' | 'actions' | 'copy' | 'move' | 'sort';
 
-const SORT_OPTIONS: DropdownOption<CardOrder>[] = CARD_ORDERS.map((value) => ({
-  value,
-  label: CARD_ORDER_LABELS[value],
-}));
+/** The orders as short as four of them side by side need. */
+const SHORT_ORDER_LABELS: Record<CardOrder, string> = {
+  created: 'Data',
+  alpha: 'A–Z',
+  due: 'Termin',
+  fields: 'Pola',
+  stage: 'Status',
+};
+
+const STAGE_LABELS: Record<CardStage, string> = {
+  new: 'nowa',
+  learning: 'w nauce',
+  young: 'młoda',
+  mature: 'dojrzała',
+};
 
 /** Placeholder while the aggregate is still loading, so the counters never flicker. */
 const EMPTY_BREAKDOWN = {
@@ -359,6 +369,7 @@ export default function DeckScreen() {
     actions: `Zaznaczono ${selectedIds.length}`,
     copy: 'Kopiuj do talii',
     move: 'Przenieś do talii',
+    sort: 'Kolejność kart',
   };
 
   return (
@@ -398,12 +409,14 @@ export default function DeckScreen() {
                 {deck.description}
               </ThemedText>
             ) : null}
-            <ThemedText type="small" themeColor="textSecondary">
-              {narrowed
-                ? `${visibleCards.length} z ${cardsLabel(allCards.length)}`
-                : cardsLabel(allCards.length)}
-            </ThemedText>
-            <DueCounts counts={counts} showLabels />
+            <View style={styles.summary}>
+              <ThemedText type="smallBold">
+                {narrowed
+                  ? `${visibleCards.length} z ${cardsLabel(allCards.length)}`
+                  : cardsLabel(allCards.length)}
+              </ThemedText>
+              <DueCounts counts={counts} showLabels />
+            </View>
             {heldBack > 0 ? (
               <ThemedText type="small" themeColor="textSecondary">
                 {`Wstrzymane limitem: ${cardsLabel(heldBack)}`}
@@ -411,84 +424,73 @@ export default function DeckScreen() {
             ) : null}
 
             {allCards.length > 0 ? (
-              <View style={styles.search}>
-                <TextField
-                  label="Szukaj w talii"
-                  value={query}
-                  onChangeText={setQuery}
-                  placeholder="np. break, łamać, /breɪk/"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  returnKeyType="search"
-                />
-                {searching ? (
-                  <Pressable onPress={() => setQuery('')} hitSlop={12} style={styles.clear}>
-                    <ThemedText type="small" style={{ color: theme.accent }}>
-                      Wyczyść
-                    </ThemedText>
-                  </Pressable>
-                ) : null}
+              <View style={styles.tools}>
+                <SearchBox value={query} onChange={setQuery} />
 
-                {tagChips.length > 0 ? (
-                  <View style={styles.tags}>
-                    {tagChips.map((tag) => {
-                      const picked = pickedTags.includes(tag.id);
+                {tagChips.length > 0 || allCards.length > 1 ? (
+                  <View style={styles.filters}>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      keyboardShouldPersistTaps="handled"
+                      style={styles.tagScroll}
+                      contentContainerStyle={styles.tags}>
+                      {tagChips.map((tag) => {
+                        const picked = pickedTags.includes(tag.id);
 
-                      return (
-                        <Pressable
-                          key={tag.id}
-                          onPress={() => toggleTag(tag.id)}
-                          accessibilityRole="checkbox"
-                          accessibilityState={{ checked: picked }}
-                          accessibilityLabel={`${tag.name}, ${cardsLabel(tag.cardCount)}`}
-                          style={({ pressed }) => [
-                            styles.tag,
-                            {
-                              borderColor: picked ? theme.accent : theme.border,
-                              backgroundColor: picked
-                                ? theme.backgroundSelected
-                                : pressed
-                                  ? theme.backgroundSelected
-                                  : 'transparent',
-                            },
-                          ]}>
-                          <ThemedText
-                            type={picked ? 'smallBold' : 'small'}
-                            style={picked ? { color: theme.accent } : undefined}>
-                            {`${tag.name} ${tag.cardCount}`}
-                          </ThemedText>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                ) : null}
+                        return (
+                          <Pressable
+                            key={tag.id}
+                            onPress={() => toggleTag(tag.id)}
+                            accessibilityRole="checkbox"
+                            accessibilityState={{ checked: picked }}
+                            accessibilityLabel={`${tag.name}, ${cardsLabel(tag.cardCount)}`}
+                            style={({ pressed }) => [
+                              styles.tag,
+                              {
+                                borderColor: picked ? theme.accent : theme.border,
+                                backgroundColor: picked
+                                  ? theme.accent
+                                  : pressed
+                                    ? theme.backgroundSelected
+                                    : theme.backgroundElement,
+                              },
+                            ]}>
+                            <ThemedText
+                              type="small"
+                              style={{ color: picked ? theme.onAccent : theme.text }}>
+                              {tag.name}{' '}
+                              <ThemedText
+                                type="small"
+                                style={{ color: picked ? theme.onAccent : theme.textSecondary }}>
+                                {tag.cardCount}
+                              </ThemedText>
+                            </ThemedText>
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
 
-                {allCards.length > 1 ? (
-                  <View style={styles.sort}>
-                    <Dropdown
-                      value={order}
-                      options={SORT_OPTIONS}
-                      onChange={pickOrder}
-                      accessibilityLabel="Kolejność kart"
-                      style={styles.sortField}
-                    />
-                    <Pressable
-                      onPress={() => setDirection(direction === 'asc' ? 'desc' : 'asc')}
-                      accessibilityRole="button"
-                      accessibilityLabel={DIRECTION_LABELS[order][direction]}
-                      style={({ pressed }) => [
-                        styles.direction,
-                        {
-                          borderColor: theme.border,
-                          backgroundColor: pressed
-                            ? theme.backgroundSelected
-                            : theme.backgroundElement,
-                        },
-                      ]}>
-                      <ThemedText type="small" style={{ color: theme.accent }}>
-                        {direction === 'asc' ? '↑' : '↓'}
-                      </ThemedText>
-                    </Pressable>
+                    {allCards.length > 1 ? (
+                      <Pressable
+                        onPress={() => setMenu('sort')}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Kolejność: ${CARD_ORDER_LABELS[order]}, ${DIRECTION_LABELS[order][direction]}`}
+                        style={({ pressed }) => [
+                          styles.sortButton,
+                          {
+                            borderColor: theme.border,
+                            backgroundColor: pressed ? theme.backgroundSelected : theme.backgroundElement,
+                          },
+                        ]}>
+                        <ThemedText type="small" numberOfLines={1}>
+                          {SHORT_ORDER_LABELS[order]}
+                        </ThemedText>
+                        <ThemedText type="smallBold" style={{ color: theme.accent }}>
+                          {direction === 'asc' ? '↑' : '↓'}
+                        </ThemedText>
+                      </Pressable>
+                    ) : null}
                   </View>
                 ) : null}
               </View>
@@ -507,6 +509,16 @@ export default function DeckScreen() {
         }
         renderItem={({ item }) => {
           const picked = Boolean(selected?.has(item.id));
+          const stage = cardStage(item.state, item.scheduledDays);
+          // One fact on the right, the one the list is sorted by: the date
+          // for "Data dodania", the status for "Status", when it comes back
+          // for everything else.
+          const fact =
+            order === 'created'
+              ? formatDate(item.createdAt, new Date(now))
+              : order === 'stage' || stage === 'new'
+                ? STAGE_LABELS[stage]
+                : formatDue(item.due, now);
 
           return (
             <Pressable
@@ -520,7 +532,7 @@ export default function DeckScreen() {
               onLongPress={() => (selecting ? toggle(item.id) : setSelected(new Set([item.id])))}
               accessibilityRole={selecting ? 'checkbox' : 'button'}
               accessibilityState={selecting ? { checked: picked } : undefined}
-              accessibilityLabel={item.front}
+              accessibilityLabel={`${item.front}, ${STAGE_LABELS[stage]}, ${fact}`}
               style={({ pressed }) => [
                 styles.row,
                 {
@@ -538,32 +550,21 @@ export default function DeckScreen() {
                       backgroundColor: picked ? theme.accent : 'transparent',
                     },
                   ]}>
-                  {picked ? (
-                    <ThemedText type="smallBold" style={{ color: theme.onAccent }}>
-                      ✓
-                    </ThemedText>
-                  ) : null}
+                  {picked ? <CheckIcon size={14} color={theme.onAccent} /> : null}
                 </View>
               ) : null}
 
-              <View style={styles.rowMain}>
-                {/* The question only. The list is for finding a card, and the
-                    answer is the one thing worth not being reminded of. */}
-                <ThemedText numberOfLines={3} style={styles.front}>
-                  {item.front}
-                </ThemedText>
-              </View>
-              <View style={styles.rowMeta}>
-                <ThemedText type="small" themeColor="textSecondary">
-                  {STATE_LABELS[(item.state ?? State.New) as State]}
-                </ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  {formatDue(item.due, now)}
-                </ThemedText>
-                <ThemedText type="small" themeColor="textSecondary" style={styles.added}>
-                  {formatDate(item.createdAt, new Date(now))}
-                </ThemedText>
-              </View>
+              {/* Where the card is on its way, in the colours of "Statystyki". */}
+              <View style={[styles.stripe, { backgroundColor: CardStateColors[stage] }]} />
+
+              {/* The question only. The list is for finding a card, and the
+                  answer is the one thing worth not being reminded of. */}
+              <ThemedText numberOfLines={2} style={styles.front}>
+                {item.front}
+              </ThemedText>
+              <ThemedText type="small" themeColor="textSecondary" style={styles.fact}>
+                {fact}
+              </ThemedText>
             </Pressable>
           );
         }}
@@ -588,7 +589,7 @@ export default function DeckScreen() {
             ) : null}
           </View>
         ) : (
-          <>
+          <View style={styles.footerRow}>
             <Button
               title={
                 due > 0
@@ -598,14 +599,20 @@ export default function DeckScreen() {
                     : 'Nic do powtórki'
               }
               disabled={due === 0}
+              style={styles.grow}
               onPress={() => router.push({ pathname: '/deck/[deckId]/review', params: { deckId } })}
             />
-            <Button
-              title="Dodaj kartę"
-              variant="secondary"
+            <Pressable
               onPress={() => router.push({ pathname: '/card-editor', params: { deckId } })}
-            />
-          </>
+              accessibilityRole="button"
+              accessibilityLabel="Dodaj kartę"
+              style={({ pressed }) => [
+                styles.add,
+                { backgroundColor: theme.backgroundSelected, opacity: pressed ? 0.75 : 1 },
+              ]}>
+              <PlusIcon size={20} color={theme.text} />
+            </Pressable>
+          </View>
         )}
       </View>
 
@@ -616,6 +623,32 @@ export default function DeckScreen() {
           subtitle={
             menu === 'copy' || menu === 'move' ? cardsLabel(selectedIds.length) : undefined
           }
+          settings={
+            menu === 'sort'
+              ? [
+                  {
+                    kind: 'segment',
+                    label: 'Według',
+                    value: order,
+                    options: CARD_ORDERS.map((value) => ({
+                      value,
+                      label: SHORT_ORDER_LABELS[value],
+                    })),
+                    onChange: (value) => pickOrder(value as CardOrder),
+                  },
+                  {
+                    kind: 'segment',
+                    label: 'Kierunek',
+                    value: direction,
+                    options: (['asc', 'desc'] as const).map((value) => ({
+                      value,
+                      label: DIRECTION_LABELS[order][value],
+                    })),
+                    onChange: (value) => setDirection(value as SortDirection),
+                  },
+                ]
+              : undefined
+          }
           actions={
             menu === 'deck'
               ? deckActions()
@@ -623,10 +656,47 @@ export default function DeckScreen() {
                 ? copyActions()
                 : menu === 'move'
                   ? moveActions()
-                  : selectionActions()
+                  : menu === 'sort'
+                    ? []
+                    : selectionActions()
           }
           onClose={() => setMenu(null)}
         />
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The search field without a label over it: a magnifier says what it is, and
+ * a cross inside clears it — one line instead of three.
+ */
+function SearchBox({ value, onChange }: { value: string; onChange: (text: string) => void }) {
+  const theme = useTheme();
+
+  return (
+    <View style={[styles.searchBox, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+      <SearchIcon size={16} color={theme.textSecondary} />
+      <TextInput
+        value={value}
+        onChangeText={onChange}
+        placeholder="Szukaj w talii"
+        placeholderTextColor={theme.textSecondary}
+        accessibilityLabel="Szukaj w talii"
+        autoCapitalize="none"
+        autoCorrect={false}
+        returnKeyType="search"
+        style={[styles.searchInput, { color: theme.text }]}
+      />
+      {value ? (
+        <Pressable
+          onPress={() => onChange('')}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="Wyczyść wyszukiwanie"
+          style={[styles.clear, { backgroundColor: theme.backgroundSelected }]}>
+          <PlusIcon size={12} color={theme.textSecondary} style={styles.cross} />
+        </Pressable>
       ) : null}
     </View>
   );
@@ -643,15 +713,55 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
   },
-  search: {
-    paddingTop: Spacing.two,
-    gap: Spacing.one,
+  header: {
+    gap: Spacing.two,
+    paddingBottom: Spacing.two,
   },
-  tags: {
+  summary: {
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     flexWrap: 'wrap',
     gap: Spacing.two,
-    marginTop: Spacing.two,
+  },
+  tools: {
+    gap: Spacing.two,
+    marginTop: Spacing.one,
+  },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    minHeight: 44,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Radius.medium,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    paddingVertical: Spacing.two,
+  },
+  clear: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cross: {
+    transform: [{ rotate: '45deg' }],
+  },
+  filters: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  tagScroll: {
+    flex: 1,
+  },
+  tags: {
+    gap: Spacing.two,
   },
   tag: {
     paddingHorizontal: Spacing.three,
@@ -659,45 +769,38 @@ const styles = StyleSheet.create({
     borderRadius: Radius.large,
     borderWidth: StyleSheet.hairlineWidth,
   },
-  sort: {
+  sortButton: {
+    marginLeft: 'auto',
     flexDirection: 'row',
-    // Top-aligned so the toggle stays put while the list unfolds downwards.
-    alignItems: 'flex-start',
-    gap: Spacing.two,
-    marginTop: Spacing.one,
-  },
-  sortField: {
-    flex: 1,
-  },
-  direction: {
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-    borderRadius: Radius.medium,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  clear: {
-    alignSelf: 'flex-end',
-  },
-  header: {
+    alignItems: 'center',
     gap: Spacing.one,
-    paddingBottom: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    borderRadius: Radius.large,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.three,
-    padding: Spacing.three,
-    borderRadius: Radius.large,
+    paddingVertical: Spacing.three,
+    paddingLeft: Spacing.two,
+    paddingRight: Spacing.three,
+    borderRadius: Radius.medium,
     borderWidth: StyleSheet.hairlineWidth,
   },
-  /** Dimmer than the rest of the meta column — it is the least urgent number. */
-  added: {
-    opacity: 0.7,
+  /** Where the card is on its way — new, learning, young, mature. */
+  stripe: {
+    width: 4,
+    alignSelf: 'stretch',
+    borderRadius: 2,
   },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.three,
+  front: {
+    flex: 1,
+    fontWeight: '600',
+  },
+  fact: {
+    fontVariant: ['tabular-nums'],
   },
   /** The checkbox that only exists while the list is picking. */
   tick: {
@@ -722,24 +825,6 @@ const styles = StyleSheet.create({
   selectionHint: {
     flexShrink: 1,
   },
-  selectionActions: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-  },
-  selectionAction: {
-    flex: 1,
-  },
-  rowMain: {
-    flex: 1,
-    gap: Spacing.half,
-  },
-  rowMeta: {
-    alignItems: 'flex-end',
-    gap: Spacing.half,
-  },
-  front: {
-    fontWeight: '600',
-  },
   footer: {
     padding: Spacing.three,
     gap: Spacing.two,
@@ -747,5 +832,19 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
     width: '100%',
     alignSelf: 'center',
+  },
+  footerRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  grow: {
+    flex: 1,
+  },
+  add: {
+    width: 48,
+    height: 48,
+    borderRadius: Radius.medium,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

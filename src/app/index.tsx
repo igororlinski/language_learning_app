@@ -8,17 +8,18 @@ import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { Button } from '@/components/button';
 import { DueCounts } from '@/components/due-counts';
 import { EmptyState } from '@/components/empty-state';
-import { GoalBar } from '@/components/goal-bar';
-import { MenuIcon } from '@/components/icons';
+import { CheckIcon, FlameIcon, MenuIcon } from '@/components/icons';
+import { ProgressRing } from '@/components/progress-ring';
 import { SideMenu } from '@/components/side-menu';
 import { ThemedText } from '@/components/themed-text';
-import { MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
+import { FlameColors, MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
 import { deckMediaFiles, decksWithStatsQuery, deleteDeck } from '@/db/queries';
 import { useNow } from '@/hooks/use-now';
 import { useStreak } from '@/hooks/use-streak';
 import { useTheme } from '@/hooks/use-theme';
 import { deleteMedia } from '@/lib/media-files';
 import { cardsLabel } from '@/lib/format';
+import { goalShare } from '@/lib/goals';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 
 type DeckMenuTarget = { id: number; name: string; cardCount: number; due: number; heldBack: number };
@@ -118,15 +119,31 @@ export default function DecksScreen() {
             hitSlop={Spacing.two}
             accessibilityRole="button"
             accessibilityLabel={`Seria ${streak.current}, dziś ${streak.today.answers} z ${streak.today.goal}`}
-            style={({ pressed }) => [styles.goal, { opacity: pressed ? 0.5 : 1 }]}>
-            <ThemedText
-              type="smallBold"
-              style={streak.today.met ? { color: RatingColors.good } : undefined}>
-              Seria {streak.current}
-            </ThemedText>
-            <View style={styles.goalProgress}>
-              <GoalBar today={streak.today} />
-              <ThemedText type="small" themeColor="textSecondary" style={styles.goalCount}>
+            style={({ pressed }) => [
+              styles.goal,
+              { backgroundColor: theme.backgroundElement, borderColor: theme.border, opacity: pressed ? 0.6 : 1 },
+            ]}>
+            {/* The same flame and ring as the top of "Statystyki", small. */}
+            <View style={styles.goalPart}>
+              <FlameIcon
+                size={18}
+                color={streak.today.met ? FlameColors.outer : theme.textSecondary}
+                core={streak.today.met ? FlameColors.inner : theme.backgroundElement}
+              />
+              <ThemedText type="smallBold" style={styles.tabular}>
+                {streak.current}
+              </ThemedText>
+            </View>
+            <View style={[styles.goalDivider, { backgroundColor: theme.border }]} />
+            <View style={styles.goalPart}>
+              <ProgressRing
+                size={18}
+                stroke={3}
+                progress={goalShare(streak.today)}
+                color={streak.today.met ? RatingColors.good : theme.accent}
+                trackColor={theme.backgroundSelected}
+              />
+              <ThemedText type="small" themeColor="textSecondary" style={styles.tabular}>
                 {streak.today.answers}/{streak.today.goal}
               </ThemedText>
             </View>
@@ -173,9 +190,11 @@ export default function DecksScreen() {
                   },
                 ]}>
                 <View style={styles.rowMain}>
-                  <ThemedText style={styles.deckName}>{item.name}</ThemedText>
+                  <ThemedText style={styles.deckName} numberOfLines={2}>
+                    {item.name}
+                  </ThemedText>
                   {item.description ? (
-                    <ThemedText type="small" themeColor="textSecondary" numberOfLines={2}>
+                    <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
                       {item.description}
                     </ThemedText>
                   ) : null}
@@ -184,28 +203,39 @@ export default function DecksScreen() {
                   </ThemedText>
                 </View>
 
-                {/* Its own target, so the row itself always does one thing:
-                    open the deck. Gone when there is nothing to study — the
-                    deck screen and the long-press menu say why. */}
+                {/* Always the same slot, so the tiles line up: the way into a
+                    session when there is one, and why not when there is not.
+                    Its own target, so the tile itself always opens the deck. */}
                 {due > 0 ? (
                   <Pressable
                     onPress={() => startStudy(item.id)}
                     hitSlop={Spacing.two}
                     accessibilityRole="button"
                     accessibilityLabel={`Ucz się, ${cardsLabel(due)} do powtórki`}
-                    style={({ pressed }) => [
-                      styles.study,
-                      {
-                        borderColor: theme.accent,
-                        backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
-                      },
-                    ]}>
-                    <ThemedText type="smallBold" style={{ color: theme.accent }}>
-                      Ucz się
-                    </ThemedText>
+                    style={({ pressed }) => [styles.side, { opacity: pressed ? 0.7 : 1 }]}>
                     <DueCounts counts={counts} style={styles.studyCounts} />
+                    <View style={[styles.study, { backgroundColor: theme.accent }]}>
+                      <ThemedText type="smallBold" style={{ color: theme.onAccent }}>
+                        Ucz się
+                      </ThemedText>
+                    </View>
                   </Pressable>
-                ) : null}
+                ) : (
+                  <View style={styles.side}>
+                    {heldBack > 0 ? (
+                      <ThemedText type="small" themeColor="textSecondary" style={styles.done}>
+                        Limit na dziś
+                      </ThemedText>
+                    ) : (
+                      <View style={styles.doneRow}>
+                        <CheckIcon size={14} color={RatingColors.good} />
+                        <ThemedText type="small" themeColor="textSecondary">
+                          Na dziś gotowe
+                        </ThemedText>
+                      </View>
+                    )}
+                  </View>
+                )}
               </Pressable>
             );
           }}
@@ -257,21 +287,31 @@ const styles = StyleSheet.create({
     paddingRight: Spacing.three,
   },
   headerTitle: {
-    fontSize: 20,
-    fontWeight: '600',
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '700',
   },
   goal: {
     marginLeft: 'auto',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.three,
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    borderRadius: Radius.large,
+    borderWidth: StyleSheet.hairlineWidth,
   },
-  goalProgress: {
-    width: 64,
-    gap: Spacing.half,
+  goalPart: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
   },
-  goalCount: {
-    textAlign: 'center',
+  goalDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+  },
+  tabular: {
+    fontVariant: ['tabular-nums'],
   },
   body: {
     flex: 1,
@@ -302,16 +342,29 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '600',
   },
-  study: {
+  // The right-hand slot of every tile, one width for all of them.
+  side: {
+    minWidth: 104,
     alignItems: 'center',
-    gap: Spacing.half,
+    gap: Spacing.two,
+  },
+  study: {
+    alignSelf: 'stretch',
+    alignItems: 'center',
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.two,
     borderRadius: Radius.medium,
-    borderWidth: 1,
   },
   studyCounts: {
     gap: Spacing.two,
+  },
+  doneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+  },
+  done: {
+    textAlign: 'center',
   },
   footer: {
     padding: Spacing.three,

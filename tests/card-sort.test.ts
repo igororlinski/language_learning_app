@@ -144,6 +144,7 @@ check('domyslne kierunki', DEFAULT_DIRECTIONS, {
   alpha: 'asc',
   due: 'asc',
   fields: 'desc',
+  stage: 'asc',
 });
 check(
   'bez podanego kierunku obowiazuje domyslny',
@@ -157,3 +158,33 @@ check(
   CARD_ORDERS.filter((order) => !DIRECTION_LABELS[order].asc || !DIRECTION_LABELS[order].desc),
   []
 );
+group('Kolejnosc kart: status');
+
+const staged = (front: string, state: number | null, scheduledDays: number, created = 1): SortableCard => ({
+  front,
+  createdAt: day(created),
+  state,
+  scheduledDays,
+});
+
+const byStage = [
+  staged('dojrzala', 2, 40),
+  staged('nowa', 0, 0),
+  staged('mloda dluzsza', 2, 15),
+  staged('w nauce', 1, 0),
+  staged('mloda krotsza', 2, 3),
+  staged('przypominana', 3, 0),
+  staged('bez stanu', null, 0, 2),
+];
+
+check('od nowych przez nauke i mlode do dojrzalych', fronts(sortCards(byStage, 'stage')), [
+  'nowa',
+  'bez stanu',
+  'w nauce',
+  'przypominana',
+  'mloda krotsza',
+  'mloda dluzsza',
+  'dojrzala',
+]);
+check('malejaco od dojrzalych', fronts(sortCards(byStage, 'stage', 'desc'))[0], 'dojrzala');
+

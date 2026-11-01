@@ -309,6 +309,8 @@ export function cardsInDeckQuery(deckId: number) {
       createdAt: cards.createdAt,
       due: fsrsState.due,
       state: fsrsState.state,
+      /** Only the stripe reads this: young or mature. */
+      scheduledDays: fsrsState.scheduledDays,
       reps: fsrsState.reps,
       lapses: fsrsState.lapses,
     })

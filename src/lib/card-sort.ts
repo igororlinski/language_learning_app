@@ -7,7 +7,9 @@
  * screen already holds every card in the deck, so there is nothing to re-read.
  */
 
-export const CARD_ORDERS = ['created', 'alpha', 'due', 'fields'] as const;
+import { cardStage, type CardStage } from '@/lib/stats';
+
+export const CARD_ORDERS = ['created', 'alpha', 'due', 'fields', 'stage'] as const;
 export type CardOrder = (typeof CARD_ORDERS)[number];
 
 export const DEFAULT_CARD_ORDER: CardOrder = 'created';
@@ -17,6 +19,7 @@ export const CARD_ORDER_LABELS: Record<CardOrder, string> = {
   alpha: 'Alfabetycznie',
   due: 'Termin powtórki',
   fields: 'Liczba pól',
+  stage: 'Status',
 };
 
 export type SortDirection = 'asc' | 'desc';
@@ -31,6 +34,7 @@ export const DEFAULT_DIRECTIONS: Record<CardOrder, SortDirection> = {
   alpha: 'asc',
   due: 'asc',
   fields: 'desc',
+  stage: 'asc',
 };
 
 /** What the direction toggle means for the order in hand. */
@@ -39,6 +43,7 @@ export const DIRECTION_LABELS: Record<CardOrder, Record<SortDirection, string>> 
   alpha: { asc: 'Od A do Z', desc: 'Od Z do A' },
   due: { asc: 'Najbliższe najpierw', desc: 'Najdalsze najpierw' },
   fields: { asc: 'Od najmniej pól', desc: 'Od najwięcej pól' },
+  stage: { asc: 'Od nowych', desc: 'Od dojrzałych' },
 };
 
 /** Everything an order needs to know about a card. */
@@ -47,7 +52,15 @@ export type SortableCard = {
   createdAt: Date;
   due?: Date | null;
   fieldCount?: number | null;
+  /** FSRS state and interval, for the order by status. */
+  state?: number | null;
+  scheduledDays?: number | null;
 };
+
+/** The way from a new card to one remembered for good. */
+const STAGE_RANK: Record<CardStage, number> = { new: 0, learning: 1, young: 2, mature: 3 };
+
+const stageRank = (card: SortableCard) => STAGE_RANK[cardStage(card.state, card.scheduledDays)];
 
 /**
  * Polish alphabetical order, which is not byte order: `Intl.Collator` puts `ć`
@@ -68,6 +81,8 @@ const COMPARE: Record<CardOrder, (a: SortableCard, b: SortableCard) => number> =
   alpha: (a, b) => collator.compare(a.front, b.front),
   due: (a, b) => dueAt(a) - dueAt(b),
   fields: (a, b) => (a.fieldCount ?? 0) - (b.fieldCount ?? 0),
+  // Within one status, the shorter interval first: the card held less firmly.
+  stage: (a, b) => stageRank(a) - stageRank(b) || (a.scheduledDays ?? 0) - (b.scheduledDays ?? 0),
 };
 
 /**
