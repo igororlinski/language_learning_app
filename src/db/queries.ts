@@ -1230,6 +1230,7 @@ export function statsLogsQuery(deckId: number | null) {
       cardId: reviewLogs.cardId,
       rating: reviewLogs.rating,
       state: reviewLogs.state,
+      scheduledDays: reviewLogs.scheduledDays,
       reviewedAt: reviewLogs.reviewedAt,
       durationMs: reviewLogs.durationMs,
       targetRetention: decks.desiredRetention,

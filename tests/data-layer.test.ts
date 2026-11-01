@@ -2053,9 +2053,10 @@ check(
   {
     rating: statsLogs[0]?.rating,
     state: statsLogs[0]?.state,
+    scheduledDays: statsLogs[0]?.scheduledDays,
     target: statsLogs[0]?.targetRetention,
   },
-  { rating: Rating.Good, state: State.New, target: statsDeck.desiredRetention }
+  { rating: Rating.Good, state: State.New, scheduledDays: 0, target: statsDeck.desiredRetention }
 );
 check(
   'bez talii — wszystkie',

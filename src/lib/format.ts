@@ -56,6 +56,9 @@ const MONTHS = [
  * once the year stops being obvious. Written out rather than left to
  * `toLocaleDateString`, whose Polish output depends on the device's ICU data.
  */
+/** `paź` — a month as short as an axis needs it. */
+export const shortMonth = (date: Date): string => MONTHS[date.getMonth()];
+
 export function formatDate(date: Date, now = new Date()): string {
   const day = `${date.getDate()} ${MONTHS[date.getMonth()]}`;
 

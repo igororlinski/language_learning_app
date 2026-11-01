@@ -5,7 +5,9 @@
 import { Rating, State } from '@/lib/scheduler';
 import {
   cardStates,
+  collectionGrowth,
   forecast,
+  FORECAST_LONG_DAYS,
   forecastLabel,
   formatDuration,
   formatGap,
@@ -13,6 +15,7 @@ import {
   MIN_ANSWERS,
   mnemonicComparison,
   mnemonicGap,
+  ratingMix,
   recentRetention,
   retention,
   retentionTone,
@@ -35,6 +38,7 @@ const log = (reviewedAt: number, over: Partial<StatsLog> = {}): StatsLog => ({
   cardId: 1,
   rating: Rating.Good,
   state: State.Review,
+  scheduledDays: 0,
   reviewedAt,
   durationMs: null,
   targetRetention: 0.94,
@@ -242,4 +246,70 @@ check('z plusem, minusem i bez znaku', [formatGap(12), formatGap(-3), formatGap(
   '−3 pkt proc.',
   '0 pkt proc.',
 ]);
+group('Statystyki: oceny');
+
+const mix = ratingMix(
+  [
+    log(at(20, 9), { rating: Rating.Good }),
+    log(at(20, 9), { rating: Rating.Good }),
+    log(at(19, 9), { rating: Rating.Easy }),
+    log(at(19, 9), { rating: Rating.Again, state: State.Relearning }),
+    log(at(18, 9), { rating: Rating.Hard, state: State.New }),
+    log(at(18, 9), { rating: Rating.Good, state: State.Learning }),
+    // Outside the thirty days.
+    log(at(20, 9) - 40 * 86_400_000, { rating: Rating.Again }),
+  ],
+  NOW
+);
+
+check('powtorki osobno', mix.review, { again: 0, hard: 0, good: 2, easy: 1, total: 3 });
+check('nauka razem z nowymi i ponowna', mix.learning, { again: 1, hard: 1, good: 1, easy: 0, total: 3 });
+check('pusto bez odpowiedzi', ratingMix([], NOW).review.total, 0);
+
+group('Statystyki: dluzsza prognoza');
+
+check(
+  'trzydziesci dni, karta za trzy tygodnie w swoim dniu',
+  forecast([{ cardId: 1, state: State.Review, due: at(20, 12) + 21 * 86_400_000, scheduledDays: 21 }], NOW, FORECAST_LONG_DAYS)
+    .map((day) => day.count)
+    .indexOf(1),
+  21
+);
+check('trzydziesci slupkow', forecast([], NOW, FORECAST_LONG_DAYS).length, 30);
+
+group('Statystyki: wzrost kolekcji');
+
+const DAY = 86_400_000;
+const schedule = (cardId: number, state: number, scheduledDays: number) => ({ cardId, state, due: NOW, scheduledDays });
+
+// Card 1: learned five weeks ago, then a 25-day interval set three weeks ago — mature since.
+// Card 2: learned two weeks ago, still young. Card 3: answered, then reset to new.
+const growth = collectionGrowth(
+  [
+    log(NOW - 35 * DAY, { cardId: 1, state: State.New, scheduledDays: 0 }),
+    log(NOW - 30 * DAY, { cardId: 1, state: State.Learning, scheduledDays: 0 }),
+    log(NOW - 21 * DAY, { cardId: 1, state: State.Review, scheduledDays: 9 }),
+    log(NOW - 14 * DAY, { cardId: 2, state: State.New, scheduledDays: 0 }),
+    log(NOW - 20 * DAY, { cardId: 3, state: State.New, scheduledDays: 0 }),
+  ],
+  [schedule(1, State.Review, 25), schedule(2, State.Review, 5), schedule(3, State.New, 0)],
+  NOW
+);
+
+check('dwanascie tygodni, ostatni to teraz', [growth.length, growth.at(-1)?.at], [12, NOW]);
+check('co tydzien rano, jak teraz', growth.at(-2)?.at, NOW - 7 * DAY);
+check('przed pierwsza odpowiedzia nic', growth[0], { at: growth[0].at, learned: 0, mature: 0 });
+check(
+  'karta uczona, potem dojrzala; druga dochodzi; wyzerowana znika',
+  growth.slice(-6).map((week) => [week.learned, week.mature]),
+  [
+    [1, 0],
+    [1, 0],
+    [0, 1],
+    [1, 1],
+    [1, 1],
+    [1, 1],
+  ]
+);
+check('karta spoza talii pominieta', collectionGrowth([log(NOW - DAY, { cardId: 9 })], [], NOW).at(-1)?.learned, 0);
 

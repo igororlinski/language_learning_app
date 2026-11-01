@@ -20,6 +20,8 @@ export type StatsLog = {
   rating: number;
   /** The card's state *before* this answer, as `review_logs` stores it. */
   state: number;
+  /** The interval the card had *before* this answer — the one the answer before it set. */
+  scheduledDays: number;
   reviewedAt: number;
   /** How long the card was on screen; null for answers from before it was timed. */
   durationMs: number | null;
@@ -50,6 +52,12 @@ export const MATURE_DAYS = 21;
 export const RETENTION_WINDOW_DAYS = 30;
 
 export const FORECAST_DAYS = 7;
+
+/** The longer forecast, for seeing a pile coming before a trip. */
+export const FORECAST_LONG_DAYS = 30;
+
+/** How far back the collection's growth is drawn, a bar a week. */
+export const GROWTH_WEEKS = 12;
 
 /** Remembered means anything but "Znowu". */
 const remembered = (log: StatsLog) => log.rating !== Rating.Again;
@@ -94,7 +102,8 @@ export function todayStats(logs: readonly StatsLog[], now: number): TodayStats {
 export type ForecastDay = { start: number; count: number };
 
 /**
- * How many cards fall due on each of the next seven study days, today first.
+ * How many cards fall due on each of the next `length` study days (seven
+ * unless asked), today first.
  *
  * Today's bar holds everything already due, overdue ones and cards still in
  * learning steps included — that is what today's session will actually show.
@@ -104,12 +113,16 @@ export type ForecastDay = { start: number; count: number };
  * No daily cap is applied either. A forecast that already trimmed tomorrow to
  * the limit would hide the one thing it is for: seeing the pile coming.
  */
-export function forecast(cards: readonly StatsCard[], now: number): ForecastDay[] {
-  const days = Array.from({ length: FORECAST_DAYS }, (_, offset) => ({
+export function forecast(
+  cards: readonly StatsCard[],
+  now: number,
+  length: number = FORECAST_DAYS
+): ForecastDay[] {
+  const days = Array.from({ length }, (_, offset) => ({
     start: shiftedDay(now, offset).getTime(),
     count: 0,
   }));
-  const end = shiftedDay(now, FORECAST_DAYS).getTime();
+  const end = shiftedDay(now, length).getTime();
 
   for (const card of cards) {
     if (card.state === State.New) continue;
@@ -313,6 +326,114 @@ export function mnemonicGap(comparison: MnemonicComparison): number | null {
 /** `+12 pkt proc.`, `−3 pkt proc.` — a gap between two percentages. */
 export const formatGap = (points: number): string =>
   `${points > 0 ? '+' : points < 0 ? '−' : ''}${Math.abs(points)} pkt proc.`;
+
+/* ---------------------------------------------------------------- ratings */
+
+export type RatingSplit = { again: number; hard: number; good: number; easy: number; total: number };
+
+/** The answers of the last `RETENTION_WINDOW_DAYS`, by grade: in review and while learning, apart. */
+export type RatingMix = { review: RatingSplit; learning: RatingSplit };
+
+const GRADE_KEYS = {
+  [Rating.Again]: 'again',
+  [Rating.Hard]: 'hard',
+  [Rating.Good]: 'good',
+  [Rating.Easy]: 'easy',
+} as const;
+
+/**
+ * How the grades were spread over the last `RETENTION_WINDOW_DAYS` study days.
+ *
+ * Reviews and learning apart, because they mean different things: in review
+ * "Łatwe" should be the exception and "Znowu" a small slice; in learning steps
+ * "Znowu" is how the steps work. Mixed together, one would hide the other.
+ * Learning here is everything answered before the card reached review — new
+ * cards' first answers included.
+ */
+export function ratingMix(logs: readonly StatsLog[], now: number): RatingMix {
+  const since = shiftedDay(now, 1 - RETENTION_WINDOW_DAYS).getTime();
+  const empty = (): RatingSplit => ({ again: 0, hard: 0, good: 0, easy: 0, total: 0 });
+  const mix = { review: empty(), learning: empty() };
+
+  for (const log of logs) {
+    const key = GRADE_KEYS[log.rating as keyof typeof GRADE_KEYS];
+
+    if (!key || log.reviewedAt < since || log.reviewedAt > now) continue;
+
+    const split = log.state === State.Review ? mix.review : mix.learning;
+    split[key] += 1;
+    split.total += 1;
+  }
+
+  return mix;
+}
+
+/* ----------------------------------------------------------------- growth */
+
+export type GrowthWeek = {
+  /** The moment the bar shows the collection at — the end of its week, `now` for the last. */
+  at: number;
+  /** Cards started and not yet mature: in learning steps or in review under three weeks. */
+  learned: number;
+  mature: number;
+};
+
+/**
+ * The collection as it stood at the end of each of the last `GROWTH_WEEKS`
+ * weeks, worked back out of the history.
+ *
+ * A log keeps the card as it was **before** the answer, so what an answer did
+ * is in the next log of the same card — and for the last one, in the card's
+ * schedule now. A card never answered is not in the picture: nothing says
+ * when it was started. A card reset to new drops out from the reset on.
+ */
+export function collectionGrowth(
+  logs: readonly StatsLog[],
+  cards: readonly StatsCard[],
+  now: number
+): GrowthWeek[] {
+  const weeks: GrowthWeek[] = Array.from({ length: GROWTH_WEEKS }, (_, index) => ({
+    at: shiftedDay(now, (index + 1 - GROWTH_WEEKS) * 7).getTime() + (now - studyDayStart(new Date(now)).getTime()),
+    learned: 0,
+    mature: 0,
+  }));
+  weeks[weeks.length - 1].at = now;
+
+  const byCard = new Map<number, StatsLog[]>();
+  for (const log of logs) {
+    if (log.reviewedAt > now) continue;
+    const list = byCard.get(log.cardId);
+    if (list) list.push(log);
+    else byCard.set(log.cardId, [log]);
+  }
+
+  const schedules = new Map(cards.map((card) => [card.cardId, card]));
+
+  for (const [cardId, list] of byCard) {
+    const card = schedules.get(cardId);
+    if (!card) continue;
+
+    list.sort((a, b) => a.reviewedAt - b.reviewedAt);
+    const after = (index: number) =>
+      index + 1 < list.length
+        ? { state: list[index + 1].state, days: list[index + 1].scheduledDays }
+        : { state: card.state, days: card.scheduledDays };
+
+    let last = -1;
+    for (const week of weeks) {
+      while (last + 1 < list.length && list[last + 1].reviewedAt <= week.at) last += 1;
+      if (last < 0) continue;
+
+      const { state, days } = after(last);
+      if (state === State.New) continue;
+
+      if (state === State.Review && days >= MATURE_DAYS) week.mature += 1;
+      else week.learned += 1;
+    }
+  }
+
+  return weeks;
+}
 
 /* ------------------------------------------------------------ card states */
 

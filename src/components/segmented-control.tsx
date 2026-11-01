@@ -20,6 +20,8 @@ export type SegmentedControlProps<T extends string> = {
   options: readonly Segment<T>[];
   onChange: (value: T) => void;
   accessibilityLabel?: string;
+  /** `small` for a switch tucked into a card's header rather than a row of its own. */
+  size?: 'regular' | 'small';
 };
 
 /**
@@ -32,6 +34,7 @@ export function SegmentedControl<T extends string>({
   options,
   onChange,
   accessibilityLabel,
+  size = 'regular',
 }: SegmentedControlProps<T>) {
   const theme = useTheme();
 
@@ -52,6 +55,7 @@ export function SegmentedControl<T extends string>({
             accessibilityLabel={option.accessibilityLabel ?? option.label}
             style={({ pressed }) => [
               styles.segment,
+              size === 'small' ? styles.small : null,
               {
                 backgroundColor: selected ? theme.accent : 'transparent',
                 opacity: pressed && !selected ? 0.6 : 1,
@@ -59,7 +63,10 @@ export function SegmentedControl<T extends string>({
             ]}>
             <ThemedText
               type="smallBold"
-              style={{ color: selected ? theme.onAccent : theme.textSecondary }}>
+              style={[
+                { color: selected ? theme.onAccent : theme.textSecondary },
+                size === 'small' ? styles.smallLabel : null,
+              ]}>
               {option.label}
             </ThemedText>
           </Pressable>
@@ -85,5 +92,12 @@ const styles = StyleSheet.create({
     borderRadius: Radius.small,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  small: {
+    paddingVertical: Spacing.one,
+  },
+  smallLabel: {
+    fontSize: 13,
+    lineHeight: 18,
   },
 });
