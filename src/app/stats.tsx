@@ -6,6 +6,7 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Dropdown } from '@/components/dropdown';
 import { EmptyState } from '@/components/empty-state';
 import { GoalBar } from '@/components/goal-bar';
+import { WithHelp } from '@/components/help-button';
 import { PodiumIcon } from '@/components/icons';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
@@ -151,9 +152,11 @@ export default function StatsScreen() {
         }}
       />
       <View style={card}>
-        <ThemedText type="smallBold" themeColor="textSecondary">
-          Cel na dziś
-        </ThemedText>
+        <WithHelp topic="stats.goal">
+          <ThemedText type="smallBold" themeColor="textSecondary">
+            Cel na dziś
+          </ThemedText>
+        </WithHelp>
         <ThemedText style={[styles.big, streak.today.met ? { color: RatingColors.good } : null]}>
           {streak.today.answers} / {streak.today.goal}
         </ThemedText>
@@ -199,9 +202,11 @@ export default function StatsScreen() {
       </View>
 
       <View style={card}>
-        <ThemedText type="smallBold" themeColor="textSecondary">
-          Seria
-        </ThemedText>
+        <WithHelp topic="stats.streak">
+          <ThemedText type="smallBold" themeColor="textSecondary">
+            Seria
+          </ThemedText>
+        </WithHelp>
         <View style={styles.compare}>
           <View style={styles.half}>
             <ThemedText style={styles.medium}>{daysLabel(streak.current)}</ThemedText>

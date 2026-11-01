@@ -1,4 +1,4 @@
-import { StyleSheet, View, type ViewStyle } from 'react-native';
+import { StyleSheet, Text, View, type ViewStyle } from 'react-native';
 
 /**
  * Icons drawn out of plain views, so they take a colour like anything else.
@@ -143,6 +143,44 @@ export function PodiumIcon({ size = 20, color, style }: IconProps) {
       <View style={[step, { height: '62%' }]} />
       <View style={[step, { height: '100%' }]} />
       <View style={[step, { height: '42%' }]} />
+    </View>
+  );
+}
+
+/**
+ * A question mark in a ring, for the help buttons. The ring is a view; the
+ * mark is plain text in the system font — a monochrome glyph, unlike an emoji,
+ * so it takes the colour it is given.
+ */
+export function HelpIcon({ size = 16, color, style }: IconProps) {
+  const stroke = Math.max(1, size / 12);
+
+  return (
+    <View
+      style={[
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          borderWidth: stroke,
+          borderColor: color,
+          alignItems: 'center',
+          justifyContent: 'center',
+        },
+        style,
+      ]}>
+      <Text
+        allowFontScaling={false}
+        style={{
+          color,
+          fontSize: size * 0.68,
+          lineHeight: size * 0.8,
+          fontWeight: '700',
+          includeFontPadding: false,
+          textAlign: 'center',
+        }}>
+        ?
+      </Text>
     </View>
   );
 }

@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, View, type ViewStyle } from 'react-native';
 
+import { WithHelp } from '@/components/help-button';
 import { ThemedText } from '@/components/themed-text';
+import type { HelpTopicId } from '@/constants/help';
 import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -10,6 +12,8 @@ export type DropdownOption<T extends string> = { value: T; label: string };
 export type DropdownProps<T extends string> = {
   /** Shown above the field, the way `TextField` shows its own. */
   label?: string;
+  /** A "?" after the label, opening this topic. */
+  help?: HelpTopicId;
   value: T;
   options: readonly DropdownOption<T>[];
   onChange: (value: T) => void;
@@ -29,6 +33,7 @@ export type DropdownProps<T extends string> = {
  */
 export function Dropdown<T extends string>({
   label,
+  help,
   value,
   options,
   onChange,
@@ -48,9 +53,11 @@ export function Dropdown<T extends string>({
   return (
     <View style={[styles.wrapper, style]}>
       {label ? (
-        <ThemedText type="smallBold" themeColor="textSecondary">
-          {label}
-        </ThemedText>
+        <WithHelp topic={help}>
+          <ThemedText type="smallBold" themeColor="textSecondary">
+            {label}
+          </ThemedText>
+        </WithHelp>
       ) : null}
       <Pressable
         onPress={() => setOpen((was) => !was)}

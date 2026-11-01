@@ -1,6 +1,8 @@
 import { Pressable, StyleSheet, View } from 'react-native';
 
+import { WithHelp } from '@/components/help-button';
 import { ThemedText } from '@/components/themed-text';
+import type { HelpTopicId } from '@/constants/help';
 import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -26,6 +28,8 @@ export type PickerOption<T extends string | number> = {
 
 export type OptionPickerProps<T extends string | number> = {
   label: string;
+  /** A "?" after the label, opening this topic. */
+  help?: HelpTopicId;
   hint?: string;
   value: T;
   options: readonly PickerOption<T>[];
@@ -38,6 +42,7 @@ export type OptionPickerProps<T extends string | number> = {
  */
 export function OptionPicker<T extends string | number>({
   label,
+  help,
   hint,
   value,
   options,
@@ -47,9 +52,11 @@ export function OptionPicker<T extends string | number>({
 
   return (
     <View style={styles.wrapper} accessibilityRole="radiogroup" accessibilityLabel={label}>
-      <ThemedText type="smallBold" themeColor="textSecondary">
-        {label}
-      </ThemedText>
+      <WithHelp topic={help}>
+        <ThemedText type="smallBold" themeColor="textSecondary">
+          {label}
+        </ThemedText>
+      </WithHelp>
       {hint ? (
         <ThemedText type="small" themeColor="textSecondary">
           {hint}

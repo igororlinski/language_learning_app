@@ -7,25 +7,31 @@ import {
   type TextInputProps,
 } from 'react-native';
 
+import { WithHelp } from '@/components/help-button';
 import { ThemedText } from '@/components/themed-text';
+import type { HelpTopicId } from '@/constants/help';
 import { Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 export type TextFieldProps = TextInputProps & {
   label: string;
+  /** A "?" after the label, opening this topic. */
+  help?: HelpTopicId;
   /** Shown under the field and paints its border: what is wrong with the value. */
   error?: string;
   ref?: Ref<TextInputInstance>;
 };
 
-export function TextField({ label, error, style, multiline, ref, ...rest }: TextFieldProps) {
+export function TextField({ label, help, error, style, multiline, ref, ...rest }: TextFieldProps) {
   const theme = useTheme();
 
   return (
     <View style={styles.wrapper}>
-      <ThemedText type="smallBold" themeColor="textSecondary">
-        {label}
-      </ThemedText>
+      <WithHelp topic={help}>
+        <ThemedText type="smallBold" themeColor="textSecondary">
+          {label}
+        </ThemedText>
+      </WithHelp>
       <TextInput
         ref={ref}
         multiline={multiline}

@@ -8,6 +8,7 @@ import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { AddFieldSheet } from '@/components/add-field-sheet';
 import { Button } from '@/components/button';
 import { FieldLayoutList } from '@/components/field-layout-list';
+import { WithHelp } from '@/components/help-button';
 import { SpeakerIcon } from '@/components/icons';
 import { keptSpeech, PHONETIC_DEFAULT_LABELS, speechMenu } from '@/components/speech-menu';
 import { Dropdown, type DropdownOption } from '@/components/dropdown';
@@ -768,7 +769,9 @@ export default function DeckEditorScreen() {
         />
 
         <View style={styles.limits}>
-          <ThemedText type="smallBold">Dzienne limity</ThemedText>
+          <WithHelp topic="deck.limits">
+            <ThemedText type="smallBold">Dzienne limity</ThemedText>
+          </WithHelp>
         </View>
 
         <TextField
@@ -804,7 +807,9 @@ export default function DeckEditorScreen() {
         />
 
         <View style={styles.limits}>
-          <ThemedText type="smallBold">Algorytm powtórek</ThemedText>
+          <WithHelp topic="deck.algorithm">
+            <ThemedText type="smallBold">Algorytm powtórek</ThemedText>
+          </WithHelp>
         </View>
 
         <TextField
@@ -856,9 +861,11 @@ export default function DeckEditorScreen() {
         ) : null}
 
         <View style={styles.limits}>
-          <ThemedText type="smallBold">
-            {weights ? 'Wagi dopasowane do tej talii' : 'Wagi domyślne FSRS'}
-          </ThemedText>
+          <WithHelp topic="deck.weights">
+            <ThemedText type="smallBold">
+              {weights ? 'Wagi dopasowane do tej talii' : 'Wagi domyślne FSRS'}
+            </ThemedText>
+          </WithHelp>
         </View>
 
         {deckId ? (
