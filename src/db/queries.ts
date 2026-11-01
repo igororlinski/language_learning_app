@@ -285,6 +285,14 @@ const tagIds = sql<string>`(
   from ${cardTags} as ctg
   where ctg.card_id = ${cards.id})`;
 
+/** Every card's question in a deck — what the editor checks a new one against. */
+export function deckQuestionsQuery(deckId: number) {
+  return db
+    .select({ id: cards.id, front: cards.front, back: cards.back })
+    .from(cards)
+    .where(eq(cards.deckId, deckId));
+}
+
 export function cardsInDeckQuery(deckId: number) {
   return db
     .select({
@@ -2397,14 +2405,43 @@ export function deleteCard(cardId: number) {
  * review log is deliberately left alone — the card starts over, but what
  * actually happened to it stays on the record.
  */
-export function resetCards(cardIds: number[], now = new Date()) {
-  if (cardIds.length === 0) return;
+export function resetCards(cardIds: number[], now = new Date()): FsrsStateRow[] {
+  if (cardIds.length === 0) return [];
 
-  return db
-    .update(fsrsState)
-    .set(newCardState(now))
-    .where(inArray(fsrsState.cardId, cardIds))
-    .run();
+  // The schedules being replaced come back out, so the reset can be undone.
+  return db.transaction((tx) => {
+    const before = tx.select().from(fsrsState).where(inArray(fsrsState.cardId, cardIds)).all();
+    tx.update(fsrsState).set(newCardState(now)).where(inArray(fsrsState.cardId, cardIds)).run();
+    return before;
+  });
+}
+
+/**
+ * Puts back the schedules `resetCards` returned — its undo. A card deleted in
+ * the meantime is simply not there to update.
+ */
+export function restoreCardStates(rows: FsrsStateRow[]) {
+  if (rows.length === 0) return;
+
+  db.transaction((tx) => {
+    for (const row of rows) {
+      tx.update(fsrsState)
+        .set({
+          due: row.due,
+          stability: row.stability,
+          difficulty: row.difficulty,
+          elapsedDays: row.elapsedDays,
+          scheduledDays: row.scheduledDays,
+          learningSteps: row.learningSteps,
+          reps: row.reps,
+          lapses: row.lapses,
+          state: row.state,
+          lastReview: row.lastReview,
+        })
+        .where(eq(fsrsState.cardId, row.cardId))
+        .run();
+    }
+  });
 }
 
 /**

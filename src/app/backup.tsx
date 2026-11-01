@@ -8,6 +8,7 @@ import { Button } from '@/components/button';
 import { Dropdown } from '@/components/dropdown';
 import { SegmentedControl } from '@/components/segmented-control';
 import { ThemedText } from '@/components/themed-text';
+import { useToast } from '@/components/toast';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { appSettingsQuery, backupFolderFrom, deckNamesQuery, lastBackupFrom } from '@/db/queries';
 import { useTheme } from '@/hooks/use-theme';
@@ -99,6 +100,7 @@ type Progress = 'with' | 'without';
 
 export default function BackupScreen() {
   const theme = useTheme();
+  const toast = useToast();
   const { data: settings } = useLiveQuery(appSettingsQuery());
   const { data: deckList } = useLiveQuery(deckNamesQuery());
   const last = lastBackupFrom(settings);
@@ -194,7 +196,7 @@ export default function BackupScreen() {
 
     try {
       const result = await importDeckFile(file);
-      tell('Zaimportowano', imported(result.added, result.skipped));
+      toast({ message: imported(result.added, result.skipped) });
     } catch (error) {
       tell('Nie zaimportowano', failure(error));
     } finally {
@@ -247,7 +249,7 @@ export default function BackupScreen() {
   const importRows = (rows: CsvCard[], target: { deckId: number } | { newDeckName: string }) => {
     try {
       const result = importCsv(rows, target);
-      tell('Zaimportowano', imported(result.added, result.skipped));
+      toast({ message: imported(result.added, result.skipped) });
     } catch (error) {
       tell('Nie zaimportowano', failure(error));
     }

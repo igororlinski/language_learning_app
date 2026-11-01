@@ -9,7 +9,7 @@ import { checkLmStudio, GEMINI_MODELS, LLAMA_MODEL, writeText } from '@/lib/ai-t
 import { CLOUD_TEXT } from '@/lib/ai-transport';
 import { setSpendSink } from '@/lib/ai-usage';
 
-import { bodyOf, headersOf, withStub } from './ai-transport.test';
+import { bodyOf, hangingFetch, headersOf, withStub } from './ai-transport.test';
 import { check, group } from './harness';
 
 const PROMPT: Prompt = {
@@ -59,6 +59,28 @@ check('instrukcja obok rozmowy', geminiBody.systemInstruction?.parts?.[0]?.text,
 check('asystent nazywa sie model', geminiBody.contents?.map((turn) => turn.role), ['user', 'model', 'user']);
 check('schemat wymuszony', geminiBody.generationConfig?.responseSchema, MNEMONIC_SHAPE.schema);
 check('udana odpowiedz liczy sie do limitu', spent, ['gemini:1']);
+
+group('Przerwij zatrzymuje caly lancuch');
+
+const stopChain = new AbortController();
+setTimeout(() => stopChain.abort(), 10);
+const stoppedChain = await hangingFetch(() =>
+  writeText(PROMPT, MNEMONIC_SHAPE, CLOUD_TEXT, BOTH, stopChain.signal)
+);
+
+// Moving on to the next Gemini model, then llama, would be asking again.
+check('po przerwaniu nie pyta nastepnego modelu', stoppedChain, { outcome: 'cancelled', fetched: 1 });
+
+const stopLocal = new AbortController();
+setTimeout(() => stopLocal.abort(), 10);
+const stoppedLocal = await hangingFetch(() =>
+  writeText(PROMPT, MNEMONIC_SHAPE, { provider: 'lmstudio', model: 'qwen' }, {
+    ...NO_KEYS,
+    lmStudioUrl: 'http://10.0.0.2:1234',
+  }, stopLocal.signal)
+);
+
+check('przerwane LM Studio to nie "nie odpowiada"', stoppedLocal.outcome, 'cancelled');
 
 group('Gemini sie konczy: kolejne modele, potem llama');
 

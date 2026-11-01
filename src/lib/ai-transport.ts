@@ -26,6 +26,7 @@ export type AiFailure =
   | 'provider'
   | 'network'
   | 'timeout'
+  | 'cancelled'
   | 'malformed'
   | 'local-offline';
 
@@ -41,6 +42,8 @@ const MESSAGES: Record<AiFailure, string> = {
   provider: 'Nie udało się.',
   network: 'Brak połączenia z generatorem.',
   timeout: 'Generator nie odpowiedział w porę. Spróbuj jeszcze raz.',
+  // The user's own "Przerwij": nothing went wrong, so screens say nothing.
+  cancelled: 'Przerwano.',
   malformed: 'Generator odpowiedział czymś, czego nie rozumiem.',
   // The user picked LM Studio, so a quiet switch to the cloud would overrule
   // them; this says what is missing instead.
@@ -60,6 +63,10 @@ export class AiError extends Error {
     this.name = 'AiError';
   }
 }
+
+/** Whether a failure is the user stopping the request — not worth an alert. */
+export const isCancelled = (error: unknown): boolean =>
+  error instanceof AiError && error.failure === 'cancelled';
 
 /* --------------------------------------------------------- text providers */
 
@@ -125,6 +132,9 @@ export type Reply = { ok: boolean; status: number; body: unknown };
  *
  * A `FormData` body goes out as-is: `fetch` writes its multipart boundary into
  * the content type itself, and setting that header by hand breaks it.
+ *
+ * `signal` is the caller's way to stop waiting — the "Przerwij" button. It
+ * ends in `cancelled`, told apart from the time limit running out.
  */
 export async function send(
   url: string,
@@ -133,15 +143,24 @@ export async function send(
     headers = {},
     body,
     timeoutMs = REQUEST_TIMEOUT_MS,
+    signal,
   }: {
     method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
     headers?: Record<string, string>;
     body?: unknown;
     timeoutMs?: number;
+    signal?: AbortSignal;
   } = {}
 ): Promise<Reply> {
+  if (signal?.aborted) throw new AiError('cancelled');
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const stop = () => controller.abort();
+  signal?.addEventListener('abort', stop);
+
+  // Both end in an aborted request; which one it was decides the sentence.
+  const stopped = () => new AiError(signal?.aborted ? 'cancelled' : 'timeout');
 
   const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
   const allHeaders: Record<string, string> =
@@ -158,7 +177,7 @@ export async function send(
         signal: controller.signal,
       });
     } catch (error) {
-      if (controller.signal.aborted) throw new AiError('timeout');
+      if (controller.signal.aborted) throw stopped();
 
       throw new AiError('network', error instanceof Error ? error.message : undefined);
     }
@@ -168,11 +187,12 @@ export async function send(
     // phone. Still under the same limit — three pictures are most of a megabyte.
     const parsed: unknown = await response.json().catch(() => null);
 
-    if (controller.signal.aborted) throw new AiError('timeout');
+    if (controller.signal.aborted) throw stopped();
 
     return { ok: response.ok, status: response.status, body: parsed };
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
   }
 }
 
@@ -277,12 +297,14 @@ export async function runCloudflare(
   token: string,
   model: string,
   body: unknown,
-  timeoutMs?: number
+  timeoutMs?: number,
+  signal?: AbortSignal
 ): Promise<Record<string, unknown>> {
   const reply = await send(`${CLOUDFLARE_API}/${encodeURIComponent(account)}/ai/run/${model}`, {
     headers: { Authorization: `Bearer ${token}` },
     body,
     timeoutMs,
+    signal,
   });
 
   // A malformed or unknown account id is not a 401 but a 404 "Could not route

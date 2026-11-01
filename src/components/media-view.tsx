@@ -1,7 +1,7 @@
 import { useEvent } from 'expo';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Image, Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
@@ -44,10 +44,30 @@ export function MediaView({ kind, fileName, label }: MediaViewProps) {
   if (kind === 'audio') return <AudioPlayer uri={uri} label={label} />;
   if (kind === 'video') return <VideoPlayer uri={uri} label={label} />;
 
+  return <Picture uri={uri} label={label} />;
+}
+
+/** A picture that has not loaded yet is assumed to be the usual photo shape. */
+const DEFAULT_IMAGE_RATIO = 4 / 3;
+
+/** How tall a picture may get — the same room an upright video gets. */
+const MAX_IMAGE_HEIGHT = 320;
+
+/**
+ * An image in its own proportions: full width, as tall as its shape asks, up
+ * to `MAX_IMAGE_HEIGHT`. A fixed box cut a wide picture down to a strip and
+ * left a tall one tiny; past the cap, `contain` centres it in the width.
+ */
+function Picture({ uri, label }: { uri: string; label?: string }) {
+  const [ratio, setRatio] = useState(DEFAULT_IMAGE_RATIO);
+
   return (
     <Image
       source={{ uri }}
-      style={styles.image}
+      onLoad={({ nativeEvent: { source } }) => {
+        if (source.width > 0 && source.height > 0) setRatio(source.width / source.height);
+      }}
+      style={[styles.image, { aspectRatio: ratio }]}
       resizeMode="contain"
       accessible
       accessibilityRole="image"
@@ -208,7 +228,7 @@ const styles = StyleSheet.create({
   },
   image: {
     width: '100%',
-    height: 200,
+    maxHeight: MAX_IMAGE_HEIGHT,
     borderRadius: Radius.medium,
   },
   video: {

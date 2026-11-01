@@ -29,7 +29,8 @@ export async function requestPhonetic(
   language: string,
   source: TextSource,
   keys: AiKeys,
-  temperature: number | null = null
+  temperature: number | null = null,
+  signal?: AbortSignal
 ): Promise<string> {
   const said = text.trim().replace(/\s+/g, ' ').slice(0, MAX_SPEECH_LENGTH);
 
@@ -39,7 +40,8 @@ export async function requestPhonetic(
     phoneticPrompt({ text: said, language: languageEnglish(language) }),
     withTemperature(PHONETIC_SHAPE, temperature),
     source,
-    keys
+    keys,
+    signal
   );
 
   const phonetic = parsePhonetic(answer);

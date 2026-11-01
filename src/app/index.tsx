@@ -21,7 +21,7 @@ import { deleteMedia } from '@/lib/media-files';
 import { cardsLabel } from '@/lib/format';
 import { cappedCounts, studyDayStart, totalDue } from '@/lib/limits';
 
-type DeckMenuTarget = { id: number; name: string; cardCount: number; due: number };
+type DeckMenuTarget = { id: number; name: string; cardCount: number; due: number; heldBack: number };
 
 /**
  * Expo Router renders this in place of the screen when it throws, keeping the
@@ -70,9 +70,12 @@ export default function DecksScreen() {
   };
 
   const menuActions = (deck: DeckMenuTarget): SheetAction[] => [
-    ...(deck.due > 0
-      ? [{ label: `Ucz się (${deck.due})`, onPress: () => startStudy(deck.id) }]
-      : []),
+    {
+      label: deck.due > 0 ? `Ucz się (${deck.due})` : 'Ucz się',
+      disabled: deck.due === 0,
+      hint: deck.due > 0 ? undefined : deck.heldBack > 0 ? 'Limit na dziś wyczerpany.' : 'Nic do powtórki.',
+      onPress: () => startStudy(deck.id),
+    },
     { label: 'Karty w talii', onPress: () => openCards(deck.id) },
     {
       label: 'Edytuj talię',
@@ -152,11 +155,15 @@ export default function DecksScreen() {
             // badge can never promise more than "Ucz się" will hand out.
             const counts = cappedCounts(item);
             const due = totalDue(counts);
+            const heldBack = item.newCount + item.learningCount + item.reviewCount - due;
 
             return (
               <Pressable
-                onPress={() => (due > 0 ? startStudy(item.id) : openCards(item.id))}
-                onLongPress={() => setMenuDeck({ ...item, due })}
+                onPress={() => openCards(item.id)}
+                onLongPress={() => setMenuDeck({ ...item, due, heldBack })}
+                accessibilityRole="button"
+                accessibilityLabel={`${item.name}, ${cardsLabel(item.cardCount)}`}
+                accessibilityHint="Przytrzymaj, żeby otworzyć menu talii"
                 style={({ pressed }) => [
                   styles.row,
                   {
@@ -177,7 +184,28 @@ export default function DecksScreen() {
                   </ThemedText>
                 </View>
 
-                {due > 0 ? <DueCounts counts={counts} /> : null}
+                {/* Its own target, so the row itself always does one thing:
+                    open the deck. Gone when there is nothing to study — the
+                    deck screen and the long-press menu say why. */}
+                {due > 0 ? (
+                  <Pressable
+                    onPress={() => startStudy(item.id)}
+                    hitSlop={Spacing.two}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Ucz się, ${cardsLabel(due)} do powtórki`}
+                    style={({ pressed }) => [
+                      styles.study,
+                      {
+                        borderColor: theme.accent,
+                        backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+                      },
+                    ]}>
+                    <ThemedText type="smallBold" style={{ color: theme.accent }}>
+                      Ucz się
+                    </ThemedText>
+                    <DueCounts counts={counts} style={styles.studyCounts} />
+                  </Pressable>
+                ) : null}
               </Pressable>
             );
           }}
@@ -273,6 +301,17 @@ const styles = StyleSheet.create({
   deckName: {
     fontSize: 17,
     fontWeight: '600',
+  },
+  study: {
+    alignItems: 'center',
+    gap: Spacing.half,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    borderRadius: Radius.medium,
+    borderWidth: 1,
+  },
+  studyCounts: {
+    gap: Spacing.two,
   },
   footer: {
     padding: Spacing.three,

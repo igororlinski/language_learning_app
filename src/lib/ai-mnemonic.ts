@@ -109,7 +109,8 @@ export async function requestMnemonics(
   request: MnemonicRequest,
   source: TextSource,
   keys: AiKeys,
-  temperature: number | null = null
+  temperature: number | null = null,
+  signal?: AbortSignal
 ): Promise<Mnemonic[]> {
   // Both halves are the input. A sound-alike needs a word to sound like, and a
   // scene needs a meaning to be about — so this is refused before the network,
@@ -134,7 +135,7 @@ export async function requestMnemonics(
   });
 
   const shape = withTemperature(local ? LOCAL_MNEMONIC_SHAPE : MNEMONIC_SHAPE, temperature);
-  const text = await writeText(prompt, shape, source, keys);
+  const text = await writeText(prompt, shape, source, keys, signal);
   const mnemonics = parseMnemonicList(text);
 
   // The model answered, but not with an association. Its own words go into the

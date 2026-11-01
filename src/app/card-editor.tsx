@@ -35,6 +35,7 @@ import {
   getCard,
   deckLanguages,
   deckPictureQuality,
+  deckQuestionsQuery,
   deckTemplates,
   DEFAULT_TEMPLATE_NAME,
   getCardFields,
@@ -72,7 +73,7 @@ import {
 import * as Speech from 'expo-speech';
 import { drawBlocker, NO_KEYS, textBlocker } from '@/lib/ai-keys';
 import { useAiKeys } from '@/lib/ai-keys-store';
-import { AiError } from '@/lib/ai-transport';
+import { AiError, isCancelled } from '@/lib/ai-transport';
 import { generateImage, generatePictures as picturesFromScene } from '@/lib/ai-image';
 import { requestPhonetic } from '@/lib/ai-phonetic';
 import { requestMnemonics } from '@/lib/ai-mnemonic';
@@ -87,6 +88,7 @@ import { matchVoice, speechText, speechVoice, type SpeechScope } from '@/lib/spe
 import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
 import { cardPieces, sideLines, type BaseKind } from '@/lib/card-layout';
 import { draftSignature } from '@/lib/card-draft';
+import { findDuplicate } from '@/lib/duplicates';
 import {
   BOUNDARY,
   buildRows,
@@ -216,6 +218,7 @@ export default function CardEditorScreen() {
   );
   const [taggingOpen, setTaggingOpen] = useState(false);
   const { data: knownTags } = useLiveQuery(allTagsQuery(), []);
+  const { data: deckQuestions } = useLiveQuery(deckQuestionsQuery(deckId), [deckId]);
 
   // The user's own AI keys and chosen text model, both followed live: adding a
   // key on "Ustawienia AI" re-enables the buttons here without a reload. A
@@ -242,6 +245,40 @@ export default function CardEditorScreen() {
   // The row whose picture is being generated, if any. One at a time: the
   // request takes seconds and the free allowance is worth spending on purpose.
   const [generating, setGenerating] = useState<{ key: string; label: string } | null>(null);
+
+  // The run under way, for "Przerwij". One at a time: every AI button is
+  // disabled while something is generating.
+  const run = useRef<AbortController | null>(null);
+
+  /** Starts one AI request under `key`'s spinner; its signal is what "Przerwij" stops. */
+  const startRun = (key: string, label: string): AbortSignal => {
+    const controller = new AbortController();
+    run.current = controller;
+    setGenerating({ key, label });
+    return controller.signal;
+  };
+
+  const finishRun = () => {
+    run.current = null;
+    setGenerating(null);
+  };
+
+  const stopRun = () => run.current?.abort();
+
+  /** The spinner under a field while its request runs, with the way out of it. */
+  const working = (label: string) => (
+    <View style={styles.generating}>
+      <ActivityIndicator />
+      <ThemedText type="small" themeColor="textSecondary" style={styles.generatingLabel}>
+        {label}
+      </ThemedText>
+      <Pressable onPress={stopRun} hitSlop={12} accessibilityRole="button">
+        <ThemedText type="small" style={{ color: theme.accent }}>
+          Przerwij
+        </ThemedText>
+      </Pressable>
+    </View>
+  );
 
   const [choosing, setChoosing] = useState<Choosing | null>(null);
 
@@ -405,11 +442,13 @@ export default function CardEditorScreen() {
     language: string,
     set: (phonetic: string | null) => void
   ) => {
-    setGenerating({ key, label: 'Piszę zapis fonetyczny…' });
+    const signal = startRun(key, 'Piszę zapis fonetyczny…');
 
     try {
-      set(await requestPhonetic(text, language, textSource, aiKeys, temperatures.phonetic));
+      set(await requestPhonetic(text, language, textSource, aiKeys, temperatures.phonetic, signal));
     } catch (error) {
+      if (isCancelled(error)) return;
+
       // Thrown from a handler, where the error boundary cannot reach it.
       Alert.alert(
         'Nie zrobiono zapisu fonetycznego',
@@ -418,7 +457,7 @@ export default function CardEditorScreen() {
         { cancelable: true }
       );
     } finally {
-      setGenerating(null);
+      finishRun();
     }
   };
 
@@ -667,10 +706,10 @@ export default function CardEditorScreen() {
   const generatePicture = async (key: string, kind: MediaKind, source: 'front' | 'back') => {
     const term = source === 'front' ? front : back;
 
-    setGenerating({ key, label: 'Robię obraz…' });
+    const signal = startRun(key, 'Robię obraz…');
 
     try {
-      const base64 = await generateImage(term, 'fast', aiKeys);
+      const base64 = await generateImage(term, 'fast', aiKeys, signal);
       const fileName = await saveGeneratedImage(kind, base64);
 
       imported.current = [...imported.current, { kind, fileName }];
@@ -683,6 +722,8 @@ export default function CardEditorScreen() {
         )
       );
     } catch (error) {
+      if (isCancelled(error)) return;
+
       // Thrown from a handler, where the error boundary cannot reach it, so
       // every failure has to end up in a sentence here — on a phone this alert
       // is the only diagnosis there is.
@@ -695,7 +736,7 @@ export default function CardEditorScreen() {
 
       Alert.alert('Nie zrobiono obrazu', message, [{ text: 'OK' }], { cancelable: true });
     } finally {
-      setGenerating(null);
+      finishRun();
     }
   };
 
@@ -727,6 +768,8 @@ export default function CardEditorScreen() {
    * value used before its declaration is an error, not a hoisting nicety.
    */
   const failedMnemonic = (error: unknown) => {
+    if (isCancelled(error)) return;
+
     const message =
       error instanceof MediaTooLargeError
         ? `Obraz ma ${formatBytes(error.size)}, a limit to ${formatBytes(MEDIA_LIMITS.mnemonic)}.`
@@ -746,7 +789,7 @@ export default function CardEditorScreen() {
    * given, so a list of one is a list it cannot leave. Nothing in the prompt
    * had to learn about this.
    */
-  const askForOptions = (language: string | null): Promise<Mnemonic[]> =>
+  const askForOptions = (language: string | null, signal: AbortSignal): Promise<Mnemonic[]> =>
     requestMnemonics(
       {
         term: back,
@@ -765,21 +808,22 @@ export default function CardEditorScreen() {
       },
       textSource,
       aiKeys,
-      temperatures.mnemonic
+      temperatures.mnemonic,
+      signal
     );
 
   const proposeMnemonic = async (key: string) => {
     try {
-      setGenerating({ key, label: 'Szukam skojarzeń…' });
+      const signal = startRun(key, 'Szukam skojarzeń…');
 
-      const options = await askForOptions(null);
+      const options = await askForOptions(null, signal);
 
       setChoosing({ step: 'association', key, history: [{ options, language: null }], at: 0 });
     } catch (error) {
       failedMnemonic(error);
       withdrawUnconfirmed(key);
     } finally {
-      setGenerating(null);
+      finishRun();
     }
   };
 
@@ -797,9 +841,9 @@ export default function CardEditorScreen() {
     const { key } = choosing;
 
     try {
-      setGenerating({ key, label: 'Szukam skojarzeń…' });
+      const signal = startRun(key, 'Szukam skojarzeń…');
 
-      const options = await askForOptions(language);
+      const options = await askForOptions(language, signal);
 
       setChoosing((current) =>
         current?.step === 'association' && current.key === key
@@ -815,7 +859,7 @@ export default function CardEditorScreen() {
     } catch (error) {
       failedMnemonic(error);
     } finally {
-      setGenerating(null);
+      finishRun();
     }
   };
 
@@ -877,20 +921,30 @@ export default function CardEditorScreen() {
             </ThemedText>
           </Pressable>
 
-          <Pressable
-            onPress={() => {
-              setPickingLanguage(false);
-              void regenerate(null);
-            }}
-            disabled={busyHere}
-            hitSlop={12}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: busyHere }}
-            accessibilityLabel="Przegeneruj propozycje">
-            <ThemedText type="small" style={{ color: theme.accent, opacity: busyHere ? 0.4 : 1 }}>
-              {busyHere ? 'Szukam…' : 'Przegeneruj'}
-            </ThemedText>
-          </Pressable>
+          {busyHere ? (
+            <Pressable
+              onPress={stopRun}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Przerwij szukanie propozycji">
+              <ThemedText type="small" style={{ color: theme.accent }}>
+                Szukam… · Przerwij
+              </ThemedText>
+            </Pressable>
+          ) : (
+            <Pressable
+              onPress={() => {
+                setPickingLanguage(false);
+                void regenerate(null);
+              }}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Przegeneruj propozycje">
+              <ThemedText type="small" style={{ color: theme.accent }}>
+                Przegeneruj
+              </ThemedText>
+            </Pressable>
+          )}
 
           {languages.front.length > 1 ? (
             <Pressable
@@ -952,7 +1006,7 @@ export default function CardEditorScreen() {
     const kind = 'mnemonic' as const;
 
     try {
-      setGenerating({ key, label: 'Rysuję trzy obrazy…' });
+      const signal = startRun(key, 'Rysuję trzy obrazy…');
 
       // All three side by side, so the wait is one picture's. Two pictures
       // beat an error message: whatever was drawn comes back, and only a round
@@ -961,7 +1015,8 @@ export default function CardEditorScreen() {
         buildScenePrompt(association.prompt),
         quality,
         3,
-        aiKeys
+        aiKeys,
+        signal
       );
       const drawn: string[] = [];
 
@@ -976,7 +1031,7 @@ export default function CardEditorScreen() {
     } catch (error) {
       failedMnemonic(error);
     } finally {
-      setGenerating(null);
+      finishRun();
     }
   };
 
@@ -1722,14 +1777,7 @@ export default function CardEditorScreen() {
           </ThemedText>
         ) : null}
 
-        {busy && generating ? (
-          <View style={styles.generating}>
-            <ActivityIndicator />
-            <ThemedText type="small" themeColor="textSecondary">
-              {generating.label}
-            </ThemedText>
-          </View>
-        ) : null}
+        {busy && generating ? working(generating.label) : null}
       </>
     );
   };
@@ -1747,6 +1795,8 @@ export default function CardEditorScreen() {
     </Pressable>
   );
 
+  const duplicate = findDuplicate(front, deckQuestions ?? [], cardId);
+
   const renderRow = (row: Row, rowInfo: RowInfo) => {
     if (row.kind === 'base') {
       const isQuestion = row.base === 'front';
@@ -1763,6 +1813,13 @@ export default function CardEditorScreen() {
             style={styles.input}
             multiline
           />
+          {/* A warning, not a block: the same word can honestly be two cards
+              — two meanings, two decks merged — and only the user knows. */}
+          {isQuestion && duplicate ? (
+            <ThemedText type="small" style={{ color: theme.danger }}>
+              {`Taka karta już jest w tej talii — odpowiedź: „${duplicate.back}”`}
+            </ThemedText>
+          ) : null}
           {/* The question and the answer are different questions about
               language, and the deck answers them differently: the answer is the
               one word being learned, the question is whichever of the learner's
@@ -1927,14 +1984,7 @@ export default function CardEditorScreen() {
             </ThemedText>
           ) : null}
 
-          {busy && generating ? (
-            <View style={styles.generating}>
-              <ActivityIndicator />
-              <ThemedText type="small" themeColor="textSecondary">
-                {generating.label}
-              </ThemedText>
-            </View>
-          ) : null}
+          {busy && generating ? working(generating.label) : null}
         </>
       );
     }
@@ -2070,14 +2120,7 @@ export default function CardEditorScreen() {
               </ThemedText>
             </Pressable>
           </View>
-          {busy ? (
-            <View style={styles.generating}>
-              <ActivityIndicator />
-              <ThemedText type="small" themeColor="textSecondary">
-                {generating.label}
-              </ThemedText>
-            </View>
-          ) : null}
+          {busy && generating ? working(generating.label) : null}
         </>
       );
     }
@@ -2374,6 +2417,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
+  },
+  generatingLabel: {
+    flexShrink: 1,
   },
   tags: {
     flexDirection: 'row',

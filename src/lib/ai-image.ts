@@ -1,6 +1,6 @@
 import type { PictureQuality } from '@/db/schema';
 import { hasCloudflare, type AiKeys } from '@/lib/ai-keys';
-import { AiError, runCloudflare } from '@/lib/ai-transport';
+import { AiError, isCancelled, runCloudflare } from '@/lib/ai-transport';
 import { recordSpend } from '@/lib/ai-usage';
 
 /**
@@ -136,7 +136,8 @@ function imageInput(model: ImageModel, prompt: string): unknown {
 async function drawOne(
   keys: AiKeys,
   chain: ImageModel[],
-  prompt: string
+  prompt: string,
+  signal?: AbortSignal
 ): Promise<{ image: string; model: ImageModel } | { error: AiError }> {
   let error = new AiError('malformed');
 
@@ -146,7 +147,9 @@ async function drawOne(
         keys.cloudflareAccount,
         keys.cloudflareToken,
         IMAGE_MODELS[model],
-        imageInput(model, prompt)
+        imageInput(model, prompt),
+        undefined,
+        signal
       );
       const image = result.image;
 
@@ -155,6 +158,9 @@ async function drawOne(
       error = new AiError('malformed', 'brak obrazu w odpowiedzi');
     } catch (failure) {
       error = failure instanceof AiError ? failure : new AiError('network');
+
+      // Stopped by the user: the next model in the chain is not wanted either.
+      if (isCancelled(error)) return { error };
     }
   }
 
@@ -173,7 +179,8 @@ export async function generatePictures(
   prompt: string,
   quality: PictureQuality,
   count: number,
-  keys: AiKeys
+  keys: AiKeys,
+  signal?: AbortSignal
 ): Promise<string[]> {
   if (!prompt.trim()) throw new AiError('empty-prompt');
   if (!hasCloudflare(keys)) throw new AiError('no-image-key');
@@ -182,7 +189,7 @@ export async function generatePictures(
   const text = prompt.slice(0, MAX_PROMPT);
 
   const attempts = await Promise.all(
-    Array.from({ length: Math.max(1, count) }, () => drawOne(keys, chain, text))
+    Array.from({ length: Math.max(1, count) }, () => drawOne(keys, chain, text, signal))
   );
 
   const drawn = attempts.filter(
@@ -191,6 +198,8 @@ export async function generatePictures(
 
   recordSpend('neurons', drawn.reduce((sum, attempt) => sum + imageNeurons(attempt.model), 0));
 
+  // Stopped: whatever did arrive was paid for and counted, but not wanted.
+  if (signal?.aborted) throw new AiError('cancelled');
   if (drawn.length === 0) throw (attempts[0] as { error: AiError }).error;
 
   return drawn.map((attempt) => attempt.image);
@@ -200,18 +209,20 @@ export async function generatePictures(
 export async function generatePicture(
   prompt: string,
   quality: PictureQuality,
-  keys: AiKeys
+  keys: AiKeys,
+  signal?: AbortSignal
 ): Promise<string> {
-  return (await generatePictures(prompt, quality, 1, keys))[0];
+  return (await generatePictures(prompt, quality, 1, keys, signal))[0];
 }
 
 /** One picture of one word — what an `ai-image` field asks for. */
 export async function generateImage(
   term: string,
   quality: PictureQuality,
-  keys: AiKeys
+  keys: AiKeys,
+  signal?: AbortSignal
 ): Promise<string> {
   if (!term.trim()) throw new AiError('empty-prompt');
 
-  return generatePicture(buildPrompt(term), quality, keys);
+  return generatePicture(buildPrompt(term), quality, keys, signal);
 }

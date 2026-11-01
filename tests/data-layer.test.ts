@@ -41,6 +41,7 @@ import {
   loadDueCards,
   moveCards,
   resetCards,
+  restoreCardStates,
   getCardLines,
   getDeckSlots,
   newCardFields,
@@ -963,7 +964,8 @@ check('niezaznaczona zostaje', cardsInDeckQuery(bulkSource.id).all()[0].front, '
 // Moving keeps the schedule, exactly as it does for a single card.
 check('przeniesione karty nie wracaja do stanu nowego', snapshot(trio[0].id).state, State.Learning);
 
-resetCards([trio[0].id, trio[1].id], now);
+const beforeReset = snapshot(trio[0].id);
+const replaced = resetCards([trio[0].id, trio[1].id], now);
 
 check(
   'zerowanie obejmuje cale zaznaczenie',
@@ -974,8 +976,14 @@ check('a licznik powtorek wraca do zera', snapshot(trio[0].id).reps, 0);
 // The card starts over, but what happened to it stays on the record.
 check('historia powtorek zostaje nietknieta', logCount(trio[0].id), 1);
 check('karta poza zaznaczeniem zachowuje swoj stan', snapshot(trio[2].id).state, State.New);
+check('zerowanie oddaje zastapione stany', replaced.map((row) => row.cardId).sort(), [trio[0].id, trio[1].id].sort());
+
+restoreCardStates(replaced);
+
+check('cofniecie zerowania przywraca caly stan', snapshot(trio[0].id), beforeReset);
+check('i licznik powtorek', snapshot(trio[1].id).reps, 1);
 check('pusta lista niczego nie przenosi', moveCards([], bulkTarget.id), undefined);
-check('pusta lista niczego nie zeruje', resetCards([], now), undefined);
+check('pusta lista niczego nie zeruje', resetCards([], now), []);
 
 group('Tagi kart');
 

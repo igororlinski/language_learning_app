@@ -10,6 +10,7 @@ import { Dropdown, type DropdownOption } from '@/components/dropdown';
 import { EmptyState } from '@/components/empty-state';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
+import { useToast } from '@/components/toast';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import {
   cardsInDeckQuery,
@@ -22,6 +23,7 @@ import {
   moveCards,
   otherDecksQuery,
   resetCards,
+  restoreCardStates,
 } from '@/db/queries';
 import { useNow } from '@/hooks/use-now';
 import { useTheme } from '@/hooks/use-theme';
@@ -47,7 +49,7 @@ import { STATE_LABELS, State } from '@/lib/scheduler';
  * or the list of decks to copy or move it into. One sheet swaps its contents
  * rather than opening a second modal — see `SheetAction.keepOpen`.
  */
-type MenuView = 'actions' | 'copy' | 'move';
+type MenuView = 'deck' | 'actions' | 'copy' | 'move';
 
 const SORT_OPTIONS: DropdownOption<CardOrder>[] = CARD_ORDERS.map((value) => ({
   value,
@@ -73,6 +75,7 @@ export default function DeckScreen() {
   const theme = useTheme();
   const router = useRouter();
   const now = useNow();
+  const toast = useToast();
 
   const { deckId: deckIdParam } = useLocalSearchParams<{ deckId: string }>();
   const deckId = Number(deckIdParam);
@@ -217,12 +220,18 @@ export default function DeckScreen() {
 
     // Copying into another deck leaves nothing to see on this screen, so the
     // only sign it worked would otherwise be no sign at all.
-    Alert.alert(
-      'Skopiowano',
-      `${cardsLabel(made.length)} → „${target.name}”. Kopie zaczynają jako nowe karty.`,
-      [{ text: 'OK' }],
-      { cancelable: true }
-    );
+    toast({
+      message: `Skopiowano ${cardsLabel(made.length)} → „${target.name}”`,
+      action: {
+        label: 'Cofnij',
+        onPress: () => {
+          // The copies' own files go with them, as with any deleted card.
+          const files = cardsMediaFiles(made);
+          deleteCards(made);
+          deleteMedia(files);
+        },
+      },
+    });
   };
 
   /** The card keeps its schedule and history — only the deck changes. */
@@ -232,6 +241,11 @@ export default function DeckScreen() {
 
     moveCards(ids, target.id);
     setSelected(null);
+
+    toast({
+      message: `Przeniesiono ${cardsLabel(ids.length)} → „${target.name}”`,
+      action: { label: 'Cofnij', onPress: () => moveCards(ids, deckId) },
+    });
   };
 
   /**
@@ -290,8 +304,13 @@ export default function DeckScreen() {
         hint: emptyHint,
         disabled: nothing,
         onPress: () => {
-          resetCards(selectedIds);
+          const replaced = resetCards(selectedIds);
           setSelected(null);
+
+          toast({
+            message: `Wyzerowano postęp: ${cardsLabel(replaced.length)}`,
+            action: { label: 'Cofnij', onPress: () => restoreCardStates(replaced) },
+          });
         },
       },
       {
@@ -322,7 +341,21 @@ export default function DeckScreen() {
       onPress: () => moveSelectedTo(target),
     }));
 
+  const deckActions = (): SheetAction[] => [
+    {
+      label: 'Zaznacz karty',
+      disabled: allCards.length === 0,
+      hint: allCards.length === 0 ? 'Talia jest pusta.' : undefined,
+      onPress: () => setSelected(new Set()),
+    },
+    {
+      label: 'Edytuj talię',
+      onPress: () => router.push({ pathname: '/deck-editor', params: { deckId } }),
+    },
+  ];
+
   const MENU_TITLES: Record<MenuView, string> = {
+    deck: deck?.name ?? 'Talia',
     actions: `Zaznaczono ${selectedIds.length}`,
     copy: 'Kopiuj do talii',
     move: 'Przenieś do talii',
@@ -344,13 +377,11 @@ export default function DeckScreen() {
               </Pressable>
             ) : deck ? (
               <Pressable
-                onPress={() => router.push({ pathname: '/deck-editor', params: { deckId } })}
+                onPress={() => setMenu('deck')}
                 hitSlop={12}
                 accessibilityRole="button"
-                accessibilityLabel="Edytuj talię">
-                <ThemedText type="small" style={{ color: theme.accent }}>
-                  Edytuj
-                </ThemedText>
+                accessibilityLabel="Menu talii">
+                <ThemedText style={[styles.dots, { color: theme.accent }]}>⋯</ThemedText>
               </Pressable>
             ) : null,
         }}
@@ -586,7 +617,13 @@ export default function DeckScreen() {
             menu === 'copy' || menu === 'move' ? cardsLabel(selectedIds.length) : undefined
           }
           actions={
-            menu === 'copy' ? copyActions() : menu === 'move' ? moveActions() : selectionActions()
+            menu === 'deck'
+              ? deckActions()
+              : menu === 'copy'
+                ? copyActions()
+                : menu === 'move'
+                  ? moveActions()
+                  : selectionActions()
           }
           onClose={() => setMenu(null)}
         />

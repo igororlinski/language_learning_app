@@ -9,6 +9,7 @@ import { KeyboardProvider } from 'react-native-keyboard-controller';
 import migrations from '@drizzle/migrations';
 
 import { ThemedText } from '@/components/themed-text';
+import { ToastProvider } from '@/components/toast';
 import { Spacing } from '@/constants/theme';
 import { db } from '@/db/client';
 import { addAiUsage } from '@/db/queries';
@@ -57,38 +58,41 @@ export default function RootLayout() {
       <KeyboardProvider>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <StatusBar style="auto" />
-          <Stack key={generation} screenOptions={{ headerBackTitle: 'Wstecz' }}>
-            {/*
-              The main screen draws its own header (see index.tsx): the native
-              one doubled the status-bar inset in edge-to-edge mode, leaving a
-              big gap above the title, and `headerStatusBarHeight` is not exposed
-              on this Stack's options to correct it.
-            */}
-            <Stack.Screen name="index" options={{ headerShown: false }} />
-            <Stack.Screen name="ai-limits" options={{ title: 'Ustawienia AI' }} />
-            <Stack.Screen name="stats" options={{ title: 'Statystyki' }} />
-            <Stack.Screen name="backup" options={{ title: 'Import i eksport' }} />
-            <Stack.Screen name="friends" options={{ title: 'Znajomi' }} />
-            <Stack.Screen name="ranking" options={{ title: 'Ranking' }} />
-            <Stack.Screen name="about" options={{ title: 'O tej aplikacji' }} />
-            <Stack.Screen name="deck/[deckId]/index" options={{ title: 'Talia' }} />
-            <Stack.Screen
-              name="deck/[deckId]/review"
-              options={{ headerShown: false, animation: 'fade' }}
-            />
-            <Stack.Screen
-              name="deck/[deckId]/preview"
-              options={{ headerShown: false, animation: 'fade' }}
-            />
-            <Stack.Screen name="deck-editor" options={{ presentation: 'modal' }} />
-            <Stack.Screen name="card-editor" options={{ presentation: 'modal' }} />
-            {/* Opened from the card editor, which is itself a modal — so this
-                goes over it as one, or iOS would push it underneath. */}
-            <Stack.Screen
-              name="card-preview"
-              options={{ headerShown: false, presentation: 'fullScreenModal', animation: 'fade' }}
-            />
-          </Stack>
+          {/* Outside the keyed Stack, so a toast outlives a restore's remount. */}
+          <ToastProvider>
+            <Stack key={generation} screenOptions={{ headerBackTitle: 'Wstecz' }}>
+              {/*
+                The main screen draws its own header (see index.tsx): the native
+                one doubled the status-bar inset in edge-to-edge mode, leaving a
+                big gap above the title, and `headerStatusBarHeight` is not exposed
+                on this Stack's options to correct it.
+              */}
+              <Stack.Screen name="index" options={{ headerShown: false }} />
+              <Stack.Screen name="ai-limits" options={{ title: 'Ustawienia AI' }} />
+              <Stack.Screen name="stats" options={{ title: 'Statystyki' }} />
+              <Stack.Screen name="backup" options={{ title: 'Import i eksport' }} />
+              <Stack.Screen name="friends" options={{ title: 'Znajomi' }} />
+              <Stack.Screen name="ranking" options={{ title: 'Ranking' }} />
+              <Stack.Screen name="about" options={{ title: 'O tej aplikacji' }} />
+              <Stack.Screen name="deck/[deckId]/index" options={{ title: 'Talia' }} />
+              <Stack.Screen
+                name="deck/[deckId]/review"
+                options={{ headerShown: false, animation: 'fade' }}
+              />
+              <Stack.Screen
+                name="deck/[deckId]/preview"
+                options={{ headerShown: false, animation: 'fade' }}
+              />
+              <Stack.Screen name="deck-editor" options={{ presentation: 'modal' }} />
+              <Stack.Screen name="card-editor" options={{ presentation: 'modal' }} />
+              {/* Opened from the card editor, which is itself a modal — so this
+                  goes over it as one, or iOS would push it underneath. */}
+              <Stack.Screen
+                name="card-preview"
+                options={{ headerShown: false, presentation: 'fullScreenModal', animation: 'fade' }}
+              />
+            </Stack>
+          </ToastProvider>
         </ThemeProvider>
       </KeyboardProvider>
     </GestureHandlerRootView>

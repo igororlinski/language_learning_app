@@ -2,6 +2,7 @@ import { hasCloudflare, hasGemini, hasLmStudio, type AiKeys } from '@/lib/ai-key
 import type { Prompt, Shape, Turn } from '@/lib/ai-prompts';
 import {
   AiError,
+  isCancelled,
   LOCAL_TIMEOUT_MS,
   refusal,
   runCloudflare,
@@ -64,12 +65,14 @@ async function geminiAsk(
   key: string,
   model: string,
   prompt: Prompt,
-  shape: Shape
+  shape: Shape,
+  signal?: AbortSignal
 ): Promise<{ text: string } | { error: AiError }> {
   let reply;
 
   try {
     reply = await send(`${GEMINI_URL}/${model}:generateContent`, {
+      signal,
       headers: { 'x-goog-api-key': key },
       body: {
         ...forGemini(prompt),
@@ -141,12 +144,24 @@ export function textFromWorkersAi(result: Record<string, unknown>): string {
   return typeof content === 'string' ? content : '';
 }
 
-async function llamaAsk(keys: AiKeys, prompt: Prompt, shape: Shape): Promise<string> {
-  const result = await runCloudflare(keys.cloudflareAccount, keys.cloudflareToken, LLAMA_MODEL, {
-    messages: forChat(prompt),
-    max_tokens: shape.llamaMaxTokens,
-    temperature: shape.temperature,
-  });
+async function llamaAsk(
+  keys: AiKeys,
+  prompt: Prompt,
+  shape: Shape,
+  signal?: AbortSignal
+): Promise<string> {
+  const result = await runCloudflare(
+    keys.cloudflareAccount,
+    keys.cloudflareToken,
+    LLAMA_MODEL,
+    {
+      messages: forChat(prompt),
+      max_tokens: shape.llamaMaxTokens,
+      temperature: shape.temperature,
+    },
+    undefined,
+    signal
+  );
 
   const text = textFromWorkersAi(result);
 
@@ -236,7 +251,8 @@ async function lmStudioAsk(
   keys: AiKeys,
   prompt: Prompt,
   shape: Shape,
-  requestedModel: string | null
+  requestedModel: string | null,
+  signal?: AbortSignal
 ): Promise<string> {
   if (!hasLmStudio(keys)) throw new AiError('no-lmstudio');
 
@@ -247,6 +263,8 @@ async function lmStudioAsk(
   if (!model) {
     const status = await checkLmStudio(keys);
 
+    // Stopped while the computer was being looked for: that is not "offline".
+    if (signal?.aborted) throw new AiError('cancelled');
     if (!status.online) throw new AiError('local-offline');
 
     model = status.models[0] ?? null;
@@ -258,6 +276,7 @@ async function lmStudioAsk(
 
   try {
     reply = await send(`${keys.lmStudioUrl}/v1/chat/completions`, {
+      signal,
       headers: lmStudioHeaders(keys),
       timeoutMs: LOCAL_TIMEOUT_MS,
       body: {
@@ -271,7 +290,9 @@ async function lmStudioAsk(
   } catch (error) {
     // No answer in time is still a timeout; no connection at all is the
     // computer, and that has its own sentence.
-    if (error instanceof AiError && error.failure === 'timeout') throw error;
+    if (error instanceof AiError && (error.failure === 'timeout' || error.failure === 'cancelled')) {
+      throw error;
+    }
 
     throw new AiError('local-offline');
   }
@@ -312,14 +333,17 @@ async function lmStudioAsk(
  *
  * Only a successful Gemini answer is counted against the day's allowance.
  * llama is what happens once that allowance is spent, not part of it.
+ *
+ * `signal` stops the whole chain, not one model: "Przerwij" means stop asking.
  */
 export async function writeText(
   prompt: Prompt,
   shape: Shape,
   source: TextSource,
-  keys: AiKeys
+  keys: AiKeys,
+  signal?: AbortSignal
 ): Promise<string> {
-  if (source.provider === 'lmstudio') return lmStudioAsk(keys, prompt, shape, source.model);
+  if (source.provider === 'lmstudio') return lmStudioAsk(keys, prompt, shape, source.model, signal);
 
   if (!hasGemini(keys) && !hasCloudflare(keys)) throw new AiError('no-text-key');
 
@@ -327,7 +351,7 @@ export async function writeText(
 
   if (hasGemini(keys)) {
     for (const model of GEMINI_MODELS) {
-      const attempt = await geminiAsk(keys.gemini, model, prompt, shape);
+      const attempt = await geminiAsk(keys.gemini, model, prompt, shape, signal);
 
       if ('text' in attempt) {
         recordSpend('gemini', 1);
@@ -337,13 +361,13 @@ export async function writeText(
       // A key the user typed wrong is said, not papered over: falling through
       // to llama would make a typo look like a working setup with worse
       // answers, and nobody would ever find out why.
-      if (attempt.error.failure === 'unauthorized') throw attempt.error;
+      if (attempt.error.failure === 'unauthorized' || isCancelled(attempt.error)) throw attempt.error;
 
       last = attempt.error;
     }
   }
 
-  if (hasCloudflare(keys)) return llamaAsk(keys, prompt, shape);
+  if (hasCloudflare(keys)) return llamaAsk(keys, prompt, shape, signal);
 
   // Gemini alone, and it refused: its own reason is the one to give — a
   // spent allowance says so, a bad key says so.

@@ -12,6 +12,7 @@ import {
   CLOUD_TEXT,
   errorDetail,
   failureForStatus,
+  isCancelled,
   parseTextSource,
   resultFromResponse,
   runCloudflare,
@@ -214,7 +215,31 @@ check('LM Studio z pustym modelem to pierwszy z brzegu', parseTextSource('lmstud
 
 group('Dostawca, ktory nie odpowiada');
 
-/** A `fetch` that never answers on its own and fails only when aborted, like the real one. */
+/**
+ * Runs `call` against a `fetch` that never answers on its own and fails only
+ * when aborted, like the real one. `fetched` counts the requests that went out.
+ */
+export async function hangingFetch(call: () => Promise<unknown>) {
+  const real = globalThis.fetch;
+  let fetched = 0;
+
+  globalThis.fetch = ((_url: string, init: RequestInit) => {
+    fetched += 1;
+    return new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new Error('Aborted')));
+    });
+  }) as typeof fetch;
+
+  try {
+    await call();
+    return { outcome: 'odpowiedzial', fetched };
+  } catch (error) {
+    return { outcome: error instanceof AiError ? error.failure : String(error), fetched };
+  } finally {
+    globalThis.fetch = real;
+  }
+}
+
 async function hanging(timeoutMs: number) {
   const real = globalThis.fetch;
 
@@ -235,3 +260,21 @@ async function hanging(timeoutMs: number) {
 
 // Without a limit the spinner turned for good; now the wait ends with a sentence.
 check('zawieszone zadanie konczy sie po limicie czasu', await hanging(20), 'timeout');
+
+group('Przerwij');
+
+const stopper = new AbortController();
+setTimeout(() => stopper.abort(), 10);
+const stoppedSend = await hangingFetch(() =>
+  send('https://p.example.dev/x', { body: {}, timeoutMs: 5000, signal: stopper.signal })
+);
+
+// Not "timeout": the screen stays quiet for this one.
+check('przerwane przez uzytkownika to nie limit czasu', stoppedSend.outcome, 'cancelled');
+check('i nie jest bledem do pokazania', isCancelled(new AiError(stoppedSend.outcome as 'cancelled')), true);
+
+const already = await hangingFetch(() =>
+  send('https://p.example.dev/x', { body: {}, signal: AbortSignal.abort() })
+);
+
+check('juz przerwane nawet nie wychodzi', [already.outcome, already.fetched], ['cancelled', 0]);

@@ -29,6 +29,7 @@ import './languages.test';
 import './speech.test';
 import './tags.test';
 import './help.test';
+import './duplicates.test';
 import './study-day.test';
 import './fsrs-options.test';
 import './fsrs-optimizer.test';

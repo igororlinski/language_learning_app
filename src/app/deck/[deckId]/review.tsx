@@ -143,13 +143,17 @@ export default function ReviewScreen() {
             </Pressable>
           ) : null}
           {history.length > 0 ? (
-            <Pressable onPress={undo} hitSlop={12}>
+            <Pressable
+              onPress={undo}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Cofnij ostatnią odpowiedź">
               <ThemedText type="small" style={{ color: theme.accent }}>
                 Cofnij
               </ThemedText>
             </Pressable>
           ) : null}
-          <Pressable onPress={() => router.back()} hitSlop={12}>
+          <Pressable onPress={() => router.back()} hitSlop={12} accessibilityRole="button">
             <ThemedText type="small" style={{ color: theme.accent }}>
               Zakończ
             </ThemedText>
@@ -173,10 +177,13 @@ export default function ReviewScreen() {
               <View style={styles.grades}>
                 {GRADES.map((grade) => {
                   const next = preview.grades[grade].card;
+                  const interval = formatSchedule(next.scheduled_days, next.due.getTime() - preview.at);
                   return (
                     <Pressable
                       key={grade}
                       onPress={() => answer(grade)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${GRADE_LABELS[grade]}, wróci za ${interval}`}
                       style={({ pressed }) => [
                         styles.gradeButton,
                         { backgroundColor: RATING_COLOR[grade], opacity: pressed ? 0.75 : 1 },
@@ -185,7 +192,7 @@ export default function ReviewScreen() {
                         {GRADE_LABELS[grade]}
                       </ThemedText>
                       <ThemedText type="small" style={styles.gradeInterval}>
-                        {formatSchedule(next.scheduled_days, next.due.getTime() - preview.at)}
+                        {interval}
                       </ThemedText>
                     </Pressable>
                   );
