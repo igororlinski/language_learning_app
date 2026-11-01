@@ -1,6 +1,7 @@
 import { useMigrations } from 'drizzle-orm/expo-sqlite/migrator';
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -13,6 +14,8 @@ import { db } from '@/db/client';
 import { addAiUsage } from '@/db/queries';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { setSpendSink } from '@/lib/ai-usage';
+import { syncStats } from '@/lib/friends-store';
+import { useDataGeneration } from '@/lib/data-generation';
 
 // What the AI modules spend lands in the database, where the meters read it.
 // Set at load rather than in an effect: nothing can spend before a screen has
@@ -29,6 +32,14 @@ export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const { success, error } = useMigrations(db, migrations);
+  // Bumped by a restore: a new key remounts every screen on the restored data.
+  const generation = useDataGeneration();
+
+  // Friends see today's numbers from the moment the app opens; without an
+  // account or a network this does nothing, and nothing waits on it.
+  useEffect(() => {
+    if (success) void syncStats();
+  }, [success]);
 
   if (error) {
     return <Bootstrap message={`Nie udało się przygotować bazy: ${error.message}`} />;
@@ -46,7 +57,7 @@ export default function RootLayout() {
       <KeyboardProvider>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <StatusBar style="auto" />
-          <Stack screenOptions={{ headerBackTitle: 'Wstecz' }}>
+          <Stack key={generation} screenOptions={{ headerBackTitle: 'Wstecz' }}>
             {/*
               The main screen draws its own header (see index.tsx): the native
               one doubled the status-bar inset in edge-to-edge mode, leaving a
@@ -55,6 +66,10 @@ export default function RootLayout() {
             */}
             <Stack.Screen name="index" options={{ headerShown: false }} />
             <Stack.Screen name="ai-limits" options={{ title: 'Ustawienia AI' }} />
+            <Stack.Screen name="stats" options={{ title: 'Statystyki' }} />
+            <Stack.Screen name="backup" options={{ title: 'Import i eksport' }} />
+            <Stack.Screen name="friends" options={{ title: 'Znajomi' }} />
+            <Stack.Screen name="ranking" options={{ title: 'Ranking' }} />
             <Stack.Screen name="deck/[deckId]/index" options={{ title: 'Talia' }} />
             <Stack.Screen
               name="deck/[deckId]/review"

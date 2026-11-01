@@ -157,6 +157,10 @@ export type PhoneticMenu = {
    * anything else, because adding a key is the one step that unlocks the rest.
    */
   blocked?: string | null;
+  /** The language the deck's template will transcribe this text in at save, if any. */
+  pending?: string | null;
+  /** Lets this one card go without the template's transcription. */
+  skip?: () => void;
 };
 
 export function phoneticMenu({
@@ -169,6 +173,8 @@ export function phoneticMenu({
   clear,
   show,
   blocked = null,
+  pending = null,
+  skip,
 }: PhoneticMenu): SheetAction[] {
   const candidates = speechCandidates(scope, languages);
   const known = speech && candidates.includes(speech) ? speech : soleCandidate(candidates);
@@ -200,7 +206,11 @@ export function phoneticMenu({
     onPress: ask,
   };
 
-  return current
-    ? [write, { label: 'Usuń zapis fonetyczny', onPress: clear, destructive: true }]
+  if (current) return [write, { label: 'Usuń zapis fonetyczny', onPress: clear, destructive: true }];
+
+  // The template's wish is a default, not a rule: one card can say no to it,
+  // with the same words the deck editor uses to say no for every card.
+  return pending && skip
+    ? [write, { label: PHONETIC_DEFAULT_LABELS.off, onPress: skip }]
     : [write];
 }

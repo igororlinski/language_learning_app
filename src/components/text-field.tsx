@@ -1,5 +1,11 @@
 import type { Ref } from 'react';
-import { StyleSheet, TextInput, View, type TextInputProps } from 'react-native';
+import {
+  StyleSheet,
+  TextInput,
+  View,
+  type TextInputInstance,
+  type TextInputProps,
+} from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Radius, Spacing } from '@/constants/theme';
@@ -9,7 +15,7 @@ export type TextFieldProps = TextInputProps & {
   label: string;
   /** Shown under the field and paints its border: what is wrong with the value. */
   error?: string;
-  ref?: Ref<TextInput>;
+  ref?: Ref<TextInputInstance>;
 };
 
 export function TextField({ label, error, style, multiline, ref, ...rest }: TextFieldProps) {

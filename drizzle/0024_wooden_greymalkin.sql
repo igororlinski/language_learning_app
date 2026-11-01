@@ -1,0 +1,1 @@
+ALTER TABLE `review_logs` ADD `duration_ms` integer;

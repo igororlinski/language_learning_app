@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
-import { Stack, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { Stack, useLocalSearchParams, usePreventRemove, useRouter } from 'expo-router';
+import { useMemo, useState } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { ActionSheet, type SheetAction } from '@/components/action-sheet';
@@ -152,20 +152,10 @@ export default function DeckScreen() {
     [cards, selected]
   );
 
-  const navigation = useNavigation();
-
   // Going back drops the selection instead of leaving the deck — one rule for
   // the header arrow, the phone's back button and the back gesture alike, since
-  // all three come through here. `expo-router` (SDK 57) exports no
-  // `usePreventRemove`, so the navigation event is listened to directly.
-  useEffect(() => {
-    if (!selecting) return;
-
-    return navigation.addListener('beforeRemove', (event) => {
-      event.preventDefault();
-      setSelected(null);
-    });
-  }, [navigation, selecting]);
+  // all three come through here.
+  usePreventRemove(selecting, () => setSelected(null));
 
   const toggle = (cardId: number) =>
     setSelected((current) => {

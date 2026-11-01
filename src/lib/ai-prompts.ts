@@ -3,8 +3,9 @@
  *
  * **Moved here from the Worker on 2026-10-20**, when the app started calling
  * providers with the user's own keys. Until then the prompt lived in
- * `worker/src/index.js` so that a rewrite was a five-second `wrangler deploy`;
- * now a rewrite is a new build — in Expo Go, a reload. The text and the
+ * `worker/src/index.js` (deleted 2026-10-25, still in git history) so that a
+ * rewrite was a five-second `wrangler deploy`; now a rewrite is a new build —
+ * in Expo Go, a reload. The text and the
  * comments below are the Worker's, unchanged: they record why each sentence is
  * there, and every one of them was paid for in measured answers (`AI.md`).
  *

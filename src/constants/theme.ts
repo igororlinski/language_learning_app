@@ -51,6 +51,17 @@ export const QueueColors = {
 } as const;
 
 /**
+ * The card states on "Statystyki": the queue's colours, with review split in
+ * two — a pale green for young cards and the queue's green for mature ones.
+ */
+export const CardStateColors = {
+  new: QueueColors.new,
+  learning: QueueColors.learning,
+  young: '#8FD4B0',
+  mature: QueueColors.review,
+} as const;
+
+/**
  * The colour a "how much is left" meter takes at a given remaining percent:
  * green with room to spare, amber as it tightens, red when nearly gone. Shared
  * by the full "Ustawienia AI" screen and the compact bar in the mnemonic flow so

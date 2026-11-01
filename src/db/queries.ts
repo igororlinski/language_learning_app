@@ -1,4 +1,18 @@
-import { and, asc, desc, eq, inArray, lt, lte, ne, or, sql, type SQLWrapper } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  lt,
+  lte,
+  ne,
+  or,
+  sql,
+  type SQLWrapper,
+} from 'drizzle-orm';
 
 import { cardPieces, sideLines, type CardLine, type CardPlacement } from '@/lib/card-layout';
 import { isMediaKind, type MediaKind } from '@/lib/media';
@@ -16,6 +30,25 @@ import {
 } from '@/lib/languages';
 import { type StabilitySample } from '@/lib/fsrs-optimizer';
 import { dedupeTags, tagName, tagSlug } from '@/lib/tags';
+import {
+  DECK_FORMAT,
+  DECK_VERSION,
+  type DeckPackage,
+  type PackageCard,
+  type PackageReview,
+  type PackageTemplate,
+} from '@/lib/deck-package';
+import type { CsvCard } from '@/lib/csv-import';
+import {
+  dayKey,
+  goalOn,
+  parseDailyGoal,
+  parseLightDays,
+  parseLightGoal,
+  type GoalPlan,
+} from '@/lib/goals';
+import { dayProgress, newlyEarned, type BadgeProgress } from '@/lib/badges';
+import { MATURE_DAYS } from '@/lib/stats';
 
 import {
   remainingAllowance,
@@ -41,6 +74,7 @@ import { db } from './client';
 import {
   aiUsage,
   appSettings,
+  badges,
   cardFields,
   cards,
   cardTags,
@@ -52,11 +86,14 @@ import {
   DEFAULT_PICTURE_QUALITY,
   fsrsState,
   reviewLogs,
+  studyDays,
   tags,
   type CardField,
   type CardTemplate,
   type DeckFieldSlot,
   type FieldKind,
+  type FsrsStateRow,
+  type ReviewLog,
   type FieldSide,
   type NewCardOrder,
   type NewCardPlacement,
@@ -1159,6 +1196,796 @@ export function getCard(cardId: number) {
   return db.select().from(cards).where(eq(cards.id, cardId)).get();
 }
 
+/* ------------------------------------------------------------- statistics */
+
+/**
+ * The reads behind "Statystyki". They only fetch: what a statistic means is
+ * decided in `src/lib/stats.ts`, where it has tests. `deckId` null is every
+ * deck.
+ */
+
+/** Every deck by name, for the deck picker on the statistics screen. */
+export function deckNamesQuery() {
+  return db.select({ id: decks.id, name: decks.name }).from(decks).orderBy(asc(decks.name));
+}
+
+/**
+ * Every answer, with the retention its card's deck aims at — the deck the card
+ * is in **now**, the same rule "done today" follows after a move.
+ *
+ * Reset cards keep their answers: `resetCards` clears the schedule, not the
+ * history, and what was remembered was remembered.
+ */
+export function statsLogsQuery(deckId: number | null) {
+  return db
+    .select({
+      cardId: reviewLogs.cardId,
+      rating: reviewLogs.rating,
+      state: reviewLogs.state,
+      reviewedAt: reviewLogs.reviewedAt,
+      durationMs: reviewLogs.durationMs,
+      targetRetention: decks.desiredRetention,
+    })
+    .from(reviewLogs)
+    .innerJoin(cards, eq(cards.id, reviewLogs.cardId))
+    .innerJoin(decks, eq(decks.id, cards.deckId))
+    .where(deckId == null ? undefined : eq(cards.deckId, deckId));
+}
+
+/** Every card's current schedule, for the forecast and the card states. */
+export function statsCardsQuery(deckId: number | null) {
+  return db
+    .select({
+      cardId: fsrsState.cardId,
+      state: fsrsState.state,
+      due: fsrsState.due,
+      scheduledDays: fsrsState.scheduledDays,
+    })
+    .from(fsrsState)
+    .innerJoin(cards, eq(cards.id, fsrsState.cardId))
+    .where(deckId == null ? undefined : eq(cards.deckId, deckId));
+}
+
+/**
+ * Cards that show the learner an association: a `mnemonic` field with
+ * something in it, and not both halves hidden. A field nobody sees during
+ * review cannot help anybody remember, so it does not count.
+ */
+export function mnemonicCardsQuery(deckId: number | null) {
+  return db
+    .selectDistinct({ cardId: cardFields.cardId })
+    .from(cardFields)
+    .innerJoin(cards, eq(cards.id, cardFields.cardId))
+    .where(
+      and(
+        eq(cardFields.kind, 'mnemonic'),
+        or(ne(cardFields.value, ''), isNotNull(cardFields.mediaPath)),
+        or(eq(cardFields.hideValue, false), eq(cardFields.hideMedia, false)),
+        deckId == null ? undefined : eq(cards.deckId, deckId)
+      )
+    );
+}
+
+/* --------------------------------------------------- daily goal and badges */
+
+const DAILY_GOAL_KEY = 'goal.answers';
+const LIGHT_DAYS_KEY = 'goal.light-days';
+const LIGHT_GOAL_KEY = 'goal.light-answers';
+const GOAL_KEYS = [DAILY_GOAL_KEY, LIGHT_DAYS_KEY, LIGHT_GOAL_KEY];
+
+type SettingRow = { key: string; value: string };
+
+/** The goal as set — the everyday one and the lighter days — out of the settings rows. */
+export function goalPlanFrom(rows: readonly SettingRow[]): GoalPlan {
+  const value = (key: string) => rows.find((row) => row.key === key)?.value;
+
+  return {
+    goal: parseDailyGoal(value(DAILY_GOAL_KEY)),
+    lightDays: parseLightDays(value(LIGHT_DAYS_KEY)),
+    lightGoal: parseLightGoal(value(LIGHT_GOAL_KEY)),
+  };
+}
+
+/** The goal today is held to, out of the settings rows (`appSettingsQuery`). */
+export function dailyGoalFrom(rows: readonly SettingRow[], now = Date.now()): number {
+  return goalOn(goalPlanFrom(rows), dayKey(now));
+}
+
+export function getDailyGoal(now = Date.now()): number {
+  return dailyGoalFrom(appSettingsQuery().all(), now);
+}
+
+/**
+ * Stores one of the goal settings, from today on. Today's row, if there is
+ * one, takes the goal today is now held to at once — today is measured by
+ * what is set now — and every earlier day keeps the goal it had.
+ */
+function setGoalSetting(key: string, value: string, now: number): void {
+  db.transaction((tx) => {
+    tx.insert(appSettings)
+      .values({ key, value })
+      .onConflictDoUpdate({ target: appSettings.key, set: { value } })
+      .run();
+
+    const today = dayKey(now);
+    const goal = goalOn(
+      goalPlanFrom(tx.select().from(appSettings).where(inArray(appSettings.key, GOAL_KEYS)).all()),
+      today
+    );
+
+    tx.update(studyDays).set({ goal }).where(eq(studyDays.day, today)).run();
+  });
+}
+
+export function setDailyGoal(goal: number, now = Date.now()): void {
+  setGoalSetting(DAILY_GOAL_KEY, String(parseDailyGoal(String(goal))), now);
+}
+
+/** The weekdays held to the lighter goal (0 for Sunday … 6 for Saturday). */
+export function setLightDays(days: readonly number[], now = Date.now()): void {
+  setGoalSetting(LIGHT_DAYS_KEY, JSON.stringify(parseLightDays(JSON.stringify(days))), now);
+}
+
+export function setLightGoal(goal: number, now = Date.now()): void {
+  const value = parseLightGoal(String(goal));
+
+  if (value != null) setGoalSetting(LIGHT_GOAL_KEY, String(value), now);
+}
+
+/** Every study day with an answer, for the streak and the goal (`src/lib/goals.ts`). */
+export function studyDaysQuery() {
+  return db.select().from(studyDays);
+}
+
+/** Badges earned so far, oldest first. */
+export function badgesQuery() {
+  return db.select().from(badges).orderBy(asc(badges.earnedAt), asc(badges.id));
+}
+
+/** Where every badge ladder stands now, across all decks. */
+export function badgeProgress(now = Date.now()): BadgeProgress {
+  const mature = db
+    .select({ count: sql<number>`count(*)` })
+    .from(fsrsState)
+    .where(and(eq(fsrsState.state, State.Review), gte(fsrsState.scheduledDays, MATURE_DAYS)))
+    .get();
+
+  return {
+    ...dayProgress(studyDaysQuery().all(), getDailyGoal(now), now),
+    mature: mature?.count ?? 0,
+    mnemonics: mnemonicCardsQuery(null).all().length,
+  };
+}
+
+/**
+ * Stores every badge the numbers have reached and that is not stored yet, and
+ * says which ones those were — the session summary announces them. Called when
+ * a session ends and when "Statystyki" opens, not on every write: a badge for
+ * an association made in the card editor can wait for the next of the two.
+ */
+export function awardBadges(now = Date.now()): string[] {
+  return db.transaction((tx) => {
+    const earned = new Set(tx.select({ id: badges.id }).from(badges).all().map((row) => row.id));
+    const fresh = newlyEarned(badgeProgress(now), earned);
+
+    if (fresh.length > 0) {
+      tx.insert(badges)
+        .values(fresh.map((id) => ({ id, earnedAt: new Date(now) })))
+        .run();
+    }
+
+    return fresh;
+  });
+}
+
+/* ----------------------------------------------------------------- backup */
+
+/** How much a backup holds, for its manifest — and for the question before a restore. */
+export function backupCounts(): { decks: number; cards: number; reviews: number } {
+  const count = (table: typeof decks | typeof cards | typeof reviewLogs) =>
+    db.select({ n: sql<number>`count(*)` }).from(table).get()?.n ?? 0;
+
+  return { decks: count(decks), cards: count(cards), reviews: count(reviewLogs) };
+}
+
+const LAST_BACKUP_KEY = 'backup.last-at';
+const BACKUP_FOLDER_KEY = 'backup.folder';
+
+/** When the last backup was saved on this phone, out of the settings rows. */
+export function lastBackupFrom(rows: readonly { key: string; value: string }[]): Date | null {
+  const value = rows.find((row) => row.key === LAST_BACKUP_KEY)?.value;
+  const time = value ? Date.parse(value) : NaN;
+
+  return Number.isNaN(time) ? null : new Date(time);
+}
+
+/** The folder the last backup was saved into — where the picker opens next time. */
+export function backupFolderFrom(rows: readonly { key: string; value: string }[]): string | null {
+  return rows.find((row) => row.key === BACKUP_FOLDER_KEY)?.value || null;
+}
+
+/**
+ * „Ostatnia kopia" and the folder it went to are facts about this phone, not
+ * part of the data: a backup is written before its own date is recorded, so it
+ * carries the date of the one before it. A restore keeps the phone's.
+ */
+export type PhoneBackupState = Record<typeof LAST_BACKUP_KEY | typeof BACKUP_FOLDER_KEY, string | null>;
+
+export function phoneBackupState(): PhoneBackupState {
+  const rows = appSettingsQuery().all();
+  const value = (key: string) => rows.find((row) => row.key === key)?.value ?? null;
+
+  return { [LAST_BACKUP_KEY]: value(LAST_BACKUP_KEY), [BACKUP_FOLDER_KEY]: value(BACKUP_FOLDER_KEY) };
+}
+
+/** Puts the phone's own backup state back over whatever a restore brought. */
+export function putPhoneBackupState(state: PhoneBackupState): void {
+  db.transaction((tx) => {
+    for (const [key, value] of Object.entries(state)) {
+      if (value == null) {
+        tx.delete(appSettings).where(eq(appSettings.key, key)).run();
+      } else {
+        tx.insert(appSettings)
+          .values({ key, value })
+          .onConflictDoUpdate({ target: appSettings.key, set: { value } })
+          .run();
+      }
+    }
+  });
+}
+
+export function setLastBackup(at: Date, folder?: string): void {
+  const rows = [{ key: LAST_BACKUP_KEY, value: at.toISOString() }];
+  if (folder) rows.push({ key: BACKUP_FOLDER_KEY, value: folder });
+
+  db.transaction((tx) => {
+    for (const row of rows) {
+      tx.insert(appSettings)
+        .values(row)
+        .onConflictDoUpdate({ target: appSettings.key, set: { value: row.value } })
+        .run();
+    }
+  });
+}
+
+/* ---------------------------------------------------------- deck packages */
+
+/** A row's uid, which migration 0025 gave every row there was and every insert gets since. */
+function uidOf(row: { uid: string | null }): string {
+  if (!row.uid) throw new Error('Wiersz bez uid — migracja 0025 nie przeszła?');
+  return row.uid;
+}
+
+const scheduleOut = (row: FsrsStateRow) => ({
+  due: row.due.getTime(),
+  stability: row.stability,
+  difficulty: row.difficulty,
+  elapsedDays: row.elapsedDays,
+  scheduledDays: row.scheduledDays,
+  learningSteps: row.learningSteps,
+  reps: row.reps,
+  lapses: row.lapses,
+  state: row.state,
+  lastReview: row.lastReview?.getTime() ?? null,
+});
+
+const reviewOut = (row: ReviewLog): PackageReview => ({
+  uid: uidOf(row),
+  rating: row.rating,
+  state: row.state,
+  due: row.due.getTime(),
+  stability: row.stability,
+  difficulty: row.difficulty,
+  elapsedDays: row.elapsedDays,
+  lastElapsedDays: row.lastElapsedDays,
+  scheduledDays: row.scheduledDays,
+  learningSteps: row.learningSteps,
+  reviewedAt: row.reviewedAt.getTime(),
+  durationMs: row.durationMs,
+});
+
+/** Groups rows by card id, keeping their order. */
+function byCard<T>(rows: { cardId: number; row: T }[]): Map<number, T[]> {
+  const map = new Map<number, T[]>();
+
+  for (const { cardId, row } of rows) {
+    const list = map.get(cardId);
+    if (list) list.push(row);
+    else map.set(cardId, [row]);
+  }
+
+  return map;
+}
+
+/**
+ * One deck as a package (`src/lib/deck-package.ts`): settings, templates,
+ * cards, fields and tags — and, with `withProgress`, every card's schedule
+ * and history too. Null for a deck that does not exist.
+ *
+ * Every column by name, never a spread of a row (pitfall 11): what goes into
+ * the file is what an import on another phone has to know how to put back.
+ */
+export function exportDeckPackage(deckId: number, withProgress: boolean, now = new Date()): DeckPackage | null {
+  const deck = db.select().from(decks).where(eq(decks.id, deckId)).get();
+  if (!deck) return null;
+
+  const templates: PackageTemplate[] = deckTemplates(deckId).map((template) => ({
+    name: template.name,
+    frontSide: template.frontSide,
+    frontPosition: template.frontPosition,
+    backSide: template.backSide,
+    backPosition: template.backPosition,
+    frontSpeech: template.frontSpeech,
+    backSpeech: template.backSpeech,
+    frontPhoneticLanguage: template.frontPhoneticLanguage,
+    backPhoneticLanguage: template.backPhoneticLanguage,
+    slots: db
+      .select()
+      .from(deckFieldSlots)
+      .where(eq(deckFieldSlots.templateId, template.id))
+      .orderBy(asc(deckFieldSlots.position), asc(deckFieldSlots.id))
+      .all()
+      .map((slot) => ({
+        side: slot.side,
+        position: slot.position,
+        kind: slot.kind,
+        speech: slot.speech,
+        phoneticLanguage: slot.phoneticLanguage,
+      })),
+  }));
+
+  const inDeck = eq(cards.deckId, deckId);
+
+  const fields = byCard(
+    db
+      .select({ cardId: cardFields.cardId, row: cardFields })
+      .from(cardFields)
+      .innerJoin(cards, eq(cards.id, cardFields.cardId))
+      .where(inDeck)
+      .orderBy(asc(cardFields.position), asc(cardFields.id))
+      .all()
+  );
+
+  const tagNames = byCard(
+    db
+      .select({ cardId: cardTags.cardId, row: tags.name })
+      .from(cardTags)
+      .innerJoin(tags, eq(tags.id, cardTags.tagId))
+      .innerJoin(cards, eq(cards.id, cardTags.cardId))
+      .where(inDeck)
+      .orderBy(asc(tags.name))
+      .all()
+  );
+
+  const schedules = new Map(
+    withProgress
+      ? db
+          .select({ cardId: fsrsState.cardId, row: fsrsState })
+          .from(fsrsState)
+          .innerJoin(cards, eq(cards.id, fsrsState.cardId))
+          .where(inDeck)
+          .all()
+          .map(({ cardId, row }) => [cardId, row] as const)
+      : []
+  );
+
+  const reviews = withProgress
+    ? byCard(
+        db
+          .select({ cardId: reviewLogs.cardId, row: reviewLogs })
+          .from(reviewLogs)
+          .innerJoin(cards, eq(cards.id, reviewLogs.cardId))
+          .where(inDeck)
+          .orderBy(asc(reviewLogs.reviewedAt), asc(reviewLogs.id))
+          .all()
+      )
+    : new Map<number, ReviewLog[]>();
+
+  const cardRows = db.select().from(cards).where(inDeck).orderBy(asc(cards.createdAt), asc(cards.id)).all();
+
+  return {
+    format: DECK_FORMAT,
+    version: DECK_VERSION,
+    createdAt: now.toISOString(),
+    withProgress,
+    deck: {
+      uid: uidOf(deck),
+      name: deck.name,
+      description: deck.description,
+      newPerDay: deck.newPerDay,
+      reviewsPerDay: deck.reviewsPerDay,
+      newCardPlacement: deck.newCardPlacement,
+      newCardOrder: deck.newCardOrder,
+      desiredRetention: deck.desiredRetention,
+      maximumInterval: deck.maximumInterval,
+      learningSteps: deck.learningSteps,
+      relearningSteps: deck.relearningSteps,
+      fsrsWeights: deck.fsrsWeights,
+      frontLanguages: deck.frontLanguages,
+      backLanguages: deck.backLanguages,
+      imageQuality: deck.imageQuality,
+    },
+    templates,
+    cards: cardRows.map((card): PackageCard => {
+      const schedule = schedules.get(card.id);
+
+      return {
+        uid: uidOf(card),
+        front: card.front,
+        back: card.back,
+        frontSide: card.frontSide,
+        frontPosition: card.frontPosition,
+        backSide: card.backSide,
+        backPosition: card.backPosition,
+        frontSpeech: card.frontSpeech,
+        backSpeech: card.backSpeech,
+        frontPhonetic: card.frontPhonetic,
+        backPhonetic: card.backPhonetic,
+        createdAt: card.createdAt.getTime(),
+        tags: tagNames.get(card.id) ?? [],
+        fields: (fields.get(card.id) ?? []).map((field) => ({
+          side: field.side,
+          position: field.position,
+          kind: field.kind,
+          value: field.value,
+          mediaPath: isMediaKind(field.kind) ? field.mediaPath : null,
+          mnemonic: field.mnemonic,
+          hideValue: field.hideValue,
+          hideMedia: field.hideMedia,
+          speech: field.speech,
+          phonetic: field.phonetic,
+        })),
+        schedule: schedule ? scheduleOut(schedule) : null,
+        reviews: (reviews.get(card.id) ?? []).map(reviewOut),
+      };
+    }),
+  };
+}
+
+/**
+ * Tag ids by name for an import: found by slug, the way the editor finds them,
+ * or made — each one looked up once however many cards carry it.
+ */
+function tagResolver(tx: Tx): (name: string) => number {
+  const ids = new Map<string, number>();
+
+  return (name) => {
+    const slug = tagSlug(name);
+    const known = ids.get(slug);
+    if (known !== undefined) return known;
+
+    const id = (
+      tx.select({ id: tags.id }).from(tags).where(eq(tags.slug, slug)).get() ??
+      tx.insert(tags).values({ name: tagName(name), slug }).returning({ id: tags.id }).get()
+    ).id;
+
+    ids.set(slug, id);
+    return id;
+  };
+}
+
+/** One file an import needs moved into place: its name in the package, and the one it gets here. */
+export type ImportedMedia = { kind: MediaKind; from: string; to: string };
+
+export type DeckImportResult = {
+  deckId: number;
+  /** False when the deck was here already and the cards joined it. */
+  created: boolean;
+  added: number;
+  /** Cards whose uid is here already — left exactly as they are. */
+  skipped: number;
+  media: ImportedMedia[];
+};
+
+/**
+ * Puts a package into the database — **joining** it, never replacing.
+ *
+ * - A deck whose uid is here already keeps its own settings and templates;
+ *   only its cards are looked at. Otherwise the deck is made as it was.
+ * - A card whose uid is here already is **skipped**, schedule and all — the
+ *   one on this phone is the one being learned, and nothing says the file's
+ *   copy is newer. Everything else is added, with its schedule and history
+ *   when the package carries them, and as New when it does not.
+ * - Tags are matched by slug, the way the editor matches them.
+ * - Every file gets a **fresh name** (`nameMedia`, which is `storedFileName`
+ *   on the phone): two cards must never share a file, and a name from another
+ *   phone may be taken here. The caller moves the files after this returns —
+ *   the transaction is synchronous and the moves need not be in it.
+ *
+ * All or nothing: one failing row rolls the whole import back.
+ */
+export function importDeckPackage(
+  pkg: DeckPackage,
+  nameMedia: (kind: MediaKind, fileName: string) => string,
+  now = new Date()
+): DeckImportResult {
+  return db.transaction((tx) => {
+    const found = tx.select({ id: decks.id }).from(decks).where(eq(decks.uid, pkg.deck.uid)).get();
+    const deckId = found?.id ?? createPackageDeck(tx, pkg, now);
+
+    const here = new Set<string>();
+    const uids = pkg.cards.map((card) => card.uid);
+
+    // In slices: SQLite caps the number of bound parameters per statement.
+    for (let start = 0; start < uids.length; start += 500) {
+      const slice = uids.slice(start, start + 500);
+
+      for (const row of tx.select({ uid: cards.uid }).from(cards).where(inArray(cards.uid, slice)).all()) {
+        if (row.uid) here.add(row.uid);
+      }
+    }
+
+    const tagId = tagResolver(tx);
+
+    const media: ImportedMedia[] = [];
+    let added = 0;
+
+    for (const card of pkg.cards) {
+      if (here.has(card.uid)) continue;
+
+      const row = tx
+        .insert(cards)
+        .values({
+          uid: card.uid,
+          deckId,
+          front: card.front,
+          back: card.back,
+          frontSide: card.frontSide,
+          frontPosition: card.frontPosition,
+          backSide: card.backSide,
+          backPosition: card.backPosition,
+          frontSpeech: card.frontSpeech,
+          backSpeech: card.backSpeech,
+          frontPhonetic: card.frontPhonetic,
+          backPhonetic: card.backPhonetic,
+          createdAt: new Date(card.createdAt),
+        })
+        .returning({ id: cards.id })
+        .get();
+
+      const schedule = card.schedule;
+
+      tx.insert(fsrsState)
+        .values(
+          schedule
+            ? {
+                cardId: row.id,
+                due: new Date(schedule.due),
+                stability: schedule.stability,
+                difficulty: schedule.difficulty,
+                elapsedDays: schedule.elapsedDays,
+                scheduledDays: schedule.scheduledDays,
+                learningSteps: schedule.learningSteps,
+                reps: schedule.reps,
+                lapses: schedule.lapses,
+                state: schedule.state,
+                lastReview: schedule.lastReview === null ? null : new Date(schedule.lastReview),
+              }
+            : { cardId: row.id, ...newCardState(now) }
+        )
+        .run();
+
+      for (const field of card.fields) {
+        let mediaPath: string | null = null;
+
+        if (isMediaKind(field.kind) && field.mediaPath) {
+          mediaPath = nameMedia(field.kind, field.mediaPath);
+          media.push({ kind: field.kind, from: field.mediaPath, to: mediaPath });
+        }
+
+        tx.insert(cardFields)
+          .values({
+            cardId: row.id,
+            side: field.side,
+            position: field.position,
+            kind: field.kind,
+            value: field.value,
+            mediaPath,
+            mnemonic: field.mnemonic,
+            hideValue: field.hideValue,
+            hideMedia: field.hideMedia,
+            speech: field.speech,
+            phonetic: field.phonetic,
+          })
+          .run();
+      }
+
+      for (const name of dedupeTags(card.tags)) {
+        tx.insert(cardTags).values({ cardId: row.id, tagId: tagId(name) }).run();
+      }
+
+      for (const review of card.reviews) {
+        tx.insert(reviewLogs)
+          .values({
+            uid: review.uid,
+            cardId: row.id,
+            rating: review.rating,
+            state: review.state,
+            due: new Date(review.due),
+            stability: review.stability,
+            difficulty: review.difficulty,
+            elapsedDays: review.elapsedDays,
+            lastElapsedDays: review.lastElapsedDays,
+            scheduledDays: review.scheduledDays,
+            learningSteps: review.learningSteps,
+            reviewedAt: new Date(review.reviewedAt),
+            durationMs: review.durationMs,
+          })
+          .run();
+      }
+
+      added += 1;
+    }
+
+    return { deckId, created: !found, added, skipped: pkg.cards.length - added, media };
+  });
+}
+
+/** The deck of a package that is not here yet, with its templates — or the default one. */
+function createPackageDeck(tx: Tx, pkg: DeckPackage, now: Date): number {
+  const deck = pkg.deck;
+
+  const row = tx
+    .insert(decks)
+    .values({
+      uid: deck.uid,
+      name: deck.name,
+      description: deck.description,
+      newPerDay: deck.newPerDay,
+      reviewsPerDay: deck.reviewsPerDay,
+      newCardPlacement: deck.newCardPlacement,
+      newCardOrder: deck.newCardOrder,
+      desiredRetention: deck.desiredRetention,
+      maximumInterval: deck.maximumInterval,
+      learningSteps: deck.learningSteps,
+      relearningSteps: deck.relearningSteps,
+      fsrsWeights: deck.fsrsWeights,
+      frontLanguages: deck.frontLanguages,
+      backLanguages: deck.backLanguages,
+      imageQuality: deck.imageQuality,
+      createdAt: now,
+    })
+    .returning({ id: decks.id })
+    .get();
+
+  const templates: PackageTemplate[] =
+    pkg.templates.length > 0
+      ? pkg.templates
+      : [
+          {
+            name: DEFAULT_TEMPLATE_NAME,
+            ...DEFAULT_CARD_LAYOUT,
+            ...NO_SPEECH,
+            frontPhoneticLanguage: null,
+            backPhoneticLanguage: null,
+            slots: [],
+          },
+        ];
+
+  templates.forEach((template, position) => {
+    const made = tx
+      .insert(cardTemplates)
+      .values({
+        deckId: row.id,
+        name: template.name.trim() || DEFAULT_TEMPLATE_NAME,
+        position,
+        frontSide: template.frontSide,
+        frontPosition: template.frontPosition,
+        backSide: template.backSide,
+        backPosition: template.backPosition,
+        frontSpeech: template.frontSpeech,
+        backSpeech: template.backSpeech,
+        frontPhoneticLanguage: template.frontPhoneticLanguage,
+        backPhoneticLanguage: template.backPhoneticLanguage,
+      })
+      .returning({ id: cardTemplates.id })
+      .get();
+
+    insertSlots(tx, row.id, made.id, template.slots);
+  });
+
+  return row.id;
+}
+
+export type CsvImportResult = { added: number; skipped: number };
+
+/**
+ * Cards from a spreadsheet (`src/lib/csv-import.ts`) into one deck, each made
+ * the way the editor makes a new card from the deck's first template: its
+ * layout, its voices, its empty fields. Columns after the answer fill the
+ * template's **text** fields in order; what is left over goes on the back,
+ * one text field a column.
+ *
+ * A row whose question and answer this deck already has — or that came
+ * earlier in the same file — is skipped: importing a file twice must not
+ * double a deck. Tags are matched by slug, the way the editor matches them.
+ *
+ * Not transcribed even when the template asks for IPA: that is one model call
+ * a card, and a file of five hundred rows would spend a day's allowance
+ * without anyone having pressed anything.
+ */
+export function importCsvCards(deckId: number, rows: CsvCard[], now = new Date()): CsvImportResult {
+  const layout = newCardLayout(deckId);
+  const speech = newCardSpeech(deckId);
+  const slots = newCardFields(deckId);
+
+  const key = (front: string, back: string) => `${front.trim()}\u0000${back.trim()}`;
+
+  return db.transaction((tx) => {
+    const seen = new Set(
+      tx
+        .select({ front: cards.front, back: cards.back })
+        .from(cards)
+        .where(eq(cards.deckId, deckId))
+        .all()
+        .map((card) => key(card.front, card.back))
+    );
+
+    const tagId = tagResolver(tx);
+
+    // Where leftover columns go: after everything already on the back.
+    const lastOnBack = Math.max(
+      -1,
+      ...(layout.frontSide === 'back' ? [layout.frontPosition] : []),
+      ...(layout.backSide === 'back' ? [layout.backPosition] : []),
+      ...slots.filter((slot) => slot.side === 'back').map((slot) => slot.position)
+    );
+
+    let added = 0;
+
+    for (const row of rows) {
+      const id = key(row.front, row.back);
+      if (seen.has(id)) continue;
+      seen.add(id);
+
+      const extra = [...row.extra];
+      const fields = slots.map((slot) => (slot.kind === 'text' ? { ...slot, value: extra.shift() ?? '' } : slot));
+
+      extra.forEach((value, index) => {
+        fields.push({
+          id: null,
+          side: 'back',
+          position: lastOnBack + 1 + index,
+          kind: 'text',
+          value,
+          mediaPath: null,
+        });
+      });
+
+      const card = tx
+        .insert(cards)
+        .values({
+          deckId,
+          front: row.front.trim(),
+          back: row.back.trim(),
+          createdAt: now,
+          frontSide: layout.frontSide,
+          frontPosition: layout.frontPosition,
+          backSide: layout.backSide,
+          backPosition: layout.backPosition,
+          frontSpeech: speech.frontSpeech,
+          backSpeech: speech.backSpeech,
+        })
+        .returning({ id: cards.id })
+        .get();
+
+      tx.insert(fsrsState)
+        .values({ cardId: card.id, ...newCardState(now) })
+        .run();
+
+      writeCardFields(tx, card.id, fields);
+
+      for (const name of dedupeTags(row.tags)) {
+        tx.insert(cardTags).values({ cardId: card.id, tagId: tagId(name) }).run();
+      }
+
+      added += 1;
+    }
+
+    return { added, skipped: rows.length - added };
+  });
+}
+
 /* -------------------------------------------------------------- mutations */
 
 export type DeckInput = {
@@ -1581,11 +2408,26 @@ export function resetCards(cardIds: number[], now = new Date()) {
 }
 
 /**
+ * The longest an answer is allowed to count for. A card left on screen while
+ * the phone sat on the table is not ten minutes of study; Anki caps it at a
+ * minute too ("maximum answer seconds"), so the two read alike.
+ */
+export const MAX_ANSWER_MS = 60_000;
+
+/**
  * Runs the card through FSRS and persists both the new state and the review
  * log. Re-reads the state inside the transaction so a stale in-memory copy
  * can never overwrite a newer one.
+ *
+ * `durationMs` is how long the card was on screen; it is clipped to
+ * `MAX_ANSWER_MS`, and left NULL when the caller did not time the answer.
  */
-export function gradeCard(cardId: number, grade: Grade, now = new Date()) {
+export function gradeCard(
+  cardId: number,
+  grade: Grade,
+  now = new Date(),
+  durationMs: number | null = null
+) {
   return db.transaction((tx) => {
     const row = tx.select().from(fsrsState).where(eq(fsrsState.cardId, cardId)).get();
     if (!row) throw new Error(`Brak stanu FSRS dla karty ${cardId}`);
@@ -1609,6 +2451,11 @@ export function gradeCard(cardId: number, grade: Grade, now = new Date()) {
       deck ? toScheduling(deck) : undefined
     );
 
+    const duration =
+      durationMs == null || !Number.isFinite(durationMs)
+        ? null
+        : Math.round(Math.min(Math.max(durationMs, 0), MAX_ANSWER_MS));
+
     tx.update(fsrsState).set(toStateValues(next)).where(eq(fsrsState.cardId, cardId)).run();
 
     tx.insert(reviewLogs)
@@ -1624,6 +2471,26 @@ export function gradeCard(cardId: number, grade: Grade, now = new Date()) {
         scheduledDays: log.scheduled_days,
         learningSteps: log.learning_steps,
         reviewedAt: log.review,
+        durationMs: duration,
+      })
+      .run();
+
+    // The day's count, held to the goal set now — so a goal changed later in
+    // the day is what today is measured by, and earlier days keep theirs.
+    const goal = dailyGoalFrom(
+      tx.select().from(appSettings).where(inArray(appSettings.key, GOAL_KEYS)).all(),
+      log.review.getTime()
+    );
+
+    tx.insert(studyDays)
+      .values({ day: dayKey(log.review), answers: 1, goal, studyMs: duration ?? 0 })
+      .onConflictDoUpdate({
+        target: studyDays.day,
+        set: {
+          answers: sql`${studyDays.answers} + 1`,
+          goal,
+          studyMs: sql`${studyDays.studyMs} + ${duration ?? 0}`,
+        },
       })
       .run();
 
@@ -1655,6 +2522,16 @@ export function rollbackCard(cardId: number) {
 
     tx.update(fsrsState).set(toStateValues(previous)).where(eq(fsrsState.cardId, cardId)).run();
     tx.delete(reviewLogs).where(eq(reviewLogs.id, logRow.id)).run();
+
+    // Taken back from the day the answer was given, which after midnight may
+    // no longer be today. The goal stays as it was.
+    tx.update(studyDays)
+      .set({
+        answers: sql`max(${studyDays.answers} - 1, 0)`,
+        studyMs: sql`max(${studyDays.studyMs} - ${logRow.durationMs ?? 0}, 0)`,
+      })
+      .where(eq(studyDays.day, dayKey(logRow.reviewedAt)))
+      .run();
 
     return previous;
   });
