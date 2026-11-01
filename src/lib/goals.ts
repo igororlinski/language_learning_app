@@ -116,6 +116,10 @@ export const weekday = (key: string): number => dayStart(key).getDay();
 /** One row of `study_days`. */
 export type StudyDay = { day: string; answers: number; goal: number };
 
+/** Whether a day gone by met the goal stored with it. */
+const metOwnGoal = (row: StudyDay | undefined): boolean =>
+  row != null && row.answers > 0 && row.answers >= row.goal;
+
 export type Streak = {
   /** Days in a row with the goal met, today included once it is. */
   current: number;
@@ -149,7 +153,7 @@ export function streak(days: readonly StudyDay[], goal: number, now: number): St
     for (let day = first; day < today; day = shiftDay(day, 1)) {
       const row = byDay.get(day);
 
-      run = row && row.answers > 0 && row.answers >= row.goal ? run + 1 : 0;
+      run = metOwnGoal(row) ? run + 1 : 0;
       longest = Math.max(longest, run);
     }
   }
@@ -170,7 +174,7 @@ export function totalPoints(days: readonly StudyDay[], goal: number, now: number
   return days.reduce((sum, row) => {
     if (row.day === today) return row.answers >= goal ? sum + goal : sum;
 
-    return row.day < today && row.answers > 0 && row.answers >= row.goal ? sum + row.goal : sum;
+    return row.day < today && metOwnGoal(row) ? sum + row.goal : sum;
   }, 0);
 }
 
@@ -179,10 +183,53 @@ export function goalDays(days: readonly StudyDay[], goal: number, now: number): 
   const today = dayKey(now);
 
   return days.filter((row) =>
-    row.day === today ? row.answers >= goal : row.day < today && row.answers > 0 && row.answers >= row.goal
+    row.day === today ? row.answers >= goal : row.day < today && metOwnGoal(row)
   ).length;
 }
 
 /** Share of today's goal done, 0–1, for the bars. */
 export const goalShare = ({ answers, goal }: { answers: number; goal: number }): number =>
   Math.min(1, answers / goal);
+
+/* ------------------------------------------------------------------- week */
+
+export type WeekDay = {
+  day: string;
+  /** 0 for Sunday … 6 for Saturday, like `weekday`. */
+  weekday: number;
+  isToday: boolean;
+  /**
+   * `met` — the goal reached (today as soon as it is); `missed` — a day gone
+   * by without it; `open` — today, still short of it; `later` — still ahead.
+   */
+  status: 'met' | 'missed' | 'open' | 'later';
+  light: boolean;
+};
+
+/**
+ * This week, Monday to Sunday, each day as the streak counts it: a past day
+ * by its own goal, today by the one it is held to now.
+ */
+export function weekStrip(days: readonly StudyDay[], plan: GoalPlan, now: number): WeekDay[] {
+  const today = dayKey(now);
+  const goal = goalOn(plan, today);
+  const byDay = new Map(days.map((row) => [row.day, row]));
+  const monday = weekKey(today);
+
+  return Array.from({ length: 7 }, (_, offset) => {
+    const day = shiftDay(monday, offset);
+    const row = byDay.get(day);
+    const status: WeekDay['status'] =
+      day > today
+        ? 'later'
+        : day === today
+          ? (row?.answers ?? 0) >= goal
+            ? 'met'
+            : 'open'
+          : metOwnGoal(row)
+            ? 'met'
+            : 'missed';
+
+    return { day, weekday: weekday(day), isToday: day === today, status, light: isLightDay(plan, day) };
+  });
+}

@@ -8,6 +8,7 @@ import {
   badgeLabel,
   dayProgress,
   formatCount,
+  ladderStanding,
   newlyEarned,
   type BadgeProgress,
 } from '@/lib/badges';
@@ -26,6 +27,7 @@ import {
   streak,
   totalPoints,
   weekKey,
+  weekStrip,
   type StudyDay,
 } from '@/lib/goals';
 
@@ -159,3 +161,67 @@ check(
   dayProgress([row(14), row(15, 120), row(20, 3)], 20, at(21)),
   { streak: 2, goalDays: 2, answers: 143, bestDay: 120 }
 );
+
+group('Tydzien na Statystykach');
+
+const plan = { goal: 20, lightDays: [0], lightGoal: null };
+const week = weekStrip([row(19), row(20, 5)], plan, at(21));
+
+check('od poniedzialku do niedzieli', week.map((day) => day.day), [19, 20, 21, 22, 23, 24, 25].map(key));
+check('spelniony, nie, dzis otwarty, przed nami', week.map((day) => day.status), [
+  'met',
+  'missed',
+  'open',
+  'later',
+  'later',
+  'later',
+  'later',
+]);
+check('dzis zaznaczone', week.map((day) => day.isToday), [false, false, true, false, false, false, false]);
+check('lzejsza niedziela', week.map((day) => day.light), [false, false, false, false, false, false, true]);
+check('dzien tygodnia jak getDay', [week[0].weekday, week[6].weekday], [1, 0]);
+check('dzis spelniony od razu', weekStrip([row(21)], plan, at(21))[2].status, 'met');
+check(
+  'dzis wobec lzejszego celu',
+  weekStrip([row(25, 10)], plan, at(25)).map((day) => day.status)[6],
+  'met'
+);
+check('przeszly dzien wobec swojego celu', weekStrip([row(19, 10, 10)], plan, at(21))[0].status, 'met');
+check('dzien bez odpowiedzi nie spelnia celu zero', weekStrip([row(19, 0, 0)], plan, at(21))[0].status, 'missed');
+check('w niedziele tydzien od poniedzialku', weekStrip([], plan, at(25))[0].day, key(19));
+
+group('Odznaki: drabinka');
+
+const streakLadder = BADGE_GROUPS.find((g) => g.kind === 'streak')!;
+
+check('nic nie zdobyte', ladderStanding(streakLadder, { ...zero, streak: 2 }, new Set()), {
+  top: -1,
+  next: 3,
+  count: 2,
+  share: 2 / 3,
+});
+check(
+  'dwa zdobyte, licznik do nastepnego',
+  ladderStanding(streakLadder, { ...zero, streak: 9 }, new Set(['streak-3', 'streak-7'])),
+  { top: 1, next: 14, count: 9, share: 9 / 14 }
+);
+check(
+  'zdobyte zostaje, choc seria spadla',
+  ladderStanding(streakLadder, { ...zero, streak: 1 }, new Set(['streak-3'])).top,
+  0
+);
+check(
+  'licznik nie przekracza progu',
+  ladderStanding(streakLadder, { ...zero, streak: 40 }, new Set(['streak-3'])).count,
+  7
+);
+check(
+  'komplet',
+  ladderStanding(
+    streakLadder,
+    { ...zero, streak: 400 },
+    new Set(streakLadder.tiers.map((tier) => badgeId('streak', tier)))
+  ),
+  { top: 5, next: null, count: 400, share: 1 }
+);
+

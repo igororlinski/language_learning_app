@@ -185,6 +185,316 @@ export function HelpIcon({ size = 16, color, style }: IconProps) {
   );
 }
 
+/** An icon drawn on something coloured, which some shapes cut into. */
+export type CutIconProps = IconProps & {
+  /**
+   * The colour of what the icon stands on — a leaf's vein, a bulb's glint and
+   * the edge between two cards are drawn in it, so they read as cut out of the
+   * shape. Without it they are left out.
+   */
+  cut?: string;
+};
+
+/** A box of `size` that centres what is inside it. */
+const box = (size: number, style?: ViewStyle): ViewStyle[] => [
+  { width: size, height: size, alignItems: 'center', justifyContent: 'center' },
+  ...(style ? [style] : []),
+];
+
+/**
+ * One drop of flame: a square with three corners rounded into a circle and the
+ * fourth left sharp, turned so the sharp corner points up. `side` is the
+ * square's; the drop stands `side * 1.207` tall, its circle's centre
+ * `side * 0.707` below the tip.
+ */
+function drop(side: number, centreX: number, tipY: number, color: string): ViewStyle {
+  return {
+    position: 'absolute',
+    left: centreX - side / 2,
+    top: tipY + side * 0.707 - side / 2,
+    width: side,
+    height: side,
+    backgroundColor: color,
+    borderTopLeftRadius: side / 2,
+    borderBottomLeftRadius: side / 2,
+    borderBottomRightRadius: side / 2,
+    transform: [{ rotate: '-45deg' }],
+  };
+}
+
+/** How much taller than a drop the flame is drawn: a round drop reads as water. */
+const FLAME_STRETCH = 1.22;
+
+/**
+ * The streak's flame: an outer drop and a core drop sitting low inside it, the
+ * way a flame is brightest at its base, both stretched upwards — a round drop
+ * reads as water, a tall one as fire. Two colours: `color` for the body,
+ * `core` for the heart.
+ */
+export function FlameIcon({ size = 24, color, core, style }: IconProps & { core: string }) {
+  const height = size / FLAME_STRETCH;
+  const outer = height / 1.207;
+  const inner = outer * 0.56;
+  const innerTip = height - outer * 0.08 - inner * 1.207;
+
+  return (
+    <View style={[{ width: outer, height: size, justifyContent: 'center' }, style]}>
+      <View style={{ width: outer, height, transform: [{ scaleY: FLAME_STRETCH }] }}>
+        <View style={drop(outer, outer / 2, 0, color)} />
+        <View style={drop(inner, outer / 2, innerTip, core)} />
+      </View>
+    </View>
+  );
+}
+
+/**
+ * A cog: eight teeth around a thick ring. Each tooth stands at the top of its
+ * own full-size layer and the layer is turned, so every tooth turns about the
+ * cog's centre without any trigonometry.
+ */
+export function GearIcon({ size = 20, color, style }: IconProps) {
+  const tooth = { width: size * 0.2, height: size * 0.27, borderRadius: size * 0.045, backgroundColor: color };
+  const body = size * 0.74;
+
+  return (
+    <View style={box(size, style)}>
+      {[0, 45, 90, 135, 180, 225, 270, 315].map((angle) => (
+        <View
+          key={angle}
+          style={[StyleSheet.absoluteFill, { alignItems: 'center', transform: [{ rotate: `${angle}deg` }] }]}>
+          <View style={tooth} />
+        </View>
+      ))}
+      <View
+        style={{
+          width: body,
+          height: body,
+          borderRadius: body / 2,
+          borderWidth: size * 0.17,
+          borderColor: color,
+        }}
+      />
+    </View>
+  );
+}
+
+/** A tick: the bottom and right edges of a tall box, turned an eighth. */
+export function CheckIcon({ size = 16, color, style }: IconProps) {
+  const stroke = Math.max(1.5, size * 0.15);
+
+  return (
+    <View style={box(size, style)}>
+      <View
+        style={{
+          width: size * 0.34,
+          height: size * 0.62,
+          marginTop: -size * 0.14,
+          borderRightWidth: stroke,
+          borderBottomWidth: stroke,
+          borderColor: color,
+          borderBottomRightRadius: stroke / 3,
+          transform: [{ rotate: '45deg' }],
+        }}
+      />
+    </View>
+  );
+}
+
+/** A target — two rings and a bull's-eye — for days the goal was met. */
+export function TargetIcon({ size = 20, color, style }: IconProps) {
+  const stroke = Math.max(1.5, size * 0.11);
+  const ring = (diameter: number): ViewStyle => ({
+    position: 'absolute',
+    width: diameter,
+    height: diameter,
+    borderRadius: diameter / 2,
+    borderWidth: stroke,
+    borderColor: color,
+  });
+  const eye = size * 0.22;
+
+  return (
+    <View style={box(size, style)}>
+      <View style={ring(size)} />
+      <View style={ring(size * 0.6)} />
+      <View style={{ width: eye, height: eye, borderRadius: eye / 2, backgroundColor: color }} />
+    </View>
+  );
+}
+
+/** Two cards, one fanned out behind the other — for answers given. */
+export function CardsIcon({ size = 20, color, cut, style }: CutIconProps) {
+  const card: ViewStyle = {
+    position: 'absolute',
+    width: size * 0.5,
+    height: size * 0.68,
+    borderRadius: size * 0.08,
+  };
+
+  return (
+    <View style={[{ width: size, height: size }, style]}>
+      <View
+        style={[
+          card,
+          {
+            left: size * 0.13,
+            top: size * 0.1,
+            borderWidth: Math.max(1.5, size * 0.09),
+            borderColor: color,
+            transform: [{ rotate: '-14deg' }],
+          },
+        ]}
+      />
+      <View
+        style={[
+          card,
+          {
+            left: size * 0.37,
+            top: size * 0.2,
+            backgroundColor: color,
+            // An edge cut into the back card, so the two do not run together.
+            borderWidth: cut ? Math.max(1, size * 0.06) : 0,
+            borderColor: cut,
+            transform: [{ rotate: '10deg' }],
+          },
+        ]}
+      />
+    </View>
+  );
+}
+
+/**
+ * A lightning bolt — for the most answers in a day. Two triangles, each a view
+ * with only borders: an upper one standing on its flat edge, a lower one
+ * hanging from its flat edge, overlapping where the bolt bends.
+ */
+export function BoltIcon({ size = 20, color, style }: IconProps) {
+  return (
+    <View style={[{ width: size, height: size }, style]}>
+      <View
+        style={{
+          position: 'absolute',
+          left: size * 0.18,
+          top: 0,
+          width: 0,
+          height: 0,
+          borderBottomWidth: size * 0.56,
+          borderBottomColor: color,
+          borderLeftWidth: size * 0.42,
+          borderLeftColor: 'transparent',
+        }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          left: size * 0.4,
+          top: size * 0.42,
+          width: 0,
+          height: 0,
+          borderTopWidth: size * 0.58,
+          borderTopColor: color,
+          borderRightWidth: size * 0.42,
+          borderRightColor: 'transparent',
+        }}
+      />
+    </View>
+  );
+}
+
+/**
+ * A leaf on a stem — for mature cards. The leaf is a square with two opposite
+ * corners rounded all the way, which leaves a pointed lens lying corner to
+ * corner; the stem and the vein run along the same diagonal.
+ */
+export function LeafIcon({ size = 20, color, cut, style }: CutIconProps) {
+  const leaf = size * 0.66;
+  const left = size * 0.24;
+  const top = size * 0.06;
+  const stroke = Math.max(1.5, size * 0.08);
+  const line = (length: number, centreX: number, centreY: number, tone: string): ViewStyle => ({
+    position: 'absolute',
+    left: centreX - stroke / 2,
+    top: centreY - length / 2,
+    width: stroke,
+    height: length,
+    borderRadius: stroke / 2,
+    backgroundColor: tone,
+    transform: [{ rotate: '45deg' }],
+  });
+
+  return (
+    <View style={[{ width: size, height: size }, style]}>
+      <View style={line(size * 0.32, left - size * 0.06, top + leaf + size * 0.06, color)} />
+      <View
+        style={{
+          position: 'absolute',
+          left,
+          top,
+          width: leaf,
+          height: leaf,
+          backgroundColor: color,
+          borderTopLeftRadius: leaf,
+          borderBottomRightRadius: leaf,
+        }}
+      />
+      {cut ? <View style={line(leaf * 0.9, left + leaf / 2, top + leaf / 2, cut)} /> : null}
+    </View>
+  );
+}
+
+/** A light bulb — for associations: a round glass, its neck and the cap. */
+export function BulbIcon({ size = 20, color, cut, style }: CutIconProps) {
+  const glass = size * 0.62;
+  const glint = size * 0.13;
+
+  return (
+    <View style={[{ width: size, height: size, alignItems: 'center' }, style]}>
+      <View
+        style={{
+          marginTop: size * 0.02,
+          width: glass,
+          height: glass,
+          borderRadius: glass / 2,
+          backgroundColor: color,
+        }}
+      />
+      <View
+        style={{
+          marginTop: -size * 0.1,
+          width: size * 0.32,
+          height: size * 0.22,
+          borderBottomLeftRadius: size * 0.05,
+          borderBottomRightRadius: size * 0.05,
+          backgroundColor: color,
+        }}
+      />
+      <View
+        style={{
+          marginTop: size * 0.05,
+          width: size * 0.22,
+          height: size * 0.08,
+          borderRadius: size * 0.04,
+          backgroundColor: color,
+        }}
+      />
+      {cut ? (
+        <View
+          style={{
+            position: 'absolute',
+            left: size / 2 - glass * 0.28,
+            top: size * 0.02 + glass * 0.2,
+            width: glint,
+            height: glint,
+            borderRadius: glint / 2,
+            backgroundColor: cut,
+            opacity: 0.6,
+          }}
+        />
+      ) : null}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',

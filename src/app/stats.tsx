@@ -3,14 +3,22 @@ import { Stack, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
+import { BadgeBoard } from '@/components/badge-board';
 import { Dropdown } from '@/components/dropdown';
 import { EmptyState } from '@/components/empty-state';
-import { GoalBar } from '@/components/goal-bar';
 import { WithHelp } from '@/components/help-button';
-import { PodiumIcon } from '@/components/icons';
+import { CheckIcon, FlameIcon, GearIcon, PodiumIcon } from '@/components/icons';
+import { ProgressRing } from '@/components/progress-ring';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
-import { CardStateColors, MaxContentWidth, Radius, RatingColors, Spacing } from '@/constants/theme';
+import {
+  CardStateColors,
+  FlameColors,
+  MaxContentWidth,
+  Radius,
+  RatingColors,
+  Spacing,
+} from '@/constants/theme';
 import {
   awardBadges,
   badgeProgress,
@@ -26,9 +34,16 @@ import {
 import { useNow } from '@/hooks/use-now';
 import { useStreak } from '@/hooks/use-streak';
 import { useTheme } from '@/hooks/use-theme';
-import { BADGE_GROUPS, badgeId, formatCount, shortCount, type BadgeProgress } from '@/lib/badges';
 import { pluralize } from '@/lib/format';
-import { dayKey, goalOn, isLightDay, MAX_DAILY_GOAL } from '@/lib/goals';
+import {
+  dayKey,
+  goalOn,
+  goalShare,
+  isLightDay,
+  MAX_DAILY_GOAL,
+  weekStrip,
+  type WeekDay,
+} from '@/lib/goals';
 import {
   cardStates,
   forecast,
@@ -63,6 +78,8 @@ const ALL_DECKS = '';
 
 const FORECAST_HEIGHT = 96;
 
+const RING_SIZE = 124;
+
 const answersLabel = (count: number) =>
   `${count} ${pluralize(count, 'odpowiedź', 'odpowiedzi', 'odpowiedzi')}`;
 
@@ -87,7 +104,10 @@ export default function StatsScreen() {
   const { data: mnemonicRows } = useLiveQuery(mnemonicCardsQuery(deckId), [deckId]);
 
   const { days: studyDays, plan, streak } = useStreak(now);
+  const week = weekStrip(studyDays, plan, now);
   const lightToday = isLightDay(plan, dayKey(now));
+  // Set once and left alone, so folded away behind the cog.
+  const [goalSettings, setGoalSettings] = useState(false);
   // Any light day of the week tells what the lighter goal comes to now.
   const lightGoal = goalOn({ ...plan, lightDays: WEEK_ORDER }, dayKey(now));
 
@@ -98,7 +118,7 @@ export default function StatsScreen() {
         : [...plan.lightDays, day]
     );
   const { data: badgeRows } = useLiveQuery(badgesQuery());
-  const earned = new Set(badgeRows.map((row) => row.id));
+  const earnedAt = new Map(badgeRows.map((row) => [row.id, row.earnedAt]));
 
   // Catches what a session did not: an association made in the card editor,
   // a deck imported with its history.
@@ -152,82 +172,113 @@ export default function StatsScreen() {
         }}
       />
       <View style={card}>
-        <WithHelp topic="stats.goal">
-          <ThemedText type="smallBold" themeColor="textSecondary">
-            Cel na dziś
-          </ThemedText>
-        </WithHelp>
-        <ThemedText style={[styles.big, streak.today.met ? { color: RatingColors.good } : null]}>
-          {streak.today.answers} / {streak.today.goal}
-        </ThemedText>
-        {lightToday ? (
-          <ThemedText type="small" themeColor="textSecondary">
-            lżejszy dzień
-          </ThemedText>
-        ) : null}
-        <GoalBar today={streak.today} height={8} />
-        <GoalInput label="Cel dzienny" value={plan.goal} max={MAX_DAILY_GOAL} onSave={setDailyGoal} />
-
-        <ThemedText type="smallBold" themeColor="textSecondary" style={styles.goalPicker}>
-          Lżejsze dni
-        </ThemedText>
-        <View style={styles.chips}>
-          {WEEK_ORDER.map((day) => {
-            const on = plan.lightDays.includes(day);
-
-            return (
-              <Pressable
-                key={day}
-                onPress={() => toggleLightDay(day)}
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: on }}
-                accessibilityLabel={`Lżejszy dzień: ${WEEKDAYS[day]}`}
-                style={[
-                  styles.chip,
-                  on
-                    ? { backgroundColor: theme.accent, borderColor: theme.accent }
-                    : { borderColor: theme.border },
-                ]}>
-                <ThemedText type="small" style={{ color: on ? theme.onAccent : theme.text }}>
-                  {WEEKDAYS[day]}
-                </ThemedText>
-              </Pressable>
-            );
-          })}
+        <View style={styles.cardHeader}>
+          <WithHelp topic="stats.goal">
+            <ThemedText type="smallBold" themeColor="textSecondary">
+              Cel na dziś
+            </ThemedText>
+          </WithHelp>
+          <Pressable
+            onPress={() => setGoalSettings(!goalSettings)}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Ustawienia celu"
+            accessibilityState={{ expanded: goalSettings }}
+            style={({ pressed }) => ({ opacity: pressed ? 0.5 : 1 })}>
+            <GearIcon size={20} color={goalSettings ? theme.accent : theme.textSecondary} />
+          </Pressable>
         </View>
-        {/* Never more than the everyday goal: a lighter day asks for less. */}
-        {plan.lightDays.length > 0 ? (
-          <GoalInput label="Cel w lżejsze dni" value={lightGoal} max={plan.goal} onSave={setLightGoal} />
+
+        <View style={styles.hero}>
+          <ProgressRing
+            size={RING_SIZE}
+            stroke={12}
+            progress={goalShare(streak.today)}
+            color={streak.today.met ? RatingColors.good : theme.accent}
+            trackColor={theme.backgroundSelected}>
+            <ThemedText style={[styles.ringCount, streak.today.met ? { color: RatingColors.good } : null]}>
+              {streak.today.answers}
+            </ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              z {streak.today.goal}
+            </ThemedText>
+          </ProgressRing>
+
+          <View style={styles.streak}>
+            <View style={styles.streakCount}>
+              {/* Lit once today counts towards the streak. */}
+              <FlameIcon
+                size={40}
+                color={streak.today.met ? FlameColors.outer : theme.backgroundSelected}
+                core={streak.today.met ? FlameColors.inner : theme.backgroundElement}
+              />
+              <ThemedText style={styles.ringCount}>{streak.current}</ThemedText>
+            </View>
+            <WithHelp topic="stats.streak">
+              <ThemedText type="small">
+                {pluralize(streak.current, 'dzień', 'dni', 'dni')} z rzędu
+              </ThemedText>
+            </WithHelp>
+            <ThemedText type="small" themeColor="textSecondary">
+              najdłuższa: {daysLabel(streak.longest)}
+            </ThemedText>
+            {lightToday ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                dziś lżejszy dzień
+              </ThemedText>
+            ) : null}
+          </View>
+        </View>
+
+        <WeekStrip week={week} />
+
+        {goalSettings ? (
+          <View style={[styles.settings, { borderTopColor: theme.border }]}>
+            <GoalInput label="Cel dzienny" value={plan.goal} max={MAX_DAILY_GOAL} onSave={setDailyGoal} />
+
+            <ThemedText type="smallBold" themeColor="textSecondary" style={styles.goalPicker}>
+              Lżejsze dni
+            </ThemedText>
+            <View style={styles.chips}>
+              {WEEK_ORDER.map((day) => {
+                const on = plan.lightDays.includes(day);
+
+                return (
+                  <Pressable
+                    key={day}
+                    onPress={() => toggleLightDay(day)}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: on }}
+                    accessibilityLabel={`Lżejszy dzień: ${WEEKDAYS[day]}`}
+                    style={[
+                      styles.chip,
+                      on
+                        ? { backgroundColor: theme.accent, borderColor: theme.accent }
+                        : { borderColor: theme.border },
+                    ]}>
+                    <ThemedText type="small" style={{ color: on ? theme.onAccent : theme.text }}>
+                      {WEEKDAYS[day]}
+                    </ThemedText>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {/* Never more than the everyday goal: a lighter day asks for less. */}
+            {plan.lightDays.length > 0 ? (
+              <GoalInput label="Cel w lżejsze dni" value={lightGoal} max={plan.goal} onSave={setLightGoal} />
+            ) : null}
+          </View>
         ) : null}
       </View>
 
-      <View style={card}>
-        <WithHelp topic="stats.streak">
-          <ThemedText type="smallBold" themeColor="textSecondary">
-            Seria
-          </ThemedText>
-        </WithHelp>
-        <View style={styles.compare}>
-          <View style={styles.half}>
-            <ThemedText style={styles.medium}>{daysLabel(streak.current)}</ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">
-              teraz
-            </ThemedText>
-          </View>
-          <View style={styles.half}>
-            <ThemedText style={styles.medium}>{daysLabel(streak.longest)}</ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">
-              najdłuższa
-            </ThemedText>
-          </View>
-        </View>
+      <BadgeBoard progress={progress} earnedAt={earnedAt} />
+
+      <View style={styles.section}>
+        <ThemedText style={styles.sectionTitle}>Nauka</ThemedText>
+        {decks.length > 1 ? (
+          <Dropdown value={deck} options={deckOptions} onChange={setDeck} accessibilityLabel="Talia" />
+        ) : null}
       </View>
-
-      <Badges progress={progress} earned={earned} />
-
-      {decks.length > 1 ? (
-        <Dropdown label="Talia" value={deck} options={deckOptions} onChange={setDeck} />
-      ) : null}
 
       {cards.length === 0 && logs.length === 0 ? (
         <EmptyState title="Jeszcze nie ma czego liczyć" hint="Dodaj karty i zacznij naukę." />
@@ -384,64 +435,55 @@ function Retention({ stats, big = false }: { stats: RetentionStats; big?: boolea
   );
 }
 
+const DAY_STATUS: Record<WeekDay['status'], string> = {
+  met: 'cel spełniony',
+  missed: 'bez celu',
+  open: 'dziś, cel jeszcze przed tobą',
+  later: 'jeszcze przed tobą',
+};
+
 /**
- * Every ladder as a row of tiers: earned ones filled, the next one outlined
- * with how far there is still to go, the rest greyed.
+ * This week, Monday to Sunday: a green tick for every day the goal was met,
+ * grey for one that went without, today ringed in the accent and the days
+ * ahead left empty. A lighter day is drawn smaller — it asks for less.
  */
-function Badges({ progress, earned }: { progress: BadgeProgress; earned: ReadonlySet<string> }) {
+function WeekStrip({ week }: { week: readonly WeekDay[] }) {
   const theme = useTheme();
-  const total = BADGE_GROUPS.reduce((sum, group) => sum + group.tiers.length, 0);
 
   return (
-    <View
-      style={[styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
-      <ThemedText type="smallBold" themeColor="textSecondary">
-        Odznaki · {earned.size}/{total}
-      </ThemedText>
-
-      {BADGE_GROUPS.map((group) => {
-        const next = group.tiers.find((tier) => !earned.has(badgeId(group.kind, tier)));
+    <View style={styles.week}>
+      {week.map((day) => {
+        const size = day.light ? 24 : 30;
+        const circle =
+          day.status === 'met'
+            ? { backgroundColor: RatingColors.good }
+            : day.status === 'missed'
+              ? { backgroundColor: theme.backgroundSelected }
+              : day.status === 'open'
+                ? { borderWidth: 2, borderColor: theme.accent }
+                : { borderWidth: 1.5, borderColor: theme.border };
 
         return (
-          <View key={group.kind} style={styles.badgeGroup}>
-            <View style={styles.badgeHeader}>
-              <ThemedText type="small">{group.title}</ThemedText>
-              {next != null ? (
-                <ThemedText type="small" themeColor="textSecondary">
-                  {formatCount(Math.min(progress[group.kind], next))} / {formatCount(next)}
-                </ThemedText>
-              ) : null}
+          <View
+            key={day.day}
+            accessible
+            accessibilityLabel={`${WEEKDAYS[day.weekday]}${day.light ? ', lżejszy' : ''}: ${DAY_STATUS[day.status]}`}
+            style={styles.weekDay}>
+            <View style={styles.weekSlot}>
+              <View
+                style={[
+                  styles.weekCircle,
+                  { width: size, height: size, borderRadius: size / 2 },
+                  circle,
+                ]}>
+                {day.status === 'met' ? <CheckIcon size={size * 0.62} color="#FFFFFF" /> : null}
+              </View>
             </View>
-            <View style={styles.chips}>
-              {group.tiers.map((tier) => {
-                const has = earned.has(badgeId(group.kind, tier));
-                const isNext = tier === next;
-
-                return (
-                  <View
-                    key={tier}
-                    accessible
-                    accessibilityLabel={`${group.label(tier)}${has ? ', zdobyta' : ''}`}
-                    style={[
-                      styles.chip,
-                      has
-                        ? { backgroundColor: theme.accent, borderColor: theme.accent }
-                        : isNext
-                          ? { borderColor: theme.accent }
-                          : {
-                              backgroundColor: theme.backgroundSelected,
-                              borderColor: theme.backgroundSelected,
-                            },
-                    ]}>
-                    <ThemedText
-                      type="small"
-                      style={{ color: has ? theme.onAccent : isNext ? theme.text : theme.textSecondary }}>
-                      {shortCount(tier)}
-                    </ThemedText>
-                  </View>
-                );
-              })}
-            </View>
+            <ThemedText
+              type={day.isToday ? 'smallBold' : 'small'}
+              style={{ color: day.isToday ? theme.accent : theme.textSecondary }}>
+              {WEEKDAYS[day.weekday]}
+            </ThemedText>
           </View>
         );
       })}
@@ -542,14 +584,6 @@ const styles = StyleSheet.create({
   goalPicker: {
     marginTop: Spacing.two,
   },
-  badgeGroup: {
-    gap: Spacing.one,
-    marginTop: Spacing.two,
-  },
-  badgeHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
   chips: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -565,6 +599,65 @@ const styles = StyleSheet.create({
   },
   half: {
     flex: 1,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  hero: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.four,
+    marginTop: Spacing.two,
+  },
+  ringCount: {
+    fontSize: 30,
+    lineHeight: 36,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  streak: {
+    flex: 1,
+    gap: Spacing.half,
+  },
+  streakCount: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginBottom: Spacing.one,
+  },
+  week: {
+    flexDirection: 'row',
+    marginTop: Spacing.three,
+  },
+  weekDay: {
+    flex: 1,
+    alignItems: 'center',
+    gap: Spacing.one,
+  },
+  // As tall as the biggest circle, so smaller ones sit on the same centre line.
+  weekSlot: {
+    height: 30,
+    justifyContent: 'center',
+  },
+  weekCircle: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  settings: {
+    marginTop: Spacing.three,
+    paddingTop: Spacing.one,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  section: {
+    gap: Spacing.two,
+    marginTop: Spacing.two,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '700',
   },
   card: {
     padding: Spacing.three,

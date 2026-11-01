@@ -61,6 +61,25 @@ export const CardStateColors = {
   mature: QueueColors.review,
 } as const;
 
+/** The streak's flame: an orange body around a yellow core, in both schemes. */
+export const FlameColors = {
+  outer: '#FF6B1F',
+  inner: '#FFC53D',
+} as const;
+
+/**
+ * A badge ladder's metals, tier by tier: the face of the medal and the darker
+ * rim around it. Six, as many as the longest ladder has tiers.
+ */
+export const MedalColors = [
+  { face: '#CD8A4F', rim: '#A5663A' }, // bronze
+  { face: '#A9B3BE', rim: '#828D99' }, // silver
+  { face: '#E8B53A', rim: '#C08F1B' }, // gold
+  { face: '#3DBB8A', rim: '#22916A' }, // emerald
+  { face: '#4F84F0', rim: '#2F62CC' }, // sapphire
+  { face: '#9D6BE8', rim: '#7748C4' }, // amethyst
+] as const;
+
 /**
  * The colour a "how much is left" meter takes at a given remaining percent:
  * green with room to spare, amber as it tightens, red when nearly gone. Shared

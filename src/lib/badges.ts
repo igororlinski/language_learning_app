@@ -25,7 +25,7 @@ export type BadgeProgress = {
 
 export type BadgeKind = keyof BadgeProgress;
 
-type BadgeGroup = {
+export type BadgeGroup = {
   kind: BadgeKind;
   title: string;
   tiers: readonly number[];
@@ -82,6 +82,38 @@ export const BADGE_GROUPS: readonly BadgeGroup[] = [
 ];
 
 export const badgeId = (kind: BadgeKind, tier: number): string => `${kind}-${tier}`;
+
+export type LadderStanding = {
+  /** Index of the highest tier earned — its medal's colour — or -1 for none. */
+  top: number;
+  /** The first tier not earned yet, or null once all are. */
+  next: number | null;
+  /** The number counted toward `next`, capped at it. */
+  count: number;
+  /** `count` as a share of `next`, 0–1; 1 once the ladder is done. */
+  share: number;
+};
+
+/**
+ * Where one ladder stands. Earned tiers are the stored ones — never taken
+ * back — so `top` holds even when the number has since fallen (a streak).
+ */
+export function ladderStanding(
+  group: BadgeGroup,
+  progress: BadgeProgress,
+  earned: ReadonlySet<string>
+): LadderStanding {
+  const has = group.tiers.map((tier) => earned.has(badgeId(group.kind, tier)));
+  const next = group.tiers.find((_, index) => !has[index]) ?? null;
+  const count = next == null ? progress[group.kind] : Math.min(progress[group.kind], next);
+
+  return {
+    top: has.lastIndexOf(true),
+    next,
+    count,
+    share: next == null ? 1 : count / next,
+  };
+}
 
 /** What a stored badge is called; null for an id this version does not know. */
 export function badgeLabel(id: string): string | null {
