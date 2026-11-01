@@ -2,20 +2,19 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Fragment, useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
+import { Avatar } from '@/components/avatar';
 import { Button } from '@/components/button';
 import { Meter } from '@/components/meter';
 import { PersonDetails } from '@/components/person-details';
 import { EmptyState } from '@/components/empty-state';
 import { SegmentedControl } from '@/components/segmented-control';
 import { ThemedText } from '@/components/themed-text';
-import { AvatarColors, MaxContentWidth, MedalColors, Radius, RatingColors, Spacing } from '@/constants/theme';
+import { MaxContentWidth, MedalColors, Radius, RatingColors, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { pluralize } from '@/lib/format';
 import {
-  avatarIndex,
   fetchLeaderboard,
   FriendsError,
-  initialOf,
   type Account,
   type Person,
   type RankingPeriod,
@@ -219,11 +218,7 @@ function Podium({
             accessibilityState={{ expanded: open === person.id }}
             accessibilityLabel={`${index + 1}. ${person.name}, ${pointsLabel(person.points)}`}
             style={({ pressed }) => [styles.place, { opacity: pressed ? 0.6 : 1 }]}>
-            <Avatar
-              person={person}
-              size={index === 0 ? 60 : 48}
-              ring={metal.face}
-            />
+            <Avatar id={person.id} name={person.name} size={index === 0 ? 60 : 48} ring={metal.face} />
             <ThemedText
               type="smallBold"
               numberOfLines={1}
@@ -247,32 +242,6 @@ function Podium({
           </Pressable>
         );
       })}
-    </View>
-  );
-}
-
-/**
- * Someone's round initial, in a colour picked by their id — the same on every
- * phone, and different enough between friends to tell them apart at a glance.
- */
-function Avatar({ person, size, ring }: { person: Person; size: number; ring?: string }) {
-  const border = ring ? Math.max(2, size * 0.06) : 0;
-
-  return (
-    <View
-      style={{
-        width: size,
-        height: size,
-        borderRadius: size / 2,
-        borderWidth: border,
-        borderColor: ring,
-        backgroundColor: AvatarColors[avatarIndex(person.id, AvatarColors.length)],
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}>
-      <ThemedText style={{ color: '#FFFFFF', fontSize: size * 0.42, lineHeight: size * 0.52, fontWeight: '700' }}>
-        {initialOf(person.name)}
-      </ThemedText>
     </View>
   );
 }
@@ -310,7 +279,7 @@ function Row({
         <ThemedText style={[styles.placeNumber, styles.tabular]} themeColor="textSecondary">
           {place}.
         </ThemedText>
-        <Avatar person={person} size={36} />
+        <Avatar id={person.id} name={person.name} size={36} />
         <View style={styles.grow}>
           <ThemedText
             numberOfLines={1}

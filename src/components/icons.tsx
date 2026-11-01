@@ -278,6 +278,48 @@ export function GearIcon({ size = 20, color, style }: IconProps) {
   );
 }
 
+/**
+ * A pencil, for renaming: the cap, the body and the point, stood on end and
+ * turned so the point is down and to the left.
+ */
+export function PencilIcon({ size = 18, color, style }: IconProps) {
+  const width = size * 0.26;
+
+  return (
+    <View style={box(size, style)}>
+      <View style={{ alignItems: 'center', transform: [{ rotate: '45deg' }] }}>
+        <View style={{ width, height: size * 0.14, borderRadius: size * 0.04, backgroundColor: color }} />
+        <View style={{ width, height: size * 0.5, marginTop: size * 0.05, backgroundColor: color }} />
+        <View
+          style={{
+            width: 0,
+            height: 0,
+            borderTopWidth: size * 0.2,
+            borderTopColor: color,
+            borderLeftWidth: width / 2,
+            borderLeftColor: 'transparent',
+            borderRightWidth: width / 2,
+            borderRightColor: 'transparent',
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
+/** A plus, for adding: two rounded bars crossing. */
+export function PlusIcon({ size = 18, color, style }: IconProps) {
+  const stroke = Math.max(2, size * 0.14);
+  const bar = { position: 'absolute' as const, borderRadius: stroke / 2, backgroundColor: color };
+
+  return (
+    <View style={box(size, style)}>
+      <View style={[bar, { width: size * 0.8, height: stroke }]} />
+      <View style={[bar, { width: stroke, height: size * 0.8 }]} />
+    </View>
+  );
+}
+
 /** A tick: the bottom and right edges of a tall box, turned an eighth. */
 export function CheckIcon({ size = 16, color, style }: IconProps) {
   const stroke = Math.max(1.5, size * 0.15);

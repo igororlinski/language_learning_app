@@ -27,7 +27,16 @@ const tint = (color: string) => `${color}24`;
  * `named` puts their name at the top, for a person opened from the podium,
  * whose name is not right above.
  */
-export function PersonDetails({ person, named = false }: { person: Person; named?: boolean }) {
+export function PersonDetails({
+  person,
+  named = false,
+  actions,
+}: {
+  person: Person;
+  named?: boolean;
+  /** Under the medals — what can be done about this person, like removing them. */
+  actions?: ReactNode;
+}) {
   const theme = useTheme();
   const earned = new Set(person.badges);
   const known = person.badges.filter((id) => badgeLabel(id) != null).length;
@@ -107,6 +116,8 @@ export function PersonDetails({ person, named = false }: { person: Person; named
           );
         })}
       </View>
+
+      {actions}
     </View>
   );
 }

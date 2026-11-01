@@ -1,5 +1,6 @@
 import { DEFAULT_NEW_PER_DAY, DEFAULT_REVIEWS_PER_DAY } from '@/db/schema';
 import { DEFAULT_DAILY_GOAL } from '@/lib/goals';
+import { UPLOAD_DAYS } from '@/lib/friends';
 import { MIN_SAMPLES } from '@/lib/fsrs-optimizer';
 import {
   GROWTH_WEEKS,
@@ -201,6 +202,21 @@ export const HELP_TOPICS = {
         ],
       },
       `Słupki pokazują, jak było na koniec każdego z ostatnich ${GROWTH_WEEKS} tygodni — odtworzone z historii odpowiedzi. Karta bez żadnej odpowiedzi, na przykład z importu CSV, pojawia się w nich dopiero po pierwszej.`,
+    ],
+  },
+
+  'friends.about': {
+    title: 'Konto znajomych',
+    body: [
+      'Konto pozwala dodać znajomych kodem i porównywać się z nimi w rankingu — punkty, serie, odznaki. Do nauki nie jest potrzebne.',
+      'Konto nie ma maila ani hasła: jest nazwa, którą widzą znajomi, i kod odzyskiwania — jedyny sposób, by wrócić do konta na innym telefonie.',
+      {
+        list: [
+          `Na serwer trafiają: nazwa, dzienne podsumowania z ostatnich ${UPLOAD_DAYS} dni (liczba odpowiedzi, cel, czas nauki), seria, punkty i zdobyte odznaki.`,
+          'Nie trafiają: karty, talie, ich treść ani klucze AI.',
+        ],
+      },
+      'Konto da się w każdej chwili usunąć razem ze wszystkim, co jest na serwerze. Nauka na telefonie zostaje.',
     ],
   },
 
