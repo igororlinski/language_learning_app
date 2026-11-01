@@ -8,12 +8,16 @@ import {
   forecast,
   forecastLabel,
   formatDuration,
+  formatGap,
   formatPercent,
   MIN_ANSWERS,
   mnemonicComparison,
+  mnemonicGap,
   recentRetention,
   retention,
+  retentionTone,
   studyTime,
+  studyTimeByDay,
   todayStats,
   type StatsCard,
   type StatsLog,
@@ -198,3 +202,44 @@ check('sekundy', formatDuration(44_600), '45 s');
 check('minuty', formatDuration(12 * 60_000 + 20_000), '12 min');
 check('pelna godzina', formatDuration(60 * 60_000), '1 h');
 check('godziny i minuty', formatDuration(80 * 60_000), '1 h 20 min');
+
+group('Statystyki: czas nauki dzien po dniu');
+
+const byDay = studyTimeByDay(
+  [
+    log(at(20, 9), { durationMs: 4000 }),
+    log(at(20, 10), { durationMs: 6000 }),
+    // 3:00 on the 20th is still the 19th's study day.
+    log(at(20, 3), { durationMs: 2000 }),
+    log(at(14, 10), { durationMs: 1000 }),
+    // Eight days back: outside the week.
+    log(at(13, 10), { durationMs: 9000 }),
+    log(at(18, 10)),
+  ],
+  NOW
+);
+
+check('siedem dni, dzis ostatni', byDay.length, 7);
+check('od 14. do 20.', [new Date(byDay[0].start).getDate(), new Date(byDay[6].start).getDate()], [14, 20]);
+check('suma na dzien, 3:00 do poprzedniego', byDay.map((day) => day.ms), [1000, 0, 0, 0, 0, 2000, 10000]);
+
+group('Statystyki: zapamietane wobec celu');
+
+check('na celu albo wyzej', [retentionTone(0.94, 0.94), retentionTone(0.97, 0.94)], ['good', 'good']);
+check('troche pod celem', retentionTone(0.9, 0.94), 'close');
+check('wyraznie pod celem', retentionTone(0.85, 0.94), 'low');
+check('bez celu nie ma czego porownywac', retentionTone(0.5, null), 'good');
+
+group('Statystyki: roznica skojarzen');
+
+const side = (rate: number | null) => ({ answers: 40, rate, target: 0.9 });
+
+check('w punktach procentowych, jak pokazane procenty', mnemonicGap({ with: side(0.904), without: side(0.816) }), 8);
+check('ujemna', mnemonicGap({ with: side(0.8), without: side(0.85) }), -5);
+check('bez procentu po jednej stronie nic', mnemonicGap({ with: side(null), without: side(0.85) }), null);
+check('z plusem, minusem i bez znaku', [formatGap(12), formatGap(-3), formatGap(0)], [
+  '+12 pkt proc.',
+  '−3 pkt proc.',
+  '0 pkt proc.',
+]);
+

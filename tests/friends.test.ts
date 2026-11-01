@@ -5,10 +5,12 @@
  */
 import {
   addFriend,
+  avatarIndex,
   cleanRecoveryCode,
   createAccount,
   fetchLeaderboard,
   FriendsError,
+  initialOf,
   parseLeaderboard,
   recoverAccount,
   SERVER_URL,
@@ -193,3 +195,20 @@ check('ranking: „ja” tylko przy true', [people[0].me, people[1].me], [false,
 
 const broken = await withStub({ status: 200, body: { week: '2026-10-19' } }, outcomeOf(() => fetchLeaderboard(ACCOUNT, NOW)));
 check('ranking bez listy to błąd serwera', broken.outcome, '!server');
+
+group('Znajomi: awatar');
+
+check('pierwsza litera, wielka', [initialOf('ola'), initialOf('  Żaneta'), initialOf('łukasz')], ['O', 'Ż', 'Ł']);
+check('pomija znaki, ktore nie sa litera', [initialOf('_kasia'), initialOf('🦊 lis'), initialOf('7up')], ['K', 'L', '7']);
+check('bez liter znak zapytania', [initialOf(''), initialOf('!!!')], ['?', '?']);
+check('kolor zawsze ten sam dla tego samego id', avatarIndex('abc-123', 8), avatarIndex('abc-123', 8));
+check(
+  'kolor w zakresie palety',
+  ['a', 'b', 'xyz', '00000000-0000-0000-0000-000000000000'].every((id) => {
+    const index = avatarIndex(id, 8);
+    return Number.isInteger(index) && index >= 0 && index < 8;
+  }),
+  true
+);
+check('rozne id daja rozne kolory', new Set(['a', 'b', 'c', 'd', 'e'].map((id) => avatarIndex(id, 8))).size > 1, true);
+

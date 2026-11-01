@@ -322,6 +322,36 @@ export function TargetIcon({ size = 20, color, style }: IconProps) {
   );
 }
 
+/** A clock at three — a ring and two hands — for time spent studying. */
+export function ClockIcon({ size = 20, color, style }: IconProps) {
+  const stroke = Math.max(1.5, size * 0.11);
+  const hand = (length: number, horizontal: boolean): ViewStyle => ({
+    position: 'absolute',
+    left: horizontal ? size / 2 - stroke / 2 : size / 2 - stroke / 2,
+    top: horizontal ? size / 2 - stroke / 2 : size / 2 - length + stroke / 2,
+    width: horizontal ? length : stroke,
+    height: horizontal ? stroke : length,
+    borderRadius: stroke / 2,
+    backgroundColor: color,
+  });
+
+  return (
+    <View style={[{ width: size, height: size }, style]}>
+      <View
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          borderWidth: stroke,
+          borderColor: color,
+        }}
+      />
+      <View style={hand(size * 0.32, false)} />
+      <View style={hand(size * 0.26, true)} />
+    </View>
+  );
+}
+
 /** Two cards, one fanned out behind the other — for answers given. */
 export function CardsIcon({ size = 20, color, cut, style }: CutIconProps) {
   const card: ViewStyle = {

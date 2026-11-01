@@ -80,6 +80,18 @@ export const MedalColors = [
   { face: '#9D6BE8', rim: '#7748C4' }, // amethyst
 ] as const;
 
+/** Friends' initials stand on these, one per person by their id. */
+export const AvatarColors = [
+  '#3E8FF5',
+  '#E5484D',
+  '#30A46C',
+  '#E8A21A',
+  '#9D6BE8',
+  '#12A5B5',
+  '#E0608E',
+  '#7A8796',
+] as const;
+
 /**
  * The colour a "how much is left" meter takes at a given remaining percent:
  * green with room to spare, amber as it tightens, red when nearly gone. Shared

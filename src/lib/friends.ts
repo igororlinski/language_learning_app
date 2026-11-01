@@ -287,6 +287,24 @@ export type Person = {
   badges: string[];
 };
 
+/** The first letter of a name, capitalised, for an avatar; `?` for a name with none. */
+export function initialOf(name: string): string {
+  const letter = Array.from(name.trim()).find((char) => /\p{L}|\p{N}/u.test(char));
+
+  return letter ? letter.toLocaleUpperCase('pl') : '?';
+}
+
+/**
+ * Which of `count` colours someone's avatar takes: a hash of their id, so it
+ * is the same every time and on every phone, whatever the order of the list.
+ */
+export function avatarIndex(id: string, count: number): number {
+  let hash = 0;
+  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+
+  return hash % count;
+}
+
 const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
 
 /** The ranking out of a reply. A row without an id or a name is dropped, not shown blank. */

@@ -174,6 +174,34 @@ export function studyTime(logs: readonly StatsLog[], now: number): StudyTime {
   };
 }
 
+export type DayTime = { start: number; ms: number };
+
+/**
+ * Timed answering per study day over the same week as `studyTime`, oldest
+ * first and today last. A day with nothing timed is zero here: it is a bar
+ * with nothing in it, not a claim about a number.
+ */
+export function studyTimeByDay(logs: readonly StatsLog[], now: number): DayTime[] {
+  const days = Array.from({ length: STUDY_TIME_DAYS }, (_, index) => ({
+    start: shiftedDay(now, index + 1 - STUDY_TIME_DAYS).getTime(),
+    ms: 0,
+  }));
+
+  for (const log of logs) {
+    if (log.durationMs == null || log.reviewedAt < days[0].start || log.reviewedAt > now) continue;
+
+    // The last day whose start is not after the answer.
+    for (let index = days.length - 1; index >= 0; index -= 1) {
+      if (log.reviewedAt >= days[index].start) {
+        days[index].ms += log.durationMs;
+        break;
+      }
+    }
+  }
+
+  return days;
+}
+
 /** `45 s`, `12 min`, `1 h 20 min` — rounded to what is worth reading. */
 export function formatDuration(ms: number): string {
   const seconds = Math.round(ms / 1000);
@@ -225,6 +253,20 @@ export function retention(logs: readonly StatsLog[]): RetentionStats {
   };
 }
 
+/** How far below its target retention may sit before it is shown as low rather than close. */
+export const RETENTION_SLACK = 0.05;
+
+/**
+ * Retention against its target: `good` at or above it, `close` within
+ * `RETENTION_SLACK` under it, `low` further down — where the intervals are
+ * longer than memory can carry.
+ */
+export function retentionTone(rate: number, target: number | null): 'good' | 'close' | 'low' {
+  if (target == null || rate >= target) return 'good';
+
+  return rate >= target - RETENTION_SLACK ? 'close' : 'low';
+}
+
 /** Retention over the last `RETENTION_WINDOW_DAYS` study days, today included. */
 export function recentRetention(logs: readonly StatsLog[], now: number): RetentionStats {
   const since = shiftedDay(now, 1 - RETENTION_WINDOW_DAYS).getTime();
@@ -256,6 +298,21 @@ export function mnemonicComparison(
     without: retention(logs.filter((log) => !withMnemonic.has(log.cardId))),
   };
 }
+
+/**
+ * How many percentage points more cards with an association are remembered
+ * than cards without, rounded the way both percentages are shown; null until
+ * both sides have enough answers to have a percentage.
+ */
+export function mnemonicGap(comparison: MnemonicComparison): number | null {
+  if (comparison.with.rate == null || comparison.without.rate == null) return null;
+
+  return Math.round(comparison.with.rate * 100) - Math.round(comparison.without.rate * 100);
+}
+
+/** `+12 pkt proc.`, `−3 pkt proc.` — a gap between two percentages. */
+export const formatGap = (points: number): string =>
+  `${points > 0 ? '+' : points < 0 ? '−' : ''}${Math.abs(points)} pkt proc.`;
 
 /* ------------------------------------------------------------ card states */
 

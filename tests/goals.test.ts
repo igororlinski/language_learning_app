@@ -8,6 +8,7 @@ import {
   badgeLabel,
   dayProgress,
   formatCount,
+  highestTier,
   ladderStanding,
   newlyEarned,
   type BadgeProgress,
@@ -224,4 +225,6 @@ check(
   ),
   { top: 5, next: null, count: 400, share: 1 }
 );
+check('najwyzszy zdobyty poziom', highestTier(streakLadder, new Set(['streak-3', 'streak-14', 'answers-100'])), 2);
+check('zaden poziom tej drabinki', highestTier(streakLadder, new Set(['answers-100'])), -1);
 

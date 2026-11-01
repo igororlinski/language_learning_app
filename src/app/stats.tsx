@@ -1,13 +1,15 @@
 import { useLiveQuery } from 'drizzle-orm/expo-sqlite';
 import { Stack, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Animated, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { BadgeBoard } from '@/components/badge-board';
+import { BarChart } from '@/components/bar-chart';
 import { Dropdown } from '@/components/dropdown';
 import { EmptyState } from '@/components/empty-state';
 import { WithHelp } from '@/components/help-button';
 import { CheckIcon, FlameIcon, GearIcon, PodiumIcon } from '@/components/icons';
+import { Meter } from '@/components/meter';
 import { ProgressRing } from '@/components/progress-ring';
 import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
@@ -15,6 +17,7 @@ import {
   CardStateColors,
   FlameColors,
   MaxContentWidth,
+  QueueColors,
   Radius,
   RatingColors,
   Spacing,
@@ -31,6 +34,7 @@ import {
   statsCardsQuery,
   statsLogsQuery,
 } from '@/db/queries';
+import { useEntrance } from '@/hooks/use-entrance';
 import { useNow } from '@/hooks/use-now';
 import { useStreak } from '@/hooks/use-streak';
 import { useTheme } from '@/hooks/use-theme';
@@ -47,14 +51,19 @@ import {
 import {
   cardStates,
   forecast,
+  FORECAST_DAYS,
   forecastLabel,
   formatDuration,
+  formatGap,
   formatPercent,
   mnemonicComparison,
+  mnemonicGap,
   recentRetention,
   RETENTION_WINDOW_DAYS,
+  retentionTone,
   STUDY_TIME_DAYS,
   studyTime,
+  studyTimeByDay,
   todayStats,
   WEEKDAYS,
   type CardStates,
@@ -77,6 +86,15 @@ export { ErrorScreen as ErrorBoundary } from '@/components/error-screen';
 const ALL_DECKS = '';
 
 const FORECAST_HEIGHT = 96;
+
+const STUDY_CHART_HEIGHT = 48;
+
+/** Today's answers by where the cards were, in the queue's colours. */
+const TODAY_PARTS = [
+  { key: 'new', label: 'nowe', color: 'new' },
+  { key: 'learning', label: 'nauka', color: 'learning' },
+  { key: 'review', label: 'powtórki', color: 'review' },
+] as const;
 
 const RING_SIZE = 124;
 
@@ -140,9 +158,12 @@ export default function StatsScreen() {
 
   const today = todayStats(logs, now);
   const time = studyTime(logs, now);
+  const timeByDay = studyTimeByDay(logs, now);
   const days = forecast(cards, now);
+  const dueTotal = days.reduce((sum, day) => sum + day.count, 0);
   const recent = recentRetention(logs, now);
   const mnemonics = mnemonicComparison(logs, withMnemonic);
+  const gap = mnemonicGap(mnemonics);
   const states = cardStates(cards);
 
   const deckOptions = [
@@ -151,7 +172,6 @@ export default function StatsScreen() {
   ];
 
   const card = [styles.card, { backgroundColor: theme.backgroundElement, borderColor: theme.border }];
-  const peak = Math.max(1, ...days.map((day) => day.count));
 
   return (
     <ScrollView
@@ -289,11 +309,22 @@ export default function StatsScreen() {
               Dzisiaj
             </ThemedText>
             <ThemedText style={styles.big}>{today.answers}</ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">
-              {today.answers === 0
-                ? 'Jeszcze nic'
-                : `nowe ${today.new} · nauka ${today.learning} · powtórki ${today.review}`}
-            </ThemedText>
+            {today.answers === 0 ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                Jeszcze nic
+              </ThemedText>
+            ) : (
+              <View style={styles.legend}>
+                {TODAY_PARTS.map((part) => (
+                  <View key={part.key} style={styles.legendItem}>
+                    <View style={[styles.dot, { backgroundColor: QueueColors[part.color] }]} />
+                    <ThemedText type="small">
+                      {part.label} <ThemedText type="smallBold">{today[part.key]}</ThemedText>
+                    </ThemedText>
+                  </View>
+                ))}
+              </View>
+            )}
             {today.correct != null ? (
               <ThemedText type="small" themeColor="textSecondary">
                 poprawnie {formatPercent(today.correct)}
@@ -303,66 +334,53 @@ export default function StatsScreen() {
 
           <View style={card}>
             <ThemedText type="smallBold" themeColor="textSecondary">
-              Czas nauki
+              Czas nauki · {STUDY_TIME_DAYS} dni
             </ThemedText>
             {time.week == null ? (
               <ThemedText type="small" themeColor="textSecondary">
                 Jeszcze nie zmierzony
               </ThemedText>
             ) : (
-              <View style={styles.compare}>
-                <View style={styles.half}>
-                  <ThemedText style={styles.medium}>
-                    {time.today == null ? '—' : formatDuration(time.today)}
-                  </ThemedText>
-                  <ThemedText type="small" themeColor="textSecondary">
-                    dziś
-                  </ThemedText>
+              <>
+                <ThemedText style={styles.big}>{formatDuration(time.week)}</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  dziś {time.today == null ? '—' : formatDuration(time.today)}
+                  {time.perAnswer == null ? '' : ` · ${formatDuration(time.perAnswer)} na odpowiedź`}
+                </ThemedText>
+                <View style={styles.chart}>
+                  <BarChart
+                    height={STUDY_CHART_HEIGHT}
+                    bars={timeByDay.map((day, index) => ({
+                      key: day.start,
+                      value: day.ms,
+                      label: index === timeByDay.length - 1 ? 'Dziś' : WEEKDAYS[new Date(day.start).getDay()],
+                      highlight: index === timeByDay.length - 1,
+                    }))}
+                  />
                 </View>
-                <View style={styles.half}>
-                  <ThemedText style={styles.medium}>{formatDuration(time.week)}</ThemedText>
-                  <ThemedText type="small" themeColor="textSecondary">
-                    {STUDY_TIME_DAYS} dni
-                  </ThemedText>
-                </View>
-                <View style={styles.half}>
-                  <ThemedText style={styles.medium}>
-                    {time.perAnswer == null ? '—' : formatDuration(time.perAnswer)}
-                  </ThemedText>
-                  <ThemedText type="small" themeColor="textSecondary">
-                    na odpowiedź
-                  </ThemedText>
-                </View>
-              </View>
+              </>
             )}
           </View>
 
           <View style={card}>
             <ThemedText type="smallBold" themeColor="textSecondary">
-              Do powtórki
+              Do powtórki · {FORECAST_DAYS} dni
             </ThemedText>
-            <View style={styles.bars}>
-              {days.map((day, index) => (
-                <View key={day.start} style={styles.barColumn}>
-                  <ThemedText type="small" themeColor="textSecondary">
-                    {day.count}
-                  </ThemedText>
-                  <View style={[styles.barTrack, { height: FORECAST_HEIGHT }]}>
-                    <View
-                      style={[
-                        styles.bar,
-                        {
-                          height: Math.max(2, (day.count / peak) * FORECAST_HEIGHT),
-                          backgroundColor: index === 0 ? theme.accent : theme.backgroundSelected,
-                        },
-                      ]}
-                    />
-                  </View>
-                  <ThemedText type="small" themeColor="textSecondary">
-                    {forecastLabel(index, day.start)}
-                  </ThemedText>
-                </View>
-              ))}
+            <ThemedText style={styles.big}>{dueTotal}</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              {pluralize(dueTotal, 'karta', 'karty', 'kart')}, dziś {days[0].count}
+            </ThemedText>
+            <View style={styles.chart}>
+              <BarChart
+                height={FORECAST_HEIGHT}
+                showValues
+                bars={days.map((day, index) => ({
+                  key: day.start,
+                  value: day.count,
+                  label: forecastLabel(index, day.start),
+                  highlight: index === 0,
+                }))}
+              />
             </View>
           </View>
 
@@ -370,30 +388,46 @@ export default function StatsScreen() {
             <ThemedText type="smallBold" themeColor="textSecondary">
               Zapamiętane · ostatnie {RETENTION_WINDOW_DAYS} dni
             </ThemedText>
-            <Retention stats={recent} big />
+            <RetentionRow stats={recent} big />
           </View>
 
           {/* The one number Anki cannot show, so it wears the warm background
               the association field wears in the "+" sheet. */}
           <View style={[card, { backgroundColor: theme.backgroundHighlight }]}>
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              Skojarzenia a pamięć
-            </ThemedText>
-            <View style={styles.compare}>
-              <View style={styles.half}>
+            <View style={styles.cardHeader}>
+              <ThemedText type="smallBold" themeColor="textSecondary">
+                Skojarzenia a pamięć
+              </ThemedText>
+              {gap != null ? (
+                <View
+                  style={[
+                    styles.gap,
+                    {
+                      backgroundColor:
+                        gap > 0 ? RatingColors.good : gap < 0 ? RatingColors.again : theme.backgroundSelected,
+                    },
+                  ]}>
+                  <ThemedText type="smallBold" style={{ color: gap === 0 ? theme.text : '#FFFFFF' }}>
+                    {formatGap(gap)}
+                  </ThemedText>
+                </View>
+              ) : null}
+            </View>
+            <View style={styles.rows}>
+              <View>
                 <ThemedText style={styles.compareTitle}>Ze skojarzeniem</ThemedText>
-                <Retention stats={mnemonics.with} />
+                <RetentionRow stats={mnemonics.with} />
               </View>
-              <View style={styles.half}>
+              <View>
                 <ThemedText style={styles.compareTitle}>Bez skojarzenia</ThemedText>
-                <Retention stats={mnemonics.without} />
+                <RetentionRow stats={mnemonics.without} muted />
               </View>
             </View>
           </View>
 
           <View style={card}>
             <ThemedText type="smallBold" themeColor="textSecondary">
-              Karty
+              Karty · {cards.length}
             </ThemedText>
             <States states={states} />
           </View>
@@ -403,16 +437,35 @@ export default function StatsScreen() {
   );
 }
 
+const TONE_COLOR = {
+  good: RatingColors.good,
+  close: RatingColors.hard,
+  low: RatingColors.again,
+} as const;
+
 /**
- * A retention figure with the count it stands on, always — and with too few
- * answers, the count alone: a percentage from five answers would be read as
- * if it meant something.
+ * A retention figure with the count it stands on, always, and a bar with the
+ * target marked across it: green at or over the target, amber just under,
+ * red well under. With too few answers, the count alone — a percentage from
+ * five answers would be read as if it meant something. `muted` draws the bar
+ * grey, for the side of a comparison that is not the point.
  */
-function Retention({ stats, big = false }: { stats: RetentionStats; big?: boolean }) {
+function RetentionRow({
+  stats,
+  big = false,
+  muted = false,
+}: {
+  stats: RetentionStats;
+  big?: boolean;
+  muted?: boolean;
+}) {
+  const theme = useTheme();
+  const number = big ? styles.big : styles.medium;
+
   if (stats.rate == null) {
     return (
       <>
-        <ThemedText style={big ? styles.big : styles.medium} themeColor="textSecondary">
+        <ThemedText style={number} themeColor="textSecondary">
           —
         </ThemedText>
         <ThemedText type="small" themeColor="textSecondary">
@@ -426,7 +479,15 @@ function Retention({ stats, big = false }: { stats: RetentionStats; big?: boolea
 
   return (
     <>
-      <ThemedText style={big ? styles.big : styles.medium}>{formatPercent(stats.rate)}</ThemedText>
+      <ThemedText style={number}>{formatPercent(stats.rate)}</ThemedText>
+      <Meter
+        share={stats.rate}
+        color={muted ? theme.textSecondary : TONE_COLOR[retentionTone(stats.rate, stats.target)]}
+        trackColor={theme.backgroundSelected}
+        marker={stats.target}
+        markerColor={theme.text}
+        style={styles.retentionMeter}
+      />
       <ThemedText type="small" themeColor="textSecondary">
         {stats.target != null ? `cel ${formatPercent(stats.target)} · ` : ''}
         {answersLabel(stats.answers)}
@@ -542,28 +603,31 @@ const STATE_ROWS: { key: keyof CardStates; label: string }[] = [
 /** One stacked bar and a legend under it. */
 function States({ states }: { states: CardStates }) {
   const theme = useTheme();
+  const grow = useEntrance();
   const total = STATE_ROWS.reduce((sum, row) => sum + states[row.key], 0);
 
   return (
     <>
       <View style={[styles.stack, { backgroundColor: theme.backgroundSelected }]}>
-        {total > 0
-          ? STATE_ROWS.map((row) =>
-              states[row.key] > 0 ? (
-                <View
-                  key={row.key}
-                  style={{ flex: states[row.key], backgroundColor: CardStateColors[row.key] }}
-                />
-              ) : null
-            )
-          : null}
+        <Animated.View style={[styles.stackFill, { transformOrigin: 'left', transform: [{ scaleX: grow }] }]}>
+          {total > 0
+            ? STATE_ROWS.map((row) =>
+                states[row.key] > 0 ? (
+                  <View
+                    key={row.key}
+                    style={{ flex: states[row.key], backgroundColor: CardStateColors[row.key] }}
+                  />
+                ) : null
+              )
+            : null}
+        </Animated.View>
       </View>
       <View style={styles.legend}>
         {STATE_ROWS.map((row) => (
           <View key={row.key} style={styles.legendItem}>
             <View style={[styles.dot, { backgroundColor: CardStateColors[row.key] }]} />
             <ThemedText type="small">
-              {row.label} {states[row.key]}
+              {row.label} <ThemedText type="smallBold">{states[row.key]}</ThemedText>
             </ThemedText>
           </View>
         ))}
@@ -596,9 +660,6 @@ const styles = StyleSheet.create({
     borderRadius: Radius.small,
     borderWidth: 1,
     alignItems: 'center',
-  },
-  half: {
-    flex: 1,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -665,48 +726,47 @@ const styles = StyleSheet.create({
     borderRadius: Radius.large,
     borderWidth: StyleSheet.hairlineWidth,
   },
+  // The two sizes a number comes in on this screen; digits all one width, so
+  // a count going up does not shuffle what stands beside it.
   big: {
     fontSize: 28,
     lineHeight: 34,
     fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   medium: {
     fontSize: 22,
     lineHeight: 28,
     fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
-  bars: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-    marginTop: Spacing.two,
+  chart: {
+    marginTop: Spacing.three,
   },
-  barColumn: {
-    flex: 1,
-    alignItems: 'center',
-    gap: Spacing.one,
+  retentionMeter: {
+    marginVertical: Spacing.two,
   },
-  barTrack: {
-    width: '100%',
-    justifyContent: 'flex-end',
-  },
-  bar: {
-    width: '100%',
-    borderRadius: Radius.small,
-  },
-  compare: {
-    flexDirection: 'row',
+  rows: {
     gap: Spacing.three,
-    marginTop: Spacing.one,
+    marginTop: Spacing.two,
   },
   compareTitle: {
     fontWeight: '600',
   },
+  gap: {
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.half,
+    borderRadius: Radius.small,
+  },
   stack: {
-    flexDirection: 'row',
     height: 12,
     borderRadius: Radius.small,
     overflow: 'hidden',
     marginTop: Spacing.two,
+  },
+  stackFill: {
+    flex: 1,
+    flexDirection: 'row',
   },
   legend: {
     flexDirection: 'row',

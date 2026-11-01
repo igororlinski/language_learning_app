@@ -94,6 +94,17 @@ export type LadderStanding = {
   share: number;
 };
 
+/** Index of the highest tier of a ladder among `earned` ids, or -1 for none. */
+export function highestTier(group: BadgeGroup, earned: ReadonlySet<string>): number {
+  let top = -1;
+
+  group.tiers.forEach((tier, index) => {
+    if (earned.has(badgeId(group.kind, tier))) top = index;
+  });
+
+  return top;
+}
+
 /**
  * Where one ladder stands. Earned tiers are the stored ones — never taken
  * back — so `top` holds even when the number has since fallen (a streak).
@@ -103,12 +114,11 @@ export function ladderStanding(
   progress: BadgeProgress,
   earned: ReadonlySet<string>
 ): LadderStanding {
-  const has = group.tiers.map((tier) => earned.has(badgeId(group.kind, tier)));
-  const next = group.tiers.find((_, index) => !has[index]) ?? null;
+  const next = group.tiers.find((tier) => !earned.has(badgeId(group.kind, tier))) ?? null;
   const count = next == null ? progress[group.kind] : Math.min(progress[group.kind], next);
 
   return {
-    top: has.lastIndexOf(true),
+    top: highestTier(group, earned),
     next,
     count,
     share: next == null ? 1 : count / next,

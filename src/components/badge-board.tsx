@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { BadgeSheet } from '@/components/badge-sheet';
 import { Medal } from '@/components/medal';
+import { Meter } from '@/components/meter';
 import { ThemedText } from '@/components/themed-text';
 import { MedalColors, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -64,14 +65,13 @@ export function BadgeBoard({ progress, earnedAt }: BadgeBoardProps) {
               <ThemedText type="small" numberOfLines={2} style={styles.tileTitle}>
                 {group.title}
               </ThemedText>
-              <View style={[styles.track, { backgroundColor: theme.backgroundSelected }]}>
-                <View
-                  style={[
-                    styles.fill,
-                    { width: `${standing.share * 100}%`, backgroundColor: nextMetal.face },
-                  ]}
-                />
-              </View>
+              <Meter
+                share={standing.share}
+                color={nextMetal.face}
+                trackColor={theme.backgroundSelected}
+                height={4}
+                style={styles.meter}
+              />
               <ThemedText type="small" themeColor="textSecondary" style={styles.count}>
                 {standing.next == null
                   ? 'komplet'
@@ -120,15 +120,8 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginBottom: Spacing.one,
   },
-  track: {
+  meter: {
     width: '72%',
-    height: 4,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  fill: {
-    height: '100%',
-    borderRadius: 2,
   },
   count: {
     fontVariant: ['tabular-nums'],
